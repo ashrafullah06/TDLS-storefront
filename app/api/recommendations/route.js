@@ -1,6 +1,7 @@
 // app/api/recommendations/route.js
 import { NextResponse } from "next/server";
-import prisma from "../../../lib/prisma-client";
+import prisma from "@/lib/prisma-client";
+
 
 /** naive co-purchase recommendations */
 export async function GET(req) {

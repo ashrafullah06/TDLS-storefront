@@ -1,7 +1,8 @@
 // app/api/returns/route.js
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma-client";
-import { requireAuth } from "../../../../lib/auth";
+import prisma from "@/lib/prisma-client";
+
+import { requireAuth } from "@/lib/auth";
 
 /**
  * Single endpoint for both "return" and "exchange" (UI combined).

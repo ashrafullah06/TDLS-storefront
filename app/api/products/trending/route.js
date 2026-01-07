@@ -1,6 +1,7 @@
 // app/api/products/trending/route.js
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma-client";
+import prisma from "@/lib/prisma-client";
+
 
 export async function GET() {
   try {

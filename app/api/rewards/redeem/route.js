@@ -1,8 +1,8 @@
 // app/api/rewards/redeem/route.js
 import { NextResponse } from "next/server";
-import prisma from "../../../../../lib/prisma-client";
-import { requireAuth } from "../../../../../lib/auth";
-import { applyPoints, walletDelta, pointValueBDT } from "../../../../../lib/loyalty";
+import prisma from "@/lib/prisma-client";
+import { requireAuth } from "@/lib/auth";
+import { applyPoints, walletDelta, pointValueBDT } from "@/lib/loyalty";
 
 /** Optional: simple reward catalog mapping (id -> points), override with DB later */
 const REWARD_CATALOG = [

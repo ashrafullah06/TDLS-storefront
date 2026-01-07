@@ -1,8 +1,8 @@
 // app/api/rewards/route.js
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma-client";
-import { requireAuth } from "../../../../lib/auth";
-import { ensureWalletAndAccount } from "../../../../lib/loyalty";
+import prisma from "@/lib/prisma-client";
+import { requireAuth } from "@/lib/auth";
+import { ensureWalletAndAccount } from "@/lib/loyalty";
 
 export async function GET(req) {
   try {
