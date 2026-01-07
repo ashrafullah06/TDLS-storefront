@@ -1,0 +1,22 @@
+{
+  "task_alerts": [
+    {
+      "type": "pending_returns",
+      "enabled": true,
+      "channels": ["email", "dashboard"],
+      "subject_en": "Pending Return Requests",
+      "body_en": "You have {{count}} pending return requests awaiting approval.",
+      "body_bn": "আপনার কাছে অনুমোদনের জন্য {{count}}টি রিটার্ন অনুরোধ মুলতুবি আছে।"
+    },
+    {
+      "type": "audit_review",
+      "enabled": true,
+      "channels": ["email"],
+      "subject_en": "Audit Review Needed",
+      "body_en": "Please review the latest audit logs for compliance.",
+      "body_bn": "অনুগ্রহ করে সাম্প্রতিক অডিট লগগুলি পর্যালোচনা করুন।"
+    }
+  ],
+  "bd_law_policy": true,
+  "file_of_truth": true
+}

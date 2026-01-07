@@ -1,0 +1,28 @@
+fragment ProductPublicFields on ProductEntity {
+  name
+  slug
+  short_description
+  description
+  price
+  discount_price
+  catagory
+  tier
+  size
+  color
+  designer_name
+  care_instructions
+  composition
+  origin_country
+  product_code
+  available
+  featured_products
+  preorder
+  estimated_delivery
+  fit_type
+  tag_by_material
+  tag_by_style
+  tag_by_season
+  meta_description
+  seo_title
+  seo_description
+}

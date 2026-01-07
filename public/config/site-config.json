@@ -1,0 +1,40 @@
+{
+  "siteName": "THE DNA LAB CLOTHING (TDLC)",
+  "brandTagline": "Divina Naturalis Aesthetica (DNA)",
+  "country": "Bangladesh",
+  "website": "https://www.thednalabstore.com",
+  "languageOptions": [
+    "en",
+    "bn"
+  ],
+  "legalNotice": "All operations are DPDP-compliant and strictly follow Bangladesh Digital Commerce Policy 2023 and international standards.",
+  "contact": {
+    "email": "support@thednalabstore.com"
+  },
+  "complianceBanner": {
+    "message": "We are fully compliant with the Bangladesh DPDP Act, Digital Commerce Policy, and Consumer Rights Protection Act. All transactions are secure and monitored.",
+    "lastUpdated": "2025-07-01T09:00:00+06:00",
+    "mustRead": false
+  },
+  "privacyPolicyLink": "/privacy-policy",
+  "refundPolicyLink": "/refund-policy",
+  "theme": {
+    "primaryColor": "#172346",
+    "secondaryColor": "#F4EEDD",
+    "accentColor": "#C19D53"
+  },
+  "logoList": [
+    "/logos/logo-gold.svg",
+    "/logos/logo-silver.svg",
+    "/logos/logo-maroon.svg",
+    "/logos/logo-bright-blue.svg",
+    "/logos/gold-tree.svg",
+    "/logos/logo-forestgreen.svg"
+  ],
+  "footerText": "© THE DNA LAB CLOTHING (TDLC) 2026 | Registered in Bangladesh | All Rights Reserved.",
+  "adminPolicy": {
+    "manualOverride": true,
+    "auditLogEnabled": true,
+    "incidentEscalation": true
+  }
+}

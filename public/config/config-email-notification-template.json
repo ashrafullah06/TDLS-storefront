@@ -1,0 +1,31 @@
+{
+  "templates": [
+    {
+      "name": "welcome_email",
+      "subject": "Welcome to The DNA Lab Store!",
+      "body_en": "<p>Dear {{name}},<br>Welcome to The DNA Lab Store. Your account has been successfully created. Enjoy shopping!</p>",
+      "body_bn": "<p>প্রিয় {{name}},<br>দ্য ডিএনএ ল্যাব স্টোর-এ স্বাগতম। আপনার একাউন্ট সফলভাবে তৈরি হয়েছে। আমাদের সাথে থাকুন!</p>",
+      "legal_footer_en": "<p>You received this email because you registered at thednalabstore.com. For legal and privacy information, visit our <a href='https://www.thednalabstore.com/policy/privacy'>Privacy Policy</a>. To unsubscribe, click <a href='{{unsubscribe_link}}'>here</a>.</p>",
+      "legal_footer_bn": "<p>আপনি thednalabstore.com-এ নিবন্ধনের কারণে এই ইমেইলটি পেয়েছেন। আইনগত ও প্রাইভেসি তথ্যের জন্য আমাদের <a href='https://www.thednalabstore.com/policy/privacy'>প্রাইভেসি পলিসি</a> দেখুন। সদস্যতা বাতিল করতে <a href='{{unsubscribe_link}}'>এখানে ক্লিক করুন</a>।</p>",
+      "audit_log": true
+    },
+    {
+      "name": "password_reset",
+      "subject": "Password Reset Instructions",
+      "body_en": "<p>Dear {{name}},<br>Click <a href='{{reset_link}}'>here</a> to reset your password. If you did not request this, please ignore.</p>",
+      "body_bn": "<p>প্রিয় {{name}},<br>আপনার পাসওয়ার্ড রিসেট করতে <a href='{{reset_link}}'>এখানে</a> ক্লিক করুন। আপনি যদি এটি না চেয়ে থাকেন, দয়া করে উপেক্ষা করুন।</p>",
+      "audit_log": true
+    },
+    {
+      "name": "refund_issued",
+      "subject": "Refund Issued",
+      "body_en": "<p>Your refund for order {{order_id}} has been issued. Check your account within 5-7 business days.</p>",
+      "body_bn": "<p>আপনার অর্ডার {{order_id}}-এর রিফান্ড ইস্যু করা হয়েছে। ৫-৭ কার্যদিবসের মধ্যে আপনার একাউন্ট চেক করুন।</p>",
+      "audit_log": true
+    }
+  ],
+  "audit_settings": {
+    "immutable_log": true,
+    "bd_law_compliance": true
+  }
+}

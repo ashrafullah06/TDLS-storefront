@@ -1,0 +1,178 @@
+############################
+# OS X
+############################
+
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+.Spotlight-V100
+.Trashes
+._*
+
+
+############################
+# Linux
+############################
+
+*~
+
+
+############################
+# Windows
+############################
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+
+
+############################
+# Packages
+############################
+
+*.7z
+*.csv
+*.dat
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.seed
+*.so
+*.swo
+*.swp
+*.swn
+*.swm
+*.out
+*.pid
+
+
+############################
+# Logs and databases
+############################
+
+.tmp
+.tmp/
+.cache/
+*.log
+*.sql
+*.sqlite
+*.sqlite3
+
+
+############################
+# Misc.
+############################
+
+*#
+ssl
+.idea
+.vscode/
+nbproject
+.tsbuildinfo
+.eslintcache
+
+############################
+# Node.js
+############################
+
+lib-cov
+lcov.info
+pids
+logs
+results
+node_modules/
+.node_history
+
+############################
+# Package managers
+############################
+
+.yarn/*
+!.yarn/cache
+!.yarn/unplugged
+!.yarn/patches
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+!.yarn/versions/.gitkeep
+.pnp.*
+yarn-error.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+############################
+# Tests
+############################
+
+coverage/
+
+############################
+# Next.js (.next project)
+############################
+
+.next/
+out/
+.vercel/
+.turbo/
+
+# TypeScript (keep next-env.d.ts if you want it committed; otherwise ignore)
+# next-env.d.ts
+
+# env files (do not commit secrets; allow template)
+.env
+.env.*
+!.env.example
+
+# local/backup files (explicitly ignore known backups + artifacts)
+- Copy.env.bak
+*.bak
+*.env.bak
+Untitled-*.js
+
+# scratch/experiment homepage files (do not commit)
+src/components/homepage/image within the container distorted.js
+src/components/homepage/without blur, cropped image.js
+src/components/homepage/with blur-homepage-client.jsx
+
+# local/tool artifacts (never commit)
+Set-Content
+npm
+npx
+cross-env-shell
+my-project@0.1.0
+
+# Prisma backups (never commit)
+prisma/**/schema.backup.prisma
+*.backup.*
+
+############################
+# Prisma generated clients + engines (do not commit)
+############################
+
+prisma/generated/
+src/generated/prisma/
+**/query_engine-*.node
+
+############################
+# Build outputs
+############################
+
+dist/
+build/

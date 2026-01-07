@@ -1,0 +1,28 @@
+{
+  "robots_txt": {
+    "User-agent": "*",
+    "Disallow": ["/admin/", "/backend/"],
+    "Allow": ["/"],
+    "Sitemap": "https://www.thednalabstore.com/sitemap.xml"
+  },
+  "sitemap_settings": {
+    "update_frequency": "daily",
+    "priority": 0.8,
+    "include_seasonal": true
+  },
+  "seo_audit": {
+    "file_of_truth_compliant": true,
+    "bd_law_disclosure": true,
+    "audit_policy": "regular review"
+  },
+  "seasonal": [
+    {
+      "event": "Eid",
+      "active": true,
+      "robots_txt_override": {
+        "Allow": ["/eid-special/"]
+      },
+      "sitemap_include": ["/eid-special/"]
+    }
+  ]
+}

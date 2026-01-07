@@ -1,0 +1,167 @@
+# src/lib/graphql/fragments/product.generated.graphql
+
+# ---------- UploadFile ----------
+fragment UploadFileCore on UploadFile {
+  url
+  alternativeText
+  mime
+  width
+  height
+  size
+  name
+  ext
+  hash
+  provider
+  createdAt
+  updatedAt
+}
+
+fragment UploadFileEntityCore on UploadFileEntity {
+  id
+  attributes {
+    ...UploadFileCore
+  }
+}
+
+fragment UploadFileSingle on UploadFileEntityResponse {
+  data {
+    ...UploadFileEntityCore
+  }
+}
+
+fragment UploadFileMany on UploadFileEntityResponseCollection {
+  data {
+    ...UploadFileEntityCore
+  }
+}
+
+# ---------- Category ----------
+fragment CategoryCore on Category {
+  name
+  slug
+}
+
+fragment CategoryEntityCore on CategoryEntity {
+  id
+  attributes {
+    ...CategoryCore
+  }
+}
+
+fragment CategoryMany on CategoryRelationResponseCollection {
+  data {
+    ...CategoryEntityCore
+  }
+}
+
+# ---------- Tag ----------
+fragment TagCore on Tag { 
+  name
+  slug
+}
+
+fragment TagEntityCore on TagEntity {
+  id
+  attributes { 
+    ...TagCore 
+  }
+}
+
+fragment TagMany on TagRelationResponseCollection {
+  data { 
+    ...TagEntityCore 
+  }
+}
+
+# ---------- BrandTier ----------
+fragment BrandTierCore on BrandTier {
+  name
+}
+
+fragment BrandTierEntityCore on BrandTierEntity {
+  id
+  attributes {
+    ...BrandTierCore
+  }
+}
+
+fragment BrandTierMany on BrandTierRelationResponseCollection {
+  data {
+    ...BrandTierEntityCore
+  }
+}
+
+# ---------- AudienceCategory ----------
+fragment AudienceCategoryCore on AudienceCategory { 
+  name
+  slug
+}
+
+fragment AudienceCategoryEntityCore on AudienceCategoryEntity {
+  id
+  attributes { 
+    ...AudienceCategoryCore 
+  }
+}
+
+fragment AudienceCategoryMany on AudienceCategoryRelationResponseCollection {
+  data { 
+    ...AudienceCategoryEntityCore 
+  }
+}
+
+# ---------- AgeGroup ----------
+fragment AgeGroupCore on AgeGroup { 
+  name 
+}
+
+fragment AgeGroupEntityCore on AgeGroupEntity {
+  id
+  attributes { 
+    ...AgeGroupCore 
+  }
+}
+
+fragment AgeGroupMany on AgeGroupRelationResponseCollection {
+  data { 
+    ...AgeGroupEntityCore 
+  }
+}
+
+# ---------- GenderGroup ----------
+fragment GenderGroupCore on GenderGroup { 
+  name 
+}
+
+fragment GenderGroupEntityCore on GenderGroupEntity {
+  id
+  attributes { 
+    ...GenderGroupCore 
+  }
+}
+
+fragment GenderGroupMany on GenderGroupRelationResponseCollection {
+  data { 
+    ...GenderGroupEntityCore 
+  }
+}
+
+# ---------- Product (safe core) ----------
+fragment ProductCore on Product {
+  cost_price
+  categories {
+    data {
+      ...CategoryEntityCore
+    }
+  }
+  # Uncomment only if your Product really has these media fields:
+  # cover { ...UploadFileSingle }
+  # gallery { ...UploadFileMany }
+}
+
+fragment ProductEntityCore on ProductEntity {
+  id
+  attributes {
+    ...ProductCore
+  }
+}

@@ -1,0 +1,2562 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+"""
+scalar JSON
+
+"""
+A date-time string at UTC, such as 2007-12-03T10:15:30Z, compliant with the `date-time` format outlined in section 5.6 of the RFC 3339 profile of the ISO 8601 standard for representation of dates and times using the Gregorian calendar.
+"""
+scalar DateTime
+
+"""
+A date string, such as 2007-12-03, compliant with the `full-date` format outlined in section 5.6 of the RFC 3339 profile of the ISO 8601 standard for representation of dates and times using the Gregorian calendar.
+"""
+scalar Date
+
+"""
+The `BigInt` scalar type represents non-fractional signed whole numeric values.
+"""
+scalar Long
+
+"""The `Upload` scalar type represents a file upload."""
+scalar Upload
+
+type Pagination {
+  total: Int!
+  page: Int!
+  pageSize: Int!
+  pageCount: Int!
+}
+
+type ResponseCollectionMeta {
+  pagination: Pagination!
+}
+
+enum PublicationState {
+  LIVE
+  PREVIEW
+}
+
+input IDFilterInput {
+  and: [ID]
+  or: [ID]
+  not: IDFilterInput
+  eq: ID
+  eqi: ID
+  ne: ID
+  nei: ID
+  startsWith: ID
+  endsWith: ID
+  contains: ID
+  notContains: ID
+  containsi: ID
+  notContainsi: ID
+  gt: ID
+  gte: ID
+  lt: ID
+  lte: ID
+  null: Boolean
+  notNull: Boolean
+  in: [ID]
+  notIn: [ID]
+  between: [ID]
+}
+
+input BooleanFilterInput {
+  and: [Boolean]
+  or: [Boolean]
+  not: BooleanFilterInput
+  eq: Boolean
+  eqi: Boolean
+  ne: Boolean
+  nei: Boolean
+  startsWith: Boolean
+  endsWith: Boolean
+  contains: Boolean
+  notContains: Boolean
+  containsi: Boolean
+  notContainsi: Boolean
+  gt: Boolean
+  gte: Boolean
+  lt: Boolean
+  lte: Boolean
+  null: Boolean
+  notNull: Boolean
+  in: [Boolean]
+  notIn: [Boolean]
+  between: [Boolean]
+}
+
+input StringFilterInput {
+  and: [String]
+  or: [String]
+  not: StringFilterInput
+  eq: String
+  eqi: String
+  ne: String
+  nei: String
+  startsWith: String
+  endsWith: String
+  contains: String
+  notContains: String
+  containsi: String
+  notContainsi: String
+  gt: String
+  gte: String
+  lt: String
+  lte: String
+  null: Boolean
+  notNull: Boolean
+  in: [String]
+  notIn: [String]
+  between: [String]
+}
+
+input IntFilterInput {
+  and: [Int]
+  or: [Int]
+  not: IntFilterInput
+  eq: Int
+  eqi: Int
+  ne: Int
+  nei: Int
+  startsWith: Int
+  endsWith: Int
+  contains: Int
+  notContains: Int
+  containsi: Int
+  notContainsi: Int
+  gt: Int
+  gte: Int
+  lt: Int
+  lte: Int
+  null: Boolean
+  notNull: Boolean
+  in: [Int]
+  notIn: [Int]
+  between: [Int]
+}
+
+input LongFilterInput {
+  and: [Long]
+  or: [Long]
+  not: LongFilterInput
+  eq: Long
+  eqi: Long
+  ne: Long
+  nei: Long
+  startsWith: Long
+  endsWith: Long
+  contains: Long
+  notContains: Long
+  containsi: Long
+  notContainsi: Long
+  gt: Long
+  gte: Long
+  lt: Long
+  lte: Long
+  null: Boolean
+  notNull: Boolean
+  in: [Long]
+  notIn: [Long]
+  between: [Long]
+}
+
+input FloatFilterInput {
+  and: [Float]
+  or: [Float]
+  not: FloatFilterInput
+  eq: Float
+  eqi: Float
+  ne: Float
+  nei: Float
+  startsWith: Float
+  endsWith: Float
+  contains: Float
+  notContains: Float
+  containsi: Float
+  notContainsi: Float
+  gt: Float
+  gte: Float
+  lt: Float
+  lte: Float
+  null: Boolean
+  notNull: Boolean
+  in: [Float]
+  notIn: [Float]
+  between: [Float]
+}
+
+input DateFilterInput {
+  and: [Date]
+  or: [Date]
+  not: DateFilterInput
+  eq: Date
+  eqi: Date
+  ne: Date
+  nei: Date
+  startsWith: Date
+  endsWith: Date
+  contains: Date
+  notContains: Date
+  containsi: Date
+  notContainsi: Date
+  gt: Date
+  gte: Date
+  lt: Date
+  lte: Date
+  null: Boolean
+  notNull: Boolean
+  in: [Date]
+  notIn: [Date]
+  between: [Date]
+}
+
+input DateTimeFilterInput {
+  and: [DateTime]
+  or: [DateTime]
+  not: DateTimeFilterInput
+  eq: DateTime
+  eqi: DateTime
+  ne: DateTime
+  nei: DateTime
+  startsWith: DateTime
+  endsWith: DateTime
+  contains: DateTime
+  notContains: DateTime
+  containsi: DateTime
+  notContainsi: DateTime
+  gt: DateTime
+  gte: DateTime
+  lt: DateTime
+  lte: DateTime
+  null: Boolean
+  notNull: Boolean
+  in: [DateTime]
+  notIn: [DateTime]
+  between: [DateTime]
+}
+
+input JSONFilterInput {
+  and: [JSON]
+  or: [JSON]
+  not: JSONFilterInput
+  eq: JSON
+  eqi: JSON
+  ne: JSON
+  nei: JSON
+  startsWith: JSON
+  endsWith: JSON
+  contains: JSON
+  notContains: JSON
+  containsi: JSON
+  notContainsi: JSON
+  gt: JSON
+  gte: JSON
+  lt: JSON
+  lte: JSON
+  null: Boolean
+  notNull: Boolean
+  in: [JSON]
+  notIn: [JSON]
+  between: [JSON]
+}
+
+enum ENUM_COMPONENTVARIANTSIZESTOCK_SIZE_NAME {
+  XXS
+  XS
+  S
+  M
+  L
+  XL
+  XXL
+  XXXL
+  XXXXL
+}
+
+enum ENUM_COMPONENTVARIANTSIZESTOCK_WAREHOUSE_LOCATION {
+  Dhaka
+  Khulna
+  Sylhet
+  Chittagong
+}
+
+enum ENUM_COMPONENTVARIANTSIZESTOCK_INVENTORY_STATUS {
+  in_stock
+  low_stock
+  restock_due
+}
+
+input ComponentVariantSizeStockFiltersInput {
+  size_name: StringFilterInput
+  stock_quantity: IntFilterInput
+  price_override: IntFilterInput
+  generated_sku: StringFilterInput
+  inventory_count: IntFilterInput
+  reorder_level: IntFilterInput
+  price: IntFilterInput
+  compare_at_price: IntFilterInput
+  is_active: BooleanFilterInput
+  restock_date: DateTimeFilterInput
+  sold_count: IntFilterInput
+  backorder_allowed: BooleanFilterInput
+  warehouse_location: StringFilterInput
+  barcode: StringFilterInput
+  inventory_status: StringFilterInput
+  and: [ComponentVariantSizeStockFiltersInput]
+  or: [ComponentVariantSizeStockFiltersInput]
+  not: ComponentVariantSizeStockFiltersInput
+}
+
+input ComponentVariantSizeStockInput {
+  id: ID
+  size_name: ENUM_COMPONENTVARIANTSIZESTOCK_SIZE_NAME
+  stock_quantity: Int
+  price_override: Int
+  generated_sku: String
+  inventory_count: Int
+  reorder_level: Int
+  price: Int
+  compare_at_price: Int
+  is_active: Boolean
+  restock_date: DateTime
+  sold_count: Int
+  backorder_allowed: Boolean
+  warehouse_location: ENUM_COMPONENTVARIANTSIZESTOCK_WAREHOUSE_LOCATION
+  barcode: String
+  inventory_status: ENUM_COMPONENTVARIANTSIZESTOCK_INVENTORY_STATUS
+}
+
+type ComponentVariantSizeStock {
+  id: ID!
+  size_name: ENUM_COMPONENTVARIANTSIZESTOCK_SIZE_NAME
+  stock_quantity: Int
+  price_override: Int
+  generated_sku: String
+  inventory_count: Int
+  reorder_level: Int
+  price: Int
+  compare_at_price: Int
+  is_active: Boolean
+  restock_date: DateTime
+  sold_count: Int
+  backorder_allowed: Boolean
+  warehouse_location: ENUM_COMPONENTVARIANTSIZESTOCK_WAREHOUSE_LOCATION
+  barcode: String
+  inventory_status: ENUM_COMPONENTVARIANTSIZESTOCK_INVENTORY_STATUS
+}
+
+enum ENUM_COMPONENTVARIANTPRODUCTVARIANT_COLOR_NAME {
+  White
+  Black
+  Yellow
+  Blue
+  Deep_Blue
+  Navy
+  Deep_Navy
+  Grey
+  Red
+  Orange
+}
+
+input ComponentVariantProductVariantFiltersInput {
+  color_name: StringFilterInput
+  sizes: ComponentVariantSizeStockFiltersInput
+  color_code: StringFilterInput
+  and: [ComponentVariantProductVariantFiltersInput]
+  or: [ComponentVariantProductVariantFiltersInput]
+  not: ComponentVariantProductVariantFiltersInput
+}
+
+input ComponentVariantProductVariantInput {
+  id: ID
+  color_name: ENUM_COMPONENTVARIANTPRODUCTVARIANT_COLOR_NAME
+  images: [ID]
+  sizes: [ComponentVariantSizeStockInput]
+  color_code: String
+}
+
+type ComponentVariantProductVariant {
+  id: ID!
+  color_name: ENUM_COMPONENTVARIANTPRODUCTVARIANT_COLOR_NAME
+  images(filters: UploadFileFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFileRelationResponseCollection
+  sizes(filters: ComponentVariantSizeStockFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentVariantSizeStock]
+  color_code: String
+}
+
+enum ENUM_COMPONENTSECTIONSPROMOBAR_DISPLAY_ON_PAGES {
+  all
+  homepage
+  shop
+  products
+  collections
+  cart
+  checkout
+  account
+  blog
+  custom
+}
+
+enum ENUM_COMPONENTSECTIONSPROMOBAR_DEVICE_VISIBILITY {
+  all
+  desktop
+  mobile
+}
+
+enum ENUM_COMPONENTSECTIONSPROMOBAR_ANIMATION {
+  none
+  fade
+  slide
+  marquee
+  icon_media
+}
+
+input ComponentSectionsPromoBarFiltersInput {
+  active: BooleanFilterInput
+  message: StringFilterInput
+  cta_text: StringFilterInput
+  cta_link: StringFilterInput
+  background_color: StringFilterInput
+  text_color: StringFilterInput
+  show_close_button: BooleanFilterInput
+  display_on_pages: StringFilterInput
+  custom_page_slug: StringFilterInput
+  device_visibility: StringFilterInput
+  start_datetime: DateTimeFilterInput
+  end_datetime: DateTimeFilterInput
+  priority: IntFilterInput
+  animation: StringFilterInput
+  and: [ComponentSectionsPromoBarFiltersInput]
+  or: [ComponentSectionsPromoBarFiltersInput]
+  not: ComponentSectionsPromoBarFiltersInput
+}
+
+input ComponentSectionsPromoBarInput {
+  id: ID
+  active: Boolean
+  message: String
+  cta_text: String
+  cta_link: String
+  background_color: String
+  text_color: String
+  show_close_button: Boolean
+  display_on_pages: ENUM_COMPONENTSECTIONSPROMOBAR_DISPLAY_ON_PAGES
+  custom_page_slug: String
+  device_visibility: ENUM_COMPONENTSECTIONSPROMOBAR_DEVICE_VISIBILITY
+  start_datetime: DateTime
+  end_datetime: DateTime
+  priority: Int
+  animation: ENUM_COMPONENTSECTIONSPROMOBAR_ANIMATION
+}
+
+type ComponentSectionsPromoBar {
+  id: ID!
+  active: Boolean
+  message: String
+  cta_text: String
+  cta_link: String
+  background_color: String
+  text_color: String
+  show_close_button: Boolean
+  display_on_pages: ENUM_COMPONENTSECTIONSPROMOBAR_DISPLAY_ON_PAGES
+  custom_page_slug: String
+  device_visibility: ENUM_COMPONENTSECTIONSPROMOBAR_DEVICE_VISIBILITY
+  start_datetime: DateTime
+  end_datetime: DateTime
+  priority: Int
+  animation: ENUM_COMPONENTSECTIONSPROMOBAR_ANIMATION
+}
+
+input ComponentSectionsHeroSlides1FiltersInput {
+  title: StringFilterInput
+  subtitle: StringFilterInput
+  cta_text: StringFilterInput
+  cta_link: StringFilterInput
+  overlay_color: StringFilterInput
+  overlay_opacity: FloatFilterInput
+  and: [ComponentSectionsHeroSlides1FiltersInput]
+  or: [ComponentSectionsHeroSlides1FiltersInput]
+  not: ComponentSectionsHeroSlides1FiltersInput
+}
+
+input ComponentSectionsHeroSlides1Input {
+  id: ID
+  title: String
+  subtitle: String
+  background_image: ID
+  video: ID
+  cta_text: String
+  cta_link: String
+  mobile_image: ID
+  overlay_color: String
+  overlay_opacity: Float
+}
+
+type ComponentSectionsHeroSlides1 {
+  id: ID!
+  title: String
+  subtitle: String
+  background_image: UploadFileEntityResponse
+  video: UploadFileEntityResponse
+  cta_text: String
+  cta_link: String
+  mobile_image: UploadFileEntityResponse
+  overlay_color: String
+  overlay_opacity: Float
+}
+
+enum ENUM_COMPONENTPRODUCTDETAILSPRODUCTIDENTITY_VERIFICATION_STATUS {
+  pending
+  verified
+  rejected
+}
+
+input ComponentProductDetailsProductIdentityFiltersInput {
+  factory_batch_code: StringFilterInput
+  label_serial_code: StringFilterInput
+  tag_serial_code: StringFilterInput
+  internal_notes: JSONFilterInput
+  creator: UsersPermissionsUserFiltersInput
+  verifier: UsersPermissionsUserFiltersInput
+  verified_at: DateTimeFilterInput
+  verification_status: StringFilterInput
+  arch_ref: ArchiveRecordFiltersInput
+  and: [ComponentProductDetailsProductIdentityFiltersInput]
+  or: [ComponentProductDetailsProductIdentityFiltersInput]
+  not: ComponentProductDetailsProductIdentityFiltersInput
+}
+
+input ComponentProductDetailsProductIdentityInput {
+  id: ID
+  factory_batch_code: String
+  label_serial_code: String
+  tag_serial_code: String
+  internal_notes: JSON
+  creator: ID
+  verifier: ID
+  verified_at: DateTime
+  verification_status: ENUM_COMPONENTPRODUCTDETAILSPRODUCTIDENTITY_VERIFICATION_STATUS
+  arch_ref: ID
+}
+
+type ComponentProductDetailsProductIdentity {
+  id: ID!
+  factory_batch_code: String
+  label_serial_code: String
+  tag_serial_code: String
+  internal_notes: JSON
+  creator: UsersPermissionsUserEntityResponse
+  verifier: UsersPermissionsUserEntityResponse
+  verified_at: DateTime
+  verification_status: ENUM_COMPONENTPRODUCTDETAILSPRODUCTIDENTITY_VERIFICATION_STATUS
+  arch_ref: ArchiveRecordEntityResponse
+}
+
+input ComponentOrderComponentsProductItemsFiltersInput {
+  product_ref: ProductFiltersInput
+  product_name_snapshot: StringFilterInput
+  product_price_snapshot: FloatFilterInput
+  selected_color: StringFilterInput
+  selected_size: StringFilterInput
+  quantity: IntFilterInput
+  subtotal_price: FloatFilterInput
+  and: [ComponentOrderComponentsProductItemsFiltersInput]
+  or: [ComponentOrderComponentsProductItemsFiltersInput]
+  not: ComponentOrderComponentsProductItemsFiltersInput
+}
+
+input ComponentOrderComponentsProductItemsInput {
+  id: ID
+  product_ref: ID
+  product_name_snapshot: String
+  product_price_snapshot: Float
+  selected_color: String
+  selected_size: String
+  quantity: Int
+  subtotal_price: Float
+}
+
+type ComponentOrderComponentsProductItems {
+  id: ID!
+  product_ref: ProductEntityResponse
+  product_name_snapshot: String
+  product_price_snapshot: Float
+  selected_color: String
+  selected_size: String
+  quantity: Int
+  subtotal_price: Float
+}
+
+input ComponentOrderComponentsAddressSnapshotFiltersInput {
+  full_name: StringFilterInput
+  phone_number: StringFilterInput
+  address_line1: StringFilterInput
+  address_line2_Union: StringFilterInput
+  Police_station_town_upazila: StringFilterInput
+  postal_code: StringFilterInput
+  district: StringFilterInput
+  division: StringFilterInput
+  country: StringFilterInput
+  note: JSONFilterInput
+  and: [ComponentOrderComponentsAddressSnapshotFiltersInput]
+  or: [ComponentOrderComponentsAddressSnapshotFiltersInput]
+  not: ComponentOrderComponentsAddressSnapshotFiltersInput
+}
+
+input ComponentOrderComponentsAddressSnapshotInput {
+  id: ID
+  full_name: String
+  phone_number: String
+  address_line1: String
+  address_line2_Union: String
+  Police_station_town_upazila: String
+  postal_code: String
+  district: String
+  division: String
+  country: String
+  note: JSON
+}
+
+type ComponentOrderComponentsAddressSnapshot {
+  id: ID!
+  full_name: String!
+  phone_number: String!
+  address_line1: String!
+  address_line2_Union: String!
+  Police_station_town_upazila: String!
+  postal_code: String
+  district: String!
+  division: String!
+  country: String!
+  note: JSON
+}
+
+enum ENUM_COMPONENTCONTACTSOCIALLINKS_PLATFORM {
+  Facebook
+  Youtube
+  Google
+  Pinterest
+  Instagram
+  TikTok
+}
+
+input ComponentContactSocialLinksFiltersInput {
+  platform: StringFilterInput
+  links: StringFilterInput
+  and: [ComponentContactSocialLinksFiltersInput]
+  or: [ComponentContactSocialLinksFiltersInput]
+  not: ComponentContactSocialLinksFiltersInput
+}
+
+input ComponentContactSocialLinksInput {
+  id: ID
+  platform: ENUM_COMPONENTCONTACTSOCIALLINKS_PLATFORM
+  links: String
+}
+
+type ComponentContactSocialLinks {
+  id: ID!
+  platform: ENUM_COMPONENTCONTACTSOCIALLINKS_PLATFORM
+  links: String
+}
+
+input UploadFileFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  alternativeText: StringFilterInput
+  caption: StringFilterInput
+  width: IntFilterInput
+  height: IntFilterInput
+  formats: JSONFilterInput
+  hash: StringFilterInput
+  ext: StringFilterInput
+  mime: StringFilterInput
+  size: FloatFilterInput
+  url: StringFilterInput
+  previewUrl: StringFilterInput
+  provider: StringFilterInput
+  provider_metadata: JSONFilterInput
+  folder: UploadFolderFiltersInput
+  folderPath: StringFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  and: [UploadFileFiltersInput]
+  or: [UploadFileFiltersInput]
+  not: UploadFileFiltersInput
+}
+
+input UploadFileInput {
+  name: String
+  alternativeText: String
+  caption: String
+  width: Int
+  height: Int
+  formats: JSON
+  hash: String
+  ext: String
+  mime: String
+  size: Float
+  url: String
+  previewUrl: String
+  provider: String
+  provider_metadata: JSON
+  folder: ID
+  folderPath: String
+}
+
+type UploadFile {
+  name: String!
+  alternativeText: String
+  caption: String
+  width: Int
+  height: Int
+  formats: JSON
+  hash: String!
+  ext: String
+  mime: String!
+  size: Float!
+  url: String!
+  previewUrl: String
+  provider: String!
+  provider_metadata: JSON
+  related: [GenericMorph]
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type UploadFileEntity {
+  id: ID
+  attributes: UploadFile
+}
+
+type UploadFileEntityResponse {
+  data: UploadFileEntity
+}
+
+type UploadFileEntityResponseCollection {
+  data: [UploadFileEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type UploadFileRelationResponseCollection {
+  data: [UploadFileEntity!]!
+}
+
+input UploadFolderFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  pathId: IntFilterInput
+  parent: UploadFolderFiltersInput
+  children: UploadFolderFiltersInput
+  files: UploadFileFiltersInput
+  path: StringFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  and: [UploadFolderFiltersInput]
+  or: [UploadFolderFiltersInput]
+  not: UploadFolderFiltersInput
+}
+
+input UploadFolderInput {
+  name: String
+  pathId: Int
+  parent: ID
+  children: [ID]
+  files: [ID]
+  path: String
+}
+
+type UploadFolder {
+  name: String!
+  pathId: Int!
+  parent: UploadFolderEntityResponse
+  children(filters: UploadFolderFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFolderRelationResponseCollection
+  files(filters: UploadFileFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFileRelationResponseCollection
+  path: String!
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type UploadFolderEntity {
+  id: ID
+  attributes: UploadFolder
+}
+
+type UploadFolderEntityResponse {
+  data: UploadFolderEntity
+}
+
+type UploadFolderEntityResponseCollection {
+  data: [UploadFolderEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type UploadFolderRelationResponseCollection {
+  data: [UploadFolderEntity!]!
+}
+
+input UsersPermissionsPermissionFiltersInput {
+  id: IDFilterInput
+  action: StringFilterInput
+  role: UsersPermissionsRoleFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  and: [UsersPermissionsPermissionFiltersInput]
+  or: [UsersPermissionsPermissionFiltersInput]
+  not: UsersPermissionsPermissionFiltersInput
+}
+
+type UsersPermissionsPermission {
+  action: String!
+  role: UsersPermissionsRoleEntityResponse
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type UsersPermissionsPermissionEntity {
+  id: ID
+  attributes: UsersPermissionsPermission
+}
+
+type UsersPermissionsPermissionRelationResponseCollection {
+  data: [UsersPermissionsPermissionEntity!]!
+}
+
+input UsersPermissionsRoleFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  description: StringFilterInput
+  type: StringFilterInput
+  permissions: UsersPermissionsPermissionFiltersInput
+  users: UsersPermissionsUserFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  and: [UsersPermissionsRoleFiltersInput]
+  or: [UsersPermissionsRoleFiltersInput]
+  not: UsersPermissionsRoleFiltersInput
+}
+
+input UsersPermissionsRoleInput {
+  name: String
+  description: String
+  type: String
+  permissions: [ID]
+  users: [ID]
+}
+
+type UsersPermissionsRole {
+  name: String!
+  description: String
+  type: String
+  permissions(filters: UsersPermissionsPermissionFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UsersPermissionsPermissionRelationResponseCollection
+  users(filters: UsersPermissionsUserFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UsersPermissionsUserRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type UsersPermissionsRoleEntity {
+  id: ID
+  attributes: UsersPermissionsRole
+}
+
+type UsersPermissionsRoleEntityResponse {
+  data: UsersPermissionsRoleEntity
+}
+
+type UsersPermissionsRoleEntityResponseCollection {
+  data: [UsersPermissionsRoleEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+enum ENUM_USERSPERMISSIONSUSER_GENDER {
+  male
+  female
+  not_interested_to_disclose
+}
+
+input UsersPermissionsUserFiltersInput {
+  id: IDFilterInput
+  username: StringFilterInput
+  email: StringFilterInput
+  provider: StringFilterInput
+  password: StringFilterInput
+  resetPasswordToken: StringFilterInput
+  confirmationToken: StringFilterInput
+  confirmed: BooleanFilterInput
+  blocked: BooleanFilterInput
+  role: UsersPermissionsRoleFiltersInput
+  reviews: ReviewFiltersInput
+  orders: OrderFiltersInput
+  phone_number: StringFilterInput
+  date_of_birth: DateFilterInput
+  gender: StringFilterInput
+  last_login: DateTimeFilterInput
+  referrals: ReferralFiltersInput
+  birth_day: DateFilterInput
+  marriage_day: DateFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  and: [UsersPermissionsUserFiltersInput]
+  or: [UsersPermissionsUserFiltersInput]
+  not: UsersPermissionsUserFiltersInput
+}
+
+input UsersPermissionsUserInput {
+  username: String
+  email: String
+  provider: String
+  password: String
+  resetPasswordToken: String
+  confirmationToken: String
+  confirmed: Boolean
+  blocked: Boolean
+  role: ID
+  reviews: [ID]
+  orders: [ID]
+  phone_number: String
+  avatar: ID
+  date_of_birth: Date
+  gender: ENUM_USERSPERMISSIONSUSER_GENDER
+  last_login: DateTime
+  referrals: [ID]
+  birth_day: Date
+  marriage_day: Date
+}
+
+type UsersPermissionsUser {
+  username: String!
+  email: String!
+  provider: String
+  confirmed: Boolean
+  blocked: Boolean
+  role: UsersPermissionsRoleEntityResponse
+  reviews(filters: ReviewFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ReviewRelationResponseCollection
+  orders(filters: OrderFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): OrderRelationResponseCollection
+  phone_number: String
+  avatar: UploadFileEntityResponse
+  date_of_birth: Date
+  gender: ENUM_USERSPERMISSIONSUSER_GENDER
+  last_login: DateTime
+  referrals(filters: ReferralFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ReferralRelationResponseCollection
+  birth_day: Date
+  marriage_day: Date
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type UsersPermissionsUserEntity {
+  id: ID
+  attributes: UsersPermissionsUser
+}
+
+type UsersPermissionsUserEntityResponse {
+  data: UsersPermissionsUserEntity
+}
+
+type UsersPermissionsUserEntityResponseCollection {
+  data: [UsersPermissionsUserEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type UsersPermissionsUserRelationResponseCollection {
+  data: [UsersPermissionsUserEntity!]!
+}
+
+input AboutFiltersInput {
+  id: IDFilterInput
+  title: StringFilterInput
+  slug: StringFilterInput
+  content: JSONFilterInput
+  seo_description: StringFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [AboutFiltersInput]
+  or: [AboutFiltersInput]
+  not: AboutFiltersInput
+}
+
+input AboutInput {
+  title: String
+  slug: String
+  content: JSON
+  cover_image: ID
+  seo_description: String
+  publishedAt: DateTime
+}
+
+type About {
+  title: String
+  slug: String
+  content: JSON
+  cover_image: UploadFileEntityResponse
+  seo_description: String
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type AboutEntity {
+  id: ID
+  attributes: About
+}
+
+type AboutEntityResponse {
+  data: AboutEntity
+}
+
+type AboutEntityResponseCollection {
+  data: [AboutEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+enum ENUM_AGEGROUP_UNIT {
+  months
+  years
+}
+
+input AgeGroupFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: StringFilterInput
+  priority: IntFilterInput
+  unit: StringFilterInput
+  audience_categories: AudienceCategoryFiltersInput
+  gender_groups: GenderGroupFiltersInput
+  products: ProductFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [AgeGroupFiltersInput]
+  or: [AgeGroupFiltersInput]
+  not: AgeGroupFiltersInput
+}
+
+input AgeGroupInput {
+  name: String
+  slug: String
+  description: String
+  priority: Int
+  unit: ENUM_AGEGROUP_UNIT
+  audience_categories: [ID]
+  gender_groups: [ID]
+  products: [ID]
+  publishedAt: DateTime
+}
+
+type AgeGroup {
+  name: String
+  slug: String
+  description: String
+  priority: Int
+  unit: ENUM_AGEGROUP_UNIT
+  audience_categories(filters: AudienceCategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AudienceCategoryRelationResponseCollection
+  gender_groups(filters: GenderGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): GenderGroupRelationResponseCollection
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type AgeGroupEntity {
+  id: ID
+  attributes: AgeGroup
+}
+
+type AgeGroupEntityResponse {
+  data: AgeGroupEntity
+}
+
+type AgeGroupEntityResponseCollection {
+  data: [AgeGroupEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type AgeGroupRelationResponseCollection {
+  data: [AgeGroupEntity!]!
+}
+
+input ArchiveRecordFiltersInput {
+  id: IDFilterInput
+  archive_reason: StringFilterInput
+  archived_at: DateTimeFilterInput
+  is_archived: BooleanFilterInput
+  archive_note: JSONFilterInput
+  archive_uid: StringFilterInput
+  restore_possible: BooleanFilterInput
+  restored_at: DateTimeFilterInput
+  affected_product: ProductFiltersInput
+  affected_order: OrderFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [ArchiveRecordFiltersInput]
+  or: [ArchiveRecordFiltersInput]
+  not: ArchiveRecordFiltersInput
+}
+
+input ArchiveRecordInput {
+  archive_reason: String
+  archived_at: DateTime
+  is_archived: Boolean
+  archive_note: JSON
+  archive_uid: String
+  restore_possible: Boolean
+  restored_at: DateTime
+  affected_product: ID
+  affected_order: ID
+  publishedAt: DateTime
+}
+
+type ArchiveRecord {
+  archive_reason: String
+  archived_at: DateTime
+  is_archived: Boolean
+  archive_note: JSON
+  archive_uid: String
+  restore_possible: Boolean
+  restored_at: DateTime
+  affected_product: ProductEntityResponse
+  affected_order: OrderEntityResponse
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type ArchiveRecordEntity {
+  id: ID
+  attributes: ArchiveRecord
+}
+
+type ArchiveRecordEntityResponse {
+  data: ArchiveRecordEntity
+}
+
+type ArchiveRecordEntityResponseCollection {
+  data: [ArchiveRecordEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+input AudienceCategoryFiltersInput {
+  id: IDFilterInput
+  description: StringFilterInput
+  slug: StringFilterInput
+  priority: IntFilterInput
+  name: StringFilterInput
+  events_products_collections: EventsProductsCollectionFiltersInput
+  age_groups: AgeGroupFiltersInput
+  products: ProductFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [AudienceCategoryFiltersInput]
+  or: [AudienceCategoryFiltersInput]
+  not: AudienceCategoryFiltersInput
+}
+
+input AudienceCategoryInput {
+  description: String
+  slug: String
+  priority: Int
+  name: String
+  events_products_collections: [ID]
+  age_groups: [ID]
+  products: [ID]
+  publishedAt: DateTime
+}
+
+type AudienceCategory {
+  description: String
+  slug: String
+  priority: Int
+  name: String!
+  events_products_collections(filters: EventsProductsCollectionFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): EventsProductsCollectionRelationResponseCollection
+  age_groups(filters: AgeGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AgeGroupRelationResponseCollection
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type AudienceCategoryEntity {
+  id: ID
+  attributes: AudienceCategory
+}
+
+type AudienceCategoryEntityResponse {
+  data: AudienceCategoryEntity
+}
+
+type AudienceCategoryEntityResponseCollection {
+  data: [AudienceCategoryEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type AudienceCategoryRelationResponseCollection {
+  data: [AudienceCategoryEntity!]!
+}
+
+input BrandTierFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: JSONFilterInput
+  priority: IntFilterInput
+  is_active: BooleanFilterInput
+  products: ProductFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [BrandTierFiltersInput]
+  or: [BrandTierFiltersInput]
+  not: BrandTierFiltersInput
+}
+
+input BrandTierInput {
+  name: String
+  slug: String
+  description: JSON
+  priority: Int
+  is_active: Boolean
+  products: [ID]
+  publishedAt: DateTime
+}
+
+type BrandTier {
+  name: String
+  slug: String
+  description: JSON
+  priority: Int
+  is_active: Boolean
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type BrandTierEntity {
+  id: ID
+  attributes: BrandTier
+}
+
+type BrandTierEntityResponse {
+  data: BrandTierEntity
+}
+
+type BrandTierEntityResponseCollection {
+  data: [BrandTierEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type BrandTierRelationResponseCollection {
+  data: [BrandTierEntity!]!
+}
+
+input CategoryFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  short_description: JSONFilterInput
+  priority: IntFilterInput
+  is_active: BooleanFilterInput
+  is_featured: BooleanFilterInput
+  tags: TagFiltersInput
+  category_code: StringFilterInput
+  products: ProductFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [CategoryFiltersInput]
+  or: [CategoryFiltersInput]
+  not: CategoryFiltersInput
+}
+
+input CategoryInput {
+  name: String
+  slug: String
+  short_description: JSON
+  priority: Int
+  is_active: Boolean
+  is_featured: Boolean
+  tags: [ID]
+  category_code: String
+  products: [ID]
+  publishedAt: DateTime
+}
+
+type Category {
+  name: String!
+  slug: String
+  short_description: JSON
+  priority: Int
+  is_active: Boolean
+  is_featured: Boolean
+  tags(filters: TagFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): TagRelationResponseCollection
+  category_code: String
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type CategoryEntity {
+  id: ID
+  attributes: Category
+}
+
+type CategoryEntityResponse {
+  data: CategoryEntity
+}
+
+type CategoryEntityResponseCollection {
+  data: [CategoryEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type CategoryRelationResponseCollection {
+  data: [CategoryEntity!]!
+}
+
+input ContactFiltersInput {
+  id: IDFilterInput
+  title: StringFilterInput
+  slug: StringFilterInput
+  email: StringFilterInput
+  phone: StringFilterInput
+  address: JSONFilterInput
+  map_embed_code: StringFilterInput
+  social_links: ComponentContactSocialLinksFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [ContactFiltersInput]
+  or: [ContactFiltersInput]
+  not: ContactFiltersInput
+}
+
+input ContactInput {
+  title: String
+  slug: String
+  email: String
+  phone: String
+  address: JSON
+  map_embed_code: String
+  social_links: ComponentContactSocialLinksInput
+  publishedAt: DateTime
+}
+
+type Contact {
+  title: String
+  slug: String
+  email: String
+  phone: String
+  address: JSON
+  map_embed_code: String
+  social_links: ComponentContactSocialLinks
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type ContactEntity {
+  id: ID
+  attributes: Contact
+}
+
+type ContactEntityResponse {
+  data: ContactEntity
+}
+
+type ContactEntityResponseCollection {
+  data: [ContactEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+enum ENUM_EVENTSPRODUCTSCOLLECTION_TYPE {
+  pahela_boishak
+  eid_festival
+  happy_new_year
+}
+
+input EventsProductsCollectionFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: JSONFilterInput
+  type: StringFilterInput
+  start_datetime: DateTimeFilterInput
+  end_datetime: DateTimeFilterInput
+  priority: IntFilterInput
+  products: ProductFiltersInput
+  audience_categories: AudienceCategoryFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [EventsProductsCollectionFiltersInput]
+  or: [EventsProductsCollectionFiltersInput]
+  not: EventsProductsCollectionFiltersInput
+}
+
+input EventsProductsCollectionInput {
+  name: String
+  slug: String
+  description: JSON
+  type: ENUM_EVENTSPRODUCTSCOLLECTION_TYPE
+  start_datetime: DateTime
+  end_datetime: DateTime
+  priority: Int
+  banner_image: ID
+  cover_image: [ID]
+  products: [ID]
+  audience_categories: [ID]
+  publishedAt: DateTime
+}
+
+type EventsProductsCollection {
+  name: String
+  slug: String
+  description: JSON
+  type: ENUM_EVENTSPRODUCTSCOLLECTION_TYPE
+  start_datetime: DateTime
+  end_datetime: DateTime
+  priority: Int
+  banner_image: UploadFileEntityResponse
+  cover_image(filters: UploadFileFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFileRelationResponseCollection
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  audience_categories(filters: AudienceCategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AudienceCategoryRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type EventsProductsCollectionEntity {
+  id: ID
+  attributes: EventsProductsCollection
+}
+
+type EventsProductsCollectionEntityResponse {
+  data: EventsProductsCollectionEntity
+}
+
+type EventsProductsCollectionEntityResponseCollection {
+  data: [EventsProductsCollectionEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type EventsProductsCollectionRelationResponseCollection {
+  data: [EventsProductsCollectionEntity!]!
+}
+
+enum ENUM_GENDERGROUP_GENDER_GROUP {
+  baby_girl
+  baby_boy
+  teen_girl
+  teen_boy
+}
+
+input GenderGroupFiltersInput {
+  id: IDFilterInput
+  gender_group: StringFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: JSONFilterInput
+  priority: IntFilterInput
+  age_groups: AgeGroupFiltersInput
+  products: ProductFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [GenderGroupFiltersInput]
+  or: [GenderGroupFiltersInput]
+  not: GenderGroupFiltersInput
+}
+
+input GenderGroupInput {
+  gender_group: ENUM_GENDERGROUP_GENDER_GROUP
+  name: String
+  slug: String
+  description: JSON
+  priority: Int
+  age_groups: [ID]
+  products: [ID]
+  publishedAt: DateTime
+}
+
+type GenderGroup {
+  gender_group: ENUM_GENDERGROUP_GENDER_GROUP
+  name: String
+  slug: String
+  description: JSON
+  priority: Int
+  age_groups(filters: AgeGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AgeGroupRelationResponseCollection
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type GenderGroupEntity {
+  id: ID
+  attributes: GenderGroup
+}
+
+type GenderGroupEntityResponse {
+  data: GenderGroupEntity
+}
+
+type GenderGroupEntityResponseCollection {
+  data: [GenderGroupEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type GenderGroupRelationResponseCollection {
+  data: [GenderGroupEntity!]!
+}
+
+enum ENUM_GLOBALSETTING_DEFAULT_WAREHOUSE_LOCATION {
+  Dhaka
+}
+
+enum ENUM_GLOBALSETTING_DEFAULT_CURRENCY {
+  BDT
+}
+
+input GlobalSettingInput {
+  default_warehouse_location: ENUM_GLOBALSETTING_DEFAULT_WAREHOUSE_LOCATION
+  sku_format: String
+  category_code_rules: String
+  autofill_enabled: Boolean
+  default_reorder_level: Int
+  default_backorder_allowed: Boolean
+  shipping_policy: JSON
+  return_and_exchange_policy: JSON
+  refund_policy: JSON
+  redeem_policy: JSON
+  cancellation_policy: JSON
+  order_policy: JSON
+  privacy_policy: JSON
+  terms_and_conditions: JSON
+  default_currency: ENUM_GLOBALSETTING_DEFAULT_CURRENCY
+  contact_email: String
+  customer_support_phone: String
+  whatsapp_support_number: String
+  live_chat_enabled: Boolean
+  payment_policy: JSON
+  faq_url: String
+  support_hours: String
+  about_us: JSON
+  career_info: JSON
+  facebook_url: String
+  instagram_url: String
+  youtube_url: String
+  maintenance_mode: Boolean
+  site_launch_date: DateTime
+  sitemap_url: String
+  loyalty_program_info: JSON
+  discount_policy: JSON
+  gift_card_policy: JSON
+  voucher_policy: JSON
+  affiliate_program_info: JSON
+  supplier_policy: JSON
+  brand_story: JSON
+  default_tax_rate: Float
+  digital_wallet_policy: JSON
+  newsletter_signup_url: String
+  twitter_url: String
+  data_protection_policy: JSON
+  legal_disclaimer: JSON
+  business_registration_number: String
+  operating_hours: String
+  default_meta_title: String
+  default_meta_description: JSON
+  google_analytics_id: String
+  mobile_app_download_url: String
+  api_status_page_url: String
+  store_location_google_map: String
+  publishedAt: DateTime
+}
+
+type GlobalSetting {
+  default_warehouse_location: ENUM_GLOBALSETTING_DEFAULT_WAREHOUSE_LOCATION
+  sku_format: String
+  category_code_rules: String
+  autofill_enabled: Boolean
+  default_reorder_level: Int
+  default_backorder_allowed: Boolean
+  shipping_policy: JSON
+  return_and_exchange_policy: JSON
+  refund_policy: JSON
+  redeem_policy: JSON
+  cancellation_policy: JSON
+  order_policy: JSON
+  privacy_policy: JSON
+  terms_and_conditions: JSON
+  default_currency: ENUM_GLOBALSETTING_DEFAULT_CURRENCY
+  contact_email: String
+  customer_support_phone: String
+  whatsapp_support_number: String
+  live_chat_enabled: Boolean
+  payment_policy: JSON
+  faq_url: String
+  support_hours: String
+  about_us: JSON
+  career_info: JSON
+  facebook_url: String
+  instagram_url: String
+  youtube_url: String
+  maintenance_mode: Boolean
+  site_launch_date: DateTime
+  sitemap_url: String
+  loyalty_program_info: JSON
+  discount_policy: JSON
+  gift_card_policy: JSON
+  voucher_policy: JSON
+  affiliate_program_info: JSON
+  supplier_policy: JSON
+  brand_story: JSON
+  default_tax_rate: Float
+  digital_wallet_policy: JSON
+  newsletter_signup_url: String
+  twitter_url: String
+  data_protection_policy: JSON
+  legal_disclaimer: JSON
+  business_registration_number: String
+  operating_hours: String
+  default_meta_title: String
+  default_meta_description: JSON
+  google_analytics_id: String
+  mobile_app_download_url: String
+  api_status_page_url: String
+  store_location_google_map: String
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type GlobalSettingEntity {
+  id: ID
+  attributes: GlobalSetting
+}
+
+type GlobalSettingEntityResponse {
+  data: GlobalSettingEntity
+}
+
+input HomepageInput {
+  promo_bar: [ComponentSectionsPromoBarInput]
+  hero_slides: [ComponentSectionsHeroSlides1Input]
+  hero_slides_1: [ComponentSectionsHeroSlides1Input]
+  hero_slides_2: [ComponentSectionsHeroSlides1Input]
+  hero_slides_3: [ComponentSectionsHeroSlides1Input]
+  hero_slides_4: [ComponentSectionsHeroSlides1Input]
+  hero_slides_5: [ComponentSectionsHeroSlides1Input]
+  hero_slides_6: [ComponentSectionsHeroSlides1Input]
+  hero_slides_7: [ComponentSectionsHeroSlides1Input]
+  hero_slides_8: [ComponentSectionsHeroSlides1Input]
+  hero_slides_9: [ComponentSectionsHeroSlides1Input]
+  hero_slides_10: [ComponentSectionsHeroSlides1Input]
+  hero_slides_11: [ComponentSectionsHeroSlides1Input]
+  publishedAt: DateTime
+}
+
+type Homepage {
+  promo_bar(filters: ComponentSectionsPromoBarFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsPromoBar]
+  hero_slides(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_1(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_2(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_3(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_4(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_5(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_6(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_7(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_8(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_9(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_10(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  hero_slides_11(filters: ComponentSectionsHeroSlides1FiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentSectionsHeroSlides1]
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type HomepageEntity {
+  id: ID
+  attributes: Homepage
+}
+
+type HomepageEntityResponse {
+  data: HomepageEntity
+}
+
+input LoyaltypointhistoryInput {
+  users_permissions_user: ID
+  points: Int
+  activity: String
+  date: DateTime
+  publishedAt: DateTime
+}
+
+type Loyaltypointhistory {
+  users_permissions_user: UsersPermissionsUserEntityResponse
+  points: Int
+  activity: String
+  date: DateTime
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type LoyaltypointhistoryEntity {
+  id: ID
+  attributes: Loyaltypointhistory
+}
+
+type LoyaltypointhistoryEntityResponse {
+  data: LoyaltypointhistoryEntity
+}
+
+enum ENUM_ORDER_STATUS {
+  pending
+  paid
+  shipped
+  delivered
+  cancelled
+  returned
+  exchanged
+  refunded
+  processing
+}
+
+enum ENUM_ORDER_PAYMENT_METHOD {
+  cash_on_delivery
+  bkash
+  nagad
+  rocket
+  visa_card
+  amex
+  master_card
+  gpay
+}
+
+enum ENUM_ORDER_PAYMENT_STATUS {
+  unpaid
+  paid
+  pending
+  failed
+  refunded_to_mfs_or_bank_account
+  refunded_to_customer_digital_tdlc_wallet
+  paid_from_customer_digital_tdlc_wallet
+}
+
+input OrderFiltersInput {
+  id: IDFilterInput
+  order_id: StringFilterInput
+  status: StringFilterInput
+  user: UsersPermissionsUserFiltersInput
+  total_amount: FloatFilterInput
+  payment_method: StringFilterInput
+  payment_status: StringFilterInput
+  transaction_id: StringFilterInput
+  placed_at: DateTimeFilterInput
+  product_items: ComponentOrderComponentsProductItemsFiltersInput
+  archive_record: ArchiveRecordFiltersInput
+  shipping_address: ComponentOrderComponentsAddressSnapshotFiltersInput
+  billing_address: ComponentOrderComponentsAddressSnapshotFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [OrderFiltersInput]
+  or: [OrderFiltersInput]
+  not: OrderFiltersInput
+}
+
+input OrderInput {
+  order_id: String
+  status: ENUM_ORDER_STATUS
+  user: ID
+  total_amount: Float
+  payment_method: ENUM_ORDER_PAYMENT_METHOD
+  payment_status: ENUM_ORDER_PAYMENT_STATUS
+  transaction_id: String
+  invoice_url: ID
+  placed_at: DateTime
+  product_items: [ComponentOrderComponentsProductItemsInput]
+  archive_record: ID
+  shipping_address: ComponentOrderComponentsAddressSnapshotInput
+  billing_address: [ComponentOrderComponentsAddressSnapshotInput]
+  publishedAt: DateTime
+}
+
+type Order {
+  order_id: String
+  status: ENUM_ORDER_STATUS
+  user: UsersPermissionsUserEntityResponse
+  total_amount: Float
+  payment_method: ENUM_ORDER_PAYMENT_METHOD
+  payment_status: ENUM_ORDER_PAYMENT_STATUS
+  transaction_id: String
+  invoice_url: UploadFileEntityResponse
+  placed_at: DateTime
+  product_items(filters: ComponentOrderComponentsProductItemsFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentOrderComponentsProductItems]
+  archive_record: ArchiveRecordEntityResponse
+  shipping_address: ComponentOrderComponentsAddressSnapshot
+  billing_address(filters: ComponentOrderComponentsAddressSnapshotFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentOrderComponentsAddressSnapshot]
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type OrderEntity {
+  id: ID
+  attributes: Order
+}
+
+type OrderEntityResponse {
+  data: OrderEntity
+}
+
+type OrderEntityResponseCollection {
+  data: [OrderEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type OrderRelationResponseCollection {
+  data: [OrderEntity!]!
+}
+
+enum ENUM_POLICY_TITLE {
+  return_and_exchange_policy
+  shipping_policy
+  privacy_policy
+  point_redemption_policy
+  digital_currency_policy
+  refund_policy
+}
+
+input PolicyFiltersInput {
+  id: IDFilterInput
+  title: StringFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: JSONFilterInput
+  last_updated_by_personnel: DateTimeFilterInput
+  is_active: BooleanFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [PolicyFiltersInput]
+  or: [PolicyFiltersInput]
+  not: PolicyFiltersInput
+}
+
+input PolicyInput {
+  title: ENUM_POLICY_TITLE
+  name: String
+  slug: String
+  description: JSON
+  last_updated_by_personnel: DateTime
+  is_active: Boolean
+  publishedAt: DateTime
+}
+
+type Policy {
+  title: ENUM_POLICY_TITLE
+  name: String
+  slug: String
+  description: JSON
+  last_updated_by_personnel: DateTime
+  is_active: Boolean
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type PolicyEntity {
+  id: ID
+  attributes: Policy
+}
+
+type PolicyEntityResponse {
+  data: PolicyEntity
+}
+
+type PolicyEntityResponseCollection {
+  data: [PolicyEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+enum ENUM_PRODUCT_FIT_TYPE {
+  Regular
+  Slim_Fit
+  Relaxed_Fit
+  Oversized_Fit
+  Dropshoulder_Fit
+}
+
+input ProductFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: JSONFilterInput
+  short_description: StringFilterInput
+  available: BooleanFilterInput
+  is_featured: BooleanFilterInput
+  cost_price: LongFilterInput
+  supplier: StringFilterInput
+  audit_log: JSONFilterInput
+  internal_notes: StringFilterInput
+  is_archived: BooleanFilterInput
+  meta_description: StringFilterInput
+  preorder: BooleanFilterInput
+  preorder_eta: DateTimeFilterInput
+  reviews: ReviewFiltersInput
+  product_id: ComponentProductDetailsProductIdentityFiltersInput
+  product_code: StringFilterInput
+  care_instructions: JSONFilterInput
+  fit_type: StringFilterInput
+  model_info: StringFilterInput
+  country_of_origin: StringFilterInput
+  size_guide_url: StringFilterInput
+  estimated_delivery: StringFilterInput
+  preorder_note: StringFilterInput
+  review_count: IntFilterInput
+  supplier_contact: JSONFilterInput
+  product_history: JSONFilterInput
+  disable_frontend: BooleanFilterInput
+  archive_record: ArchiveRecordFiltersInput
+  seo_keywords: StringFilterInput
+  base_sku: StringFilterInput
+  product_variant: ComponentVariantProductVariantFiltersInput
+  brand_tiers: BrandTierFiltersInput
+  events_products_collections: EventsProductsCollectionFiltersInput
+  audience_categories: AudienceCategoryFiltersInput
+  categories: CategoryFiltersInput
+  tags: TagFiltersInput
+  age_groups: AgeGroupFiltersInput
+  gender_groups: GenderGroupFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [ProductFiltersInput]
+  or: [ProductFiltersInput]
+  not: ProductFiltersInput
+}
+
+input ProductInput {
+  name: String
+  slug: String
+  description: JSON
+  short_description: String
+  available: Boolean
+  is_featured: Boolean
+  gallery_videos: ID
+  cost_price: Long
+  supplier: String
+  audit_log: JSON
+  internal_notes: String
+  is_archived: Boolean
+  meta_description: String
+  og_image_Social_Media: ID
+  preorder: Boolean
+  preorder_eta: DateTime
+  reviews: [ID]
+  product_id: ComponentProductDetailsProductIdentityInput
+  product_code: String
+  care_instructions: JSON
+  fit_type: ENUM_PRODUCT_FIT_TYPE
+  model_info: String
+  country_of_origin: String
+  size_guide_url: String
+  estimated_delivery: String
+  preorder_note: String
+  review_count: Int
+  supplier_contact: JSON
+  product_history: JSON
+  disable_frontend: Boolean
+  archive_record: ID
+  seo_keywords: String
+  base_sku: String
+  product_variant: [ComponentVariantProductVariantInput]
+  brand_tiers: [ID]
+  events_products_collections: [ID]
+  audience_categories: [ID]
+  categories: [ID]
+  tags: [ID]
+  age_groups: [ID]
+  gender_groups: [ID]
+  publishedAt: DateTime
+}
+
+type Product {
+  name: String
+  slug: String
+  description: JSON
+  short_description: String
+  available: Boolean
+  is_featured: Boolean
+  gallery_videos: UploadFileEntityResponse
+  cost_price: Long
+  supplier: String
+  audit_log: JSON
+  internal_notes: String
+  is_archived: Boolean
+  meta_description: String
+  og_image_Social_Media: UploadFileEntityResponse
+  preorder: Boolean
+  preorder_eta: DateTime
+  reviews(filters: ReviewFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ReviewRelationResponseCollection
+  product_id: ComponentProductDetailsProductIdentity
+  product_code: String
+  care_instructions: JSON
+  fit_type: ENUM_PRODUCT_FIT_TYPE
+  model_info: String
+  country_of_origin: String
+  size_guide_url: String
+  estimated_delivery: String
+  preorder_note: String
+  review_count: Int
+  supplier_contact: JSON
+  product_history: JSON
+  disable_frontend: Boolean
+  archive_record: ArchiveRecordEntityResponse
+  seo_keywords: String
+  base_sku: String
+  product_variant(filters: ComponentVariantProductVariantFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): [ComponentVariantProductVariant]
+  brand_tiers(filters: BrandTierFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): BrandTierRelationResponseCollection
+  events_products_collections(filters: EventsProductsCollectionFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): EventsProductsCollectionRelationResponseCollection
+  audience_categories(filters: AudienceCategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AudienceCategoryRelationResponseCollection
+  categories(filters: CategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): CategoryRelationResponseCollection
+  tags(filters: TagFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): TagRelationResponseCollection
+  age_groups(filters: AgeGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AgeGroupRelationResponseCollection
+  gender_groups(filters: GenderGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): GenderGroupRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type ProductEntity {
+  id: ID
+  attributes: Product
+}
+
+type ProductEntityResponse {
+  data: ProductEntity
+}
+
+type ProductEntityResponseCollection {
+  data: [ProductEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type ProductRelationResponseCollection {
+  data: [ProductEntity!]!
+}
+
+input ReferralFiltersInput {
+  id: IDFilterInput
+  referrer: UsersPermissionsUserFiltersInput
+  reffered: UsersPermissionsUserFiltersInput
+  is_redeemed: BooleanFilterInput
+  add_activated_at: DateTimeFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [ReferralFiltersInput]
+  or: [ReferralFiltersInput]
+  not: ReferralFiltersInput
+}
+
+input ReferralInput {
+  referrer: ID
+  reffered: ID
+  is_redeemed: Boolean
+  add_activated_at: DateTime
+  publishedAt: DateTime
+}
+
+type Referral {
+  referrer: UsersPermissionsUserEntityResponse
+  reffered: UsersPermissionsUserEntityResponse
+  is_redeemed: Boolean
+  add_activated_at: DateTime
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type ReferralEntity {
+  id: ID
+  attributes: Referral
+}
+
+type ReferralEntityResponse {
+  data: ReferralEntity
+}
+
+type ReferralEntityResponseCollection {
+  data: [ReferralEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type ReferralRelationResponseCollection {
+  data: [ReferralEntity!]!
+}
+
+enum ENUM_REVIEW_STATUS {
+  pending
+  approved
+  rejected
+}
+
+enum ENUM_REVIEW_RATING {
+  one_star
+  two_star
+  three_star
+  four_star
+  five_star
+}
+
+enum ENUM_REVIEW_ARCHIVE_REASON {
+  spam
+  abusive
+  duplicate
+  others
+}
+
+input ReviewFiltersInput {
+  id: IDFilterInput
+  comment: JSONFilterInput
+  author_name: StringFilterInput
+  verified: BooleanFilterInput
+  product: ProductFiltersInput
+  helpful_count: IntFilterInput
+  user: UsersPermissionsUserFiltersInput
+  status: StringFilterInput
+  is_featured: BooleanFilterInput
+  locale: StringFilterInput
+  response: JSONFilterInput
+  content: StringFilterInput
+  rating: StringFilterInput
+  reviewed_at: DateTimeFilterInput
+  approved: BooleanFilterInput
+  reply: JSONFilterInput
+  likes: LongFilterInput
+  flags: IntFilterInput
+  is_archived: BooleanFilterInput
+  archive_reason: StringFilterInput
+  archive_date: DateTimeFilterInput
+  audit_log: JSONFilterInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [ReviewFiltersInput]
+  or: [ReviewFiltersInput]
+  not: ReviewFiltersInput
+}
+
+input ReviewInput {
+  comment: JSON
+  author_name: String
+  verified: Boolean
+  product: ID
+  helpful_count: Int
+  user: ID
+  status: ENUM_REVIEW_STATUS
+  is_featured: Boolean
+  images: [ID]
+  locale: String
+  response: JSON
+  content: String
+  rating: ENUM_REVIEW_RATING
+  videos: [ID]
+  reviewed_at: DateTime
+  approved: Boolean
+  reply: JSON
+  likes: Long
+  flags: Int
+  is_archived: Boolean
+  archive_reason: ENUM_REVIEW_ARCHIVE_REASON
+  archive_date: DateTime
+  audit_log: JSON
+  publishedAt: DateTime
+}
+
+type Review {
+  comment: JSON
+  author_name: String
+  verified: Boolean
+  product: ProductEntityResponse
+  helpful_count: Int
+  user: UsersPermissionsUserEntityResponse
+  status: ENUM_REVIEW_STATUS
+  is_featured: Boolean
+  images(filters: UploadFileFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFileRelationResponseCollection
+  locale: String
+  response: JSON
+  content: String
+  rating: ENUM_REVIEW_RATING
+  videos(filters: UploadFileFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFileRelationResponseCollection
+  reviewed_at: DateTime
+  approved: Boolean
+  reply: JSON
+  likes: Long
+  flags: Int
+  is_archived: Boolean
+  archive_reason: ENUM_REVIEW_ARCHIVE_REASON
+  archive_date: DateTime
+  audit_log: JSON
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type ReviewEntity {
+  id: ID
+  attributes: Review
+}
+
+type ReviewEntityResponse {
+  data: ReviewEntity
+}
+
+type ReviewEntityResponseCollection {
+  data: [ReviewEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type ReviewRelationResponseCollection {
+  data: [ReviewEntity!]!
+}
+
+enum ENUM_TAG_TAG_TYPE {
+  organic
+  cotton
+  on_sale
+  out_of_stock
+  coming_soon
+  best_seller
+  trending
+  hot_pick
+  linen
+  modal
+  bamboo
+  slim_fit
+  relaxed_fit
+  oversized_fit
+  minimalist
+  bold
+  luxury
+  summer
+  winter
+  monsoon
+  eid_collection
+  festive
+  pahela_boishak
+  launch_week
+  men
+  women
+  kids
+  unisex
+  young
+  gym
+  casual
+  formal
+  loungewear
+  made_in_Bangladesh
+  fair_trade
+  moisture_wicking
+  anti_odor
+  stretchable
+}
+
+enum ENUM_TAG_COLOR_CODE {
+  Black
+  Jet_Black
+  Charcoal_Grey
+  Ash_Grey
+  Cream_White
+  Ivory_White
+  Sand_Beige
+  Stone_Beige
+  Olive_Green
+  Forest_Green
+  Navy_Blue
+  Sky_Blue
+  Dusty_Pink
+  Wine_Red
+  Maroon
+  White
+  Yellow
+  Blue
+  Deep_Blue
+  Green
+  Red
+}
+
+input TagFiltersInput {
+  id: IDFilterInput
+  name: StringFilterInput
+  slug: StringFilterInput
+  description: JSONFilterInput
+  tag_type: StringFilterInput
+  is_featured: BooleanFilterInput
+  priority: IntFilterInput
+  color_code: StringFilterInput
+  categories: CategoryFiltersInput
+  products: ProductFiltersInput
+  createdAt: DateTimeFilterInput
+  updatedAt: DateTimeFilterInput
+  publishedAt: DateTimeFilterInput
+  and: [TagFiltersInput]
+  or: [TagFiltersInput]
+  not: TagFiltersInput
+}
+
+input TagInput {
+  name: String
+  slug: String
+  description: JSON
+  tag_type: ENUM_TAG_TAG_TYPE
+  is_featured: Boolean
+  priority: Int
+  color_code: ENUM_TAG_COLOR_CODE
+  categories: [ID]
+  products: [ID]
+  publishedAt: DateTime
+}
+
+type Tag {
+  name: String
+  slug: String
+  description: JSON
+  tag_type: ENUM_TAG_TAG_TYPE
+  is_featured: Boolean
+  priority: Int
+  color_code: ENUM_TAG_COLOR_CODE
+  categories(filters: CategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): CategoryRelationResponseCollection
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductRelationResponseCollection
+  createdAt: DateTime
+  updatedAt: DateTime
+  publishedAt: DateTime
+}
+
+type TagEntity {
+  id: ID
+  attributes: Tag
+}
+
+type TagEntityResponse {
+  data: TagEntity
+}
+
+type TagEntityResponseCollection {
+  data: [TagEntity!]!
+  meta: ResponseCollectionMeta!
+}
+
+type TagRelationResponseCollection {
+  data: [TagEntity!]!
+}
+
+union GenericMorph = ComponentVariantSizeStock | ComponentVariantProductVariant | ComponentSectionsPromoBar | ComponentSectionsHeroSlides1 | ComponentProductDetailsProductIdentity | ComponentOrderComponentsProductItems | ComponentOrderComponentsAddressSnapshot | ComponentContactSocialLinks | UploadFile | UploadFolder | UsersPermissionsPermission | UsersPermissionsRole | UsersPermissionsUser | About | AgeGroup | ArchiveRecord | AudienceCategory | BrandTier | Category | Contact | EventsProductsCollection | GenderGroup | GlobalSetting | Homepage | Loyaltypointhistory | Order | Policy | Product | Referral | Review | Tag
+
+input FileInfoInput {
+  name: String
+  alternativeText: String
+  caption: String
+}
+
+type UsersPermissionsMe {
+  id: ID!
+  username: String!
+  email: String
+  confirmed: Boolean
+  blocked: Boolean
+  role: UsersPermissionsMeRole
+}
+
+type UsersPermissionsMeRole {
+  id: ID!
+  name: String!
+  description: String
+  type: String
+}
+
+input UsersPermissionsRegisterInput {
+  username: String!
+  email: String!
+  password: String!
+}
+
+input UsersPermissionsLoginInput {
+  identifier: String!
+  password: String!
+  provider: String! = "local"
+}
+
+type UsersPermissionsPasswordPayload {
+  ok: Boolean!
+}
+
+type UsersPermissionsLoginPayload {
+  jwt: String
+  user: UsersPermissionsMe!
+}
+
+type UsersPermissionsCreateRolePayload {
+  ok: Boolean!
+}
+
+type UsersPermissionsUpdateRolePayload {
+  ok: Boolean!
+}
+
+type UsersPermissionsDeleteRolePayload {
+  ok: Boolean!
+}
+
+input PaginationArg {
+  page: Int
+  pageSize: Int
+  start: Int
+  limit: Int
+}
+
+type Query {
+  uploadFile(id: ID): UploadFileEntityResponse
+  uploadFiles(filters: UploadFileFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFileEntityResponseCollection
+  uploadFolder(id: ID): UploadFolderEntityResponse
+  uploadFolders(filters: UploadFolderFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UploadFolderEntityResponseCollection
+  usersPermissionsRole(id: ID): UsersPermissionsRoleEntityResponse
+  usersPermissionsRoles(filters: UsersPermissionsRoleFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UsersPermissionsRoleEntityResponseCollection
+  usersPermissionsUser(id: ID): UsersPermissionsUserEntityResponse
+  usersPermissionsUsers(filters: UsersPermissionsUserFiltersInput, pagination: PaginationArg = {}, sort: [String] = []): UsersPermissionsUserEntityResponseCollection
+  about(id: ID): AboutEntityResponse
+  abouts(filters: AboutFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AboutEntityResponseCollection
+  ageGroup(id: ID): AgeGroupEntityResponse
+  ageGroups(filters: AgeGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AgeGroupEntityResponseCollection
+  archiveRecord(id: ID): ArchiveRecordEntityResponse
+  archiveRecords(filters: ArchiveRecordFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ArchiveRecordEntityResponseCollection
+  audienceCategory(id: ID): AudienceCategoryEntityResponse
+  audienceCategories(filters: AudienceCategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): AudienceCategoryEntityResponseCollection
+  brandTier(id: ID): BrandTierEntityResponse
+  brandTiers(filters: BrandTierFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): BrandTierEntityResponseCollection
+  category(id: ID): CategoryEntityResponse
+  categories(filters: CategoryFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): CategoryEntityResponseCollection
+  contact(id: ID): ContactEntityResponse
+  contacts(filters: ContactFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ContactEntityResponseCollection
+  eventsProductsCollection(id: ID): EventsProductsCollectionEntityResponse
+  eventsProductsCollections(filters: EventsProductsCollectionFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): EventsProductsCollectionEntityResponseCollection
+  genderGroup(id: ID): GenderGroupEntityResponse
+  genderGroups(filters: GenderGroupFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): GenderGroupEntityResponseCollection
+  globalSetting(publicationState: PublicationState = LIVE): GlobalSettingEntityResponse
+  homepage(publicationState: PublicationState = LIVE): HomepageEntityResponse
+  loyaltypointhistory(publicationState: PublicationState = LIVE): LoyaltypointhistoryEntityResponse
+  order(id: ID): OrderEntityResponse
+  orders(filters: OrderFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): OrderEntityResponseCollection
+  policy(id: ID): PolicyEntityResponse
+  policies(filters: PolicyFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): PolicyEntityResponseCollection
+  product(id: ID): ProductEntityResponse
+  products(filters: ProductFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ProductEntityResponseCollection
+  referral(id: ID): ReferralEntityResponse
+  referrals(filters: ReferralFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ReferralEntityResponseCollection
+  review(id: ID): ReviewEntityResponse
+  reviews(filters: ReviewFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): ReviewEntityResponseCollection
+  tag(id: ID): TagEntityResponse
+  tags(filters: TagFiltersInput, pagination: PaginationArg = {}, sort: [String] = [], publicationState: PublicationState = LIVE): TagEntityResponseCollection
+  me: UsersPermissionsMe
+}
+
+type Mutation {
+  createUploadFile(data: UploadFileInput!): UploadFileEntityResponse
+  updateUploadFile(id: ID!, data: UploadFileInput!): UploadFileEntityResponse
+  deleteUploadFile(id: ID!): UploadFileEntityResponse
+  createUploadFolder(data: UploadFolderInput!): UploadFolderEntityResponse
+  updateUploadFolder(id: ID!, data: UploadFolderInput!): UploadFolderEntityResponse
+  deleteUploadFolder(id: ID!): UploadFolderEntityResponse
+  createAbout(data: AboutInput!): AboutEntityResponse
+  updateAbout(id: ID!, data: AboutInput!): AboutEntityResponse
+  deleteAbout(id: ID!): AboutEntityResponse
+  createAgeGroup(data: AgeGroupInput!): AgeGroupEntityResponse
+  updateAgeGroup(id: ID!, data: AgeGroupInput!): AgeGroupEntityResponse
+  deleteAgeGroup(id: ID!): AgeGroupEntityResponse
+  createArchiveRecord(data: ArchiveRecordInput!): ArchiveRecordEntityResponse
+  updateArchiveRecord(id: ID!, data: ArchiveRecordInput!): ArchiveRecordEntityResponse
+  deleteArchiveRecord(id: ID!): ArchiveRecordEntityResponse
+  createAudienceCategory(data: AudienceCategoryInput!): AudienceCategoryEntityResponse
+  updateAudienceCategory(id: ID!, data: AudienceCategoryInput!): AudienceCategoryEntityResponse
+  deleteAudienceCategory(id: ID!): AudienceCategoryEntityResponse
+  createBrandTier(data: BrandTierInput!): BrandTierEntityResponse
+  updateBrandTier(id: ID!, data: BrandTierInput!): BrandTierEntityResponse
+  deleteBrandTier(id: ID!): BrandTierEntityResponse
+  createCategory(data: CategoryInput!): CategoryEntityResponse
+  updateCategory(id: ID!, data: CategoryInput!): CategoryEntityResponse
+  deleteCategory(id: ID!): CategoryEntityResponse
+  createContact(data: ContactInput!): ContactEntityResponse
+  updateContact(id: ID!, data: ContactInput!): ContactEntityResponse
+  deleteContact(id: ID!): ContactEntityResponse
+  createEventsProductsCollection(data: EventsProductsCollectionInput!): EventsProductsCollectionEntityResponse
+  updateEventsProductsCollection(id: ID!, data: EventsProductsCollectionInput!): EventsProductsCollectionEntityResponse
+  deleteEventsProductsCollection(id: ID!): EventsProductsCollectionEntityResponse
+  createGenderGroup(data: GenderGroupInput!): GenderGroupEntityResponse
+  updateGenderGroup(id: ID!, data: GenderGroupInput!): GenderGroupEntityResponse
+  deleteGenderGroup(id: ID!): GenderGroupEntityResponse
+  updateGlobalSetting(data: GlobalSettingInput!): GlobalSettingEntityResponse
+  deleteGlobalSetting: GlobalSettingEntityResponse
+  updateHomepage(data: HomepageInput!): HomepageEntityResponse
+  deleteHomepage: HomepageEntityResponse
+  updateLoyaltypointhistory(data: LoyaltypointhistoryInput!): LoyaltypointhistoryEntityResponse
+  deleteLoyaltypointhistory: LoyaltypointhistoryEntityResponse
+  createOrder(data: OrderInput!): OrderEntityResponse
+  updateOrder(id: ID!, data: OrderInput!): OrderEntityResponse
+  deleteOrder(id: ID!): OrderEntityResponse
+  createPolicy(data: PolicyInput!): PolicyEntityResponse
+  updatePolicy(id: ID!, data: PolicyInput!): PolicyEntityResponse
+  deletePolicy(id: ID!): PolicyEntityResponse
+  createProduct(data: ProductInput!): ProductEntityResponse
+  updateProduct(id: ID!, data: ProductInput!): ProductEntityResponse
+  deleteProduct(id: ID!): ProductEntityResponse
+  createReferral(data: ReferralInput!): ReferralEntityResponse
+  updateReferral(id: ID!, data: ReferralInput!): ReferralEntityResponse
+  deleteReferral(id: ID!): ReferralEntityResponse
+  createReview(data: ReviewInput!): ReviewEntityResponse
+  updateReview(id: ID!, data: ReviewInput!): ReviewEntityResponse
+  deleteReview(id: ID!): ReviewEntityResponse
+  createTag(data: TagInput!): TagEntityResponse
+  updateTag(id: ID!, data: TagInput!): TagEntityResponse
+  deleteTag(id: ID!): TagEntityResponse
+  upload(refId: ID, ref: String, field: String, info: FileInfoInput, file: Upload!): UploadFileEntityResponse!
+  multipleUpload(refId: ID, ref: String, field: String, files: [Upload]!): [UploadFileEntityResponse]!
+  updateFileInfo(id: ID!, info: FileInfoInput): UploadFileEntityResponse!
+  removeFile(id: ID!): UploadFileEntityResponse
+  """Create a new role"""
+  createUsersPermissionsRole(data: UsersPermissionsRoleInput!): UsersPermissionsCreateRolePayload
+  """Update an existing role"""
+  updateUsersPermissionsRole(id: ID!, data: UsersPermissionsRoleInput!): UsersPermissionsUpdateRolePayload
+  """Delete an existing role"""
+  deleteUsersPermissionsRole(id: ID!): UsersPermissionsDeleteRolePayload
+  """Create a new user"""
+  createUsersPermissionsUser(data: UsersPermissionsUserInput!): UsersPermissionsUserEntityResponse!
+  """Update an existing user"""
+  updateUsersPermissionsUser(id: ID!, data: UsersPermissionsUserInput!): UsersPermissionsUserEntityResponse!
+  """Delete an existing user"""
+  deleteUsersPermissionsUser(id: ID!): UsersPermissionsUserEntityResponse!
+  login(input: UsersPermissionsLoginInput!): UsersPermissionsLoginPayload!
+  """Register a user"""
+  register(input: UsersPermissionsRegisterInput!): UsersPermissionsLoginPayload!
+  """Request a reset password token"""
+  forgotPassword(email: String!): UsersPermissionsPasswordPayload
+  """
+  Reset user password. Confirm with a code (resetToken from forgotPassword)
+  """
+  resetPassword(password: String!, passwordConfirmation: String!, code: String!): UsersPermissionsLoginPayload
+  """Change user password. Confirm with the current password."""
+  changePassword(currentPassword: String!, password: String!, passwordConfirmation: String!): UsersPermissionsLoginPayload
+  """Confirm an email users email address"""
+  emailConfirmation(confirmation: String!): UsersPermissionsLoginPayload
+}

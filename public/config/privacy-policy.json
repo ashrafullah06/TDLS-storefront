@@ -1,0 +1,32 @@
+{
+  "policyTitle": "Privacy Policy",
+  "effectiveDate": "2025-07-01",
+  "jurisdiction": "Bangladesh",
+  "corePrinciples": [
+    "We collect only essential customer information for order processing and customer support.",
+    "All personal data is encrypted and stored in secure servers located in Bangladesh.",
+    "We strictly comply with the Bangladesh DPDP Act and do not share, sell, or misuse personal data."
+  ],
+  "dataCollected": [
+    "Name, address, email, phone",
+    "Order and transaction data",
+    "Device/browser info for security and audit"
+  ],
+  "dataUsage": [
+    "Order processing",
+    "Fraud prevention and audit",
+    "Customer support and loyalty programs",
+    "Legal compliance"
+  ],
+  "rights": {
+    "access": true,
+    "rectification": true,
+    "deletion": true,
+    "dataPortability": true,
+    "complaintEscalation": "privacy@thednalabstore.com"
+  },
+  "dataRetention": "We retain order and transaction data for 5 years as per DPDP guidelines.",
+  "contact": {
+    "privacyOfficer": "privacy@thednalabstore.com"
+  }
+}

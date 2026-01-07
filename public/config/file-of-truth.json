@@ -1,0 +1,36 @@
+{
+  "companyName": "THE DNA LAB STORE",
+  "registrationNumber": "BD-2025-001-TDLC",
+  "registeredAddress": "House 1A, Road 2, Banani, Dhaka, Bangladesh",
+  "legalForm": "Private Limited Company",
+  "ownership": {
+    "owners": [
+      {
+        "name": "Ashrafullah",
+        "nationalId": "BD1234567890",
+        "share": "100%"
+      }
+    ]
+  },
+  "license": {
+    "type": "E-Commerce Business",
+    "authority": "Bangladesh Registrar of Joint Stock Companies and Firms",
+    "licenseNumber": "RJSC-TDLC-2025-0078"
+  },
+  "tax": {
+    "bin": "123456789",
+    "vat": "BD987654321"
+  },
+  "compliance": {
+    "dpdpCertified": true,
+    "lastAuditDate": "2025-06-28",
+    "auditor": "BD Secure Audit Ltd."
+  },
+  "contact": {
+    "email": "info@thednalabstore.com",
+    "phone": "+880-1700000000"
+  },
+  "adminOverride": true,
+  "auditLogEnabled": true,
+  "termsAndConditionsVersion": "2025.07.01"
+}

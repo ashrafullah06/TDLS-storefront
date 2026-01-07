@@ -1,0 +1,13 @@
+{
+  "earn_rate": 1,
+  "redeem_value": 0.01,
+  "tiers": [
+    { "name": "Member",   "min_points": 0 },
+    { "name": "Bronze",   "min_points": 1000 },
+    { "name": "Silver",   "min_points": 5000 },
+    { "name": "Gold",     "min_points": 15000 },
+    { "name": "Platinum", "min_points": 30000 },
+    { "name": "VIP",      "min_points": 60000 }
+  ],
+  "expiry_days": 365
+}

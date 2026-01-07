@@ -1,0 +1,24 @@
+{
+  "points_per_bdt": 1,
+  "expiry_days": 365,
+  "min_redeem_points": 100,
+  "redeem_conversion_rate": 0.9,
+  "abuse_detection": {
+    "max_referrals_per_month": 10,
+    "duplicate_email_flag": true,
+    "kyc_required_for_redemption": true
+  },
+  "bonus_campaigns": [
+    {"name": "Eid 2025", "points_multiplier": 2, "start": "2025-03-25", "end": "2025-04-14"}
+  ],
+  "audit_settings": {
+    "immutable_log": true,
+    "bd_law_compliance": true
+  },
+  "admin_policy": {
+    "manual_override_allowed": false,
+    "full_audit_on_change": true
+  },
+  "reward_types": ["purchase", "referral", "promotion", "manual"],
+  "file_of_truth": true
+}

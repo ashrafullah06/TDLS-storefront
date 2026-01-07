@@ -1,0 +1,30 @@
+{
+  "preferences": [
+    {
+      "type": "order_update",
+      "enabled": true,
+      "channels": ["email", "sms"],
+      "subject_en": "Your order update",
+      "body_en": "Dear {{name}}, your order {{order_id}} status is now {{status}}.",
+      "body_bn": "প্রিয় {{name}}, আপনার অর্ডার {{order_id}} এর অবস্থা এখন {{status}}।"
+    },
+    {
+      "type": "reward_notification",
+      "enabled": true,
+      "channels": ["dashboard"],
+      "subject_en": "You have new rewards!",
+      "body_en": "Congratulations {{name}}, you earned {{points}} points!",
+      "body_bn": "অভিনন্দন {{name}}, আপনি {{points}} পয়েন্ট পেয়েছেন!"
+    },
+    {
+      "type": "refund_status",
+      "enabled": true,
+      "channels": ["email"],
+      "subject_en": "Refund status update",
+      "body_en": "Dear {{name}}, your refund for order {{order_id}} is {{status}}.",
+      "body_bn": "প্রিয় {{name}}, আপনার অর্ডার {{order_id}} এর রিফান্ড {{status}}।"
+    }
+  ],
+  "audit_log": true,
+  "bd_compliance": true
+}

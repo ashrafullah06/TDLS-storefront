@@ -1,0 +1,15 @@
+schema: ./src/lib/graphql/schema.graphql
+documents:
+  - ./src/**/*.graphql
+generates:
+  ./src/lib/graphql/generated/types.ts:
+    plugins:
+      - typescript
+      - typescript-operations
+      - typed-document-node
+config:
+  dedupeOperationSuffix: true
+  nonOptionalTypename: true
+  scalars:
+    JSON: any
+    DateTime: string

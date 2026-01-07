@@ -1,0 +1,17 @@
+{
+  "policyTitle": "Escalation & Complaint Policy",
+  "effectiveDate": "2025-07-01",
+  "jurisdiction": "Bangladesh",
+  "principles": [
+    "All complaints are handled promptly and transparently.",
+    "Customers have the right to escalate unresolved issues to management or legal authorities."
+  ],
+  "steps": [
+    "Contact our support via email or phone (see site-config.json).",
+    "If unresolved after 3 working days, escalate by marking your email as 'Escalation'.",
+    "If still unresolved after 5 working days, request referral to the owner or admin.",
+    "Final arbitration is with Bangladesh Consumer Protection Authority."
+  ],
+  "ownerContact": "owner@thednalabstore.com",
+  "legalReferral": "Bangladesh Consumer Protection Authority, consumer.gov.bd"
+}

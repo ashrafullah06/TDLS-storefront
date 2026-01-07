@@ -1,0 +1,13 @@
+# src/lib/graphql/fragments/product.graphql
+fragment ProductBasics on Product {
+  cost_price
+  categories {
+    data {
+      id
+      attributes {
+        name
+        slug
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "critical_alerts": [
+    {
+      "type": "audit_incident",
+      "enabled": true,
+      "channels": ["email", "sms"],
+      "subject_en": "Audit Incident Detected",
+      "body_en": "An audit or compliance incident has been detected. Immediate review required.",
+      "body_bn": "একটি অডিট বা কমপ্লায়েন্স সমস্যা সনাক্ত হয়েছে। অনুগ্রহ করে দ্রুত পর্যালোচনা করুন।"
+    },
+    {
+      "type": "compliance_deadline",
+      "enabled": true,
+      "channels": ["email"],
+      "subject_en": "Compliance Deadline Approaching",
+      "body_en": "Please review all compliance files and reports before the upcoming deadline.",
+      "body_bn": "সমস্ত কমপ্লায়েন্স ফাইল এবং রিপোর্ট নির্ধারিত সময়ের মধ্যে রিভিউ করুন।"
+    }
+  ],
+  "daily_summary": {
+    "enabled": true,
+    "channels": ["dashboard"],
+    "fields": ["returns", "refunds", "rewards", "audit_logs"],
+    "audit_log": true
+  },
+  "bd_law_policy": true,
+  "file_of_truth": true
+}

@@ -1,0 +1,508 @@
+/* PATH: src/styles/admin.css */
+
+/* ===== Design tokens ===== */
+:root {
+  --admin-topbar-height: 56px;
+  --admin-maxw: 1280px;
+  --admin-border: #e5e7eb;         /* slate-200 */
+  --admin-border-strong: #d1d5db;  /* slate-300 */
+  --admin-surface: #ffffff;
+  --admin-ink: #0b1b3b;            /* TDLC deep navy */
+  --admin-ink-50: #5a647d;         /* muted ink */
+  --admin-bg: #f6f7fb;             /* soft canvas */
+
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --rad-s: 10px;
+  --rad-m: 12px;
+
+  --font-sm: 12.5px;
+  --font-md: 14.5px;
+  --font-lg: 16.5px;
+
+  /* NEW: modal / overlay stacking safety */
+  --admin-modal-z: 9999;
+}
+
+/* Apply subtle canvas in admin area */
+.admin-surface {
+  background: var(--admin-bg);
+  min-height: 100vh;
+
+  /* NEW: prevents random horizontal “strap” overflow on some layouts */
+  overflow-x: hidden;
+}
+
+/* ===== Topbar (centered) ===== */
+.admin-topbar {
+  background: var(--admin-surface);
+  border-bottom: 1px solid var(--admin-border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.admin-topbar__inner {
+  height: var(--admin-topbar-height);
+  margin: 0 auto;
+  max-width: var(--admin-maxw);
+  padding: 0 clamp(12px, 2.4vw, 20px);
+  display: flex;
+  align-items: center;
+  justify-content: center; /* center everything */
+  gap: var(--space-3);
+}
+/* Keep left and right wrappers; center the whole row */
+.admin-topbar__left,
+.admin-topbar__right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.admin-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--admin-border-strong);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--admin-ink);
+  cursor: pointer;
+}
+.admin-back:hover { filter: brightness(0.98); }
+.admin-brand {
+  font-weight: 700;
+  color: var(--admin-ink);
+  letter-spacing: .2px;
+}
+.admin-breadcrumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--admin-ink-50);
+  font-size: var(--font-md);
+  text-transform: none;
+}
+.admin-breadcrumbs .crumb-link {
+  color: var(--admin-ink);
+  text-decoration: none;
+}
+.admin-breadcrumbs .crumb-link:hover { text-decoration: underline; }
+.admin-breadcrumbs .crumb-sep { padding: 0 2px; opacity: .5; }
+.admin-breadcrumbs .crumb-current { color: var(--admin-ink-50); }
+.admin-env-tag {
+  font-size: var(--font-sm);
+  color: var(--admin-ink-50);
+  border: 1px solid var(--admin-border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #fff;
+}
+
+/* ===== Page frame (border on all sides + breathing space) ===== */
+.admin-page-outer {
+  /* Slightly asymmetric: more vertical space, a bit tighter horizontally */
+  padding-block: clamp(16px, 2.5vw, 28px);
+  padding-inline: clamp(12px, 2vw, 20px);
+}
+.admin-page-frame {
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--rad-m);
+  box-shadow: var(--shadow);
+}
+.admin-page-padding {
+  padding: clamp(14px, 2.2vw, 22px);
+}
+.admin-page-frame > * + * { margin-top: var(--space-5); }
+
+/* ===== Common blocks ===== */
+.admin-page-frame section,
+.admin-page-frame .panel,
+.admin-page-frame .card,
+.admin-page-frame .widget,
+.admin-page-frame .box {
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--rad-s);
+  padding: clamp(12px, 1.8vw, 18px);
+  box-shadow: var(--shadow);
+}
+
+/* ===== Toolbars / filters ===== */
+.admin-page-frame .toolbar,
+.admin-page-frame .filters,
+.admin-page-frame .actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.admin-page-frame label {
+  font-size: var(--font-sm);
+  color: var(--admin-ink-50);
+}
+
+/* ============================================================
+   NEW: Form-control baseline normalization (prevents clipped text)
+   - Keeps your style, but makes controls “font-safe” on Windows/Chrome
+   ============================================================ */
+.admin-page-frame input,
+.admin-page-frame select,
+.admin-page-frame textarea,
+.admin-page-frame button {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+/* ===== Inputs & dropdowns ===== */
+.admin-page-frame input[type="text"],
+.admin-page-frame input[type="number"],
+.admin-page-frame input[type="date"],
+.admin-page-frame input[type="search"],
+.admin-page-frame input[type="email"],
+.admin-page-frame input[type="tel"],
+.admin-page-frame input[type="password"],
+.admin-page-frame select,
+.admin-page-frame textarea {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+
+  font-size: var(--font-md);
+  line-height: 1.25;
+
+  /* UPDATED: slightly roomier padding to stop “baseline clipping” */
+  padding: 10px 14px;
+
+  border: 1px solid var(--admin-border-strong);
+  border-radius: var(--rad-s);
+
+  background: #fff;
+  color: var(--admin-ink);
+
+  /* UPDATED: 44px is the reliable baseline for most font metrics */
+  min-height: 44px;
+
+  outline: none;
+
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+
+  /* Prevents text visually touching borders on zoom */
+  background-clip: padding-box;
+}
+
+.admin-page-frame textarea {
+  min-height: 110px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.admin-page-frame input::placeholder,
+.admin-page-frame textarea::placeholder {
+  color: #94a3b8; /* slate-400 */
+  opacity: 0.8;
+  line-height: 1.25;
+}
+
+/* Date input internal text clipping (Chrome/Windows) */
+.admin-page-frame input[type="date"]::-webkit-datetime-edit {
+  line-height: 1.25;
+  padding: 0;
+}
+.admin-page-frame input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+}
+
+.admin-page-frame select {
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='M5.75 7.75L10 12.25L14.25 7.75' stroke='%236b7280' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 42px;
+  cursor: pointer;
+}
+
+.admin-page-frame input:focus,
+.admin-page-frame select:focus,
+.admin-page-frame textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37,99,235,.15);
+}
+
+/* ===== Tables (softer lines, sticky head) ===== */
+.admin-page-frame table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-md);
+}
+.admin-page-frame th,
+.admin-page-frame td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--admin-border);
+}
+.admin-page-frame thead th {
+  background: #f8fafc;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+}
+.admin-page-frame tbody tr:hover { background: #f9fafb; }
+
+/* ===== Charts sizing ===== */
+.admin-page-frame canvas,
+.admin-page-frame svg {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+}
+
+/* Harmonize any .border color inside Analytics */
+.admin-page-frame .border { border-color: var(--admin-border) !important; }
+
+/* ===== A11y ===== */
+:where(button, a, input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #c7d2fe, 0 0 0 4px rgba(59,130,246,0.35);
+  border-radius: 6px;
+}
+
+/* ===== Reduced motion ===== */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* =========================================================
+   TDLC Admin Dashboard — Animated KPI Tile System
+   ========================================================= */
+
+/* Tile container */
+.admin-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+  border: 1px solid var(--admin-border);
+  border-radius: var(--rad-m);
+
+  background: #fff;
+  color: var(--admin-ink);
+
+  padding: 18px 20px;
+  min-height: 115px;
+
+  text-decoration: none;
+  cursor: pointer;
+
+  /* Smooth interaction */
+  transition:
+    transform 180ms cubic-bezier(0.19, 1, 0.22, 1),
+    box-shadow 180ms cubic-bezier(0.19, 1, 0.22, 1),
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+}
+
+/* Hover pop-out */
+.admin-tile:hover {
+  transform: translateY(-4px) scale(1.015);
+  box-shadow: 0px 8px 20px rgba(16, 24, 40, 0.12);
+  background: #f8faff;
+  border-color: #d0d7ee;
+}
+
+/* Active click animation */
+.admin-tile:active {
+  transform: scale(0.985);
+  box-shadow: 0px 4px 10px rgba(16, 24, 40, 0.18);
+}
+
+/* TITLE */
+.admin-tile-title {
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--admin-ink);
+  letter-spacing: 0.01em;
+}
+
+/* KPI BIG NUMBER */
+.admin-tile-kpi {
+  margin-top: 6px;
+  font-size: 28px;
+  font-weight: 800;
+  color: #111827;
+}
+
+/* SUBTEXT */
+.admin-tile-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* DISABLED tiles */
+.admin-tile--disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: #f5f5f5 !important;
+  border-color: var(--admin-border) !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* ACTIVE tile — based on current page */
+.admin-tile--active {
+  background: var(--admin-ink);
+  color: #fff;
+  border-color: var(--admin-ink);
+
+  transform: translateY(-2px);
+  box-shadow: 0px 6px 16px rgba(11, 27, 59, 0.25);
+}
+
+.admin-tile--active .admin-tile-title,
+.admin-tile--active .admin-tile-kpi,
+.admin-tile--active .admin-tile-sub {
+  color: #fff !important;
+}
+
+/* Optional “Magnetic Hover” (looks premium) */
+.admin-tile:hover {
+  transform-style: preserve-3d;
+}
+
+/* Responsive 4 → 2 → 1 grid */
+.admin-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 1280px) {
+  .admin-dashboard-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .admin-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .admin-dashboard-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
+}
+
+/* ===== Responsive density adjustments for smaller screens ===== */
+@media (max-width: 900px) {
+  .admin-page-outer {
+    padding-block: 12px;
+    padding-inline: 10px;
+  }
+  .admin-page-padding {
+    padding: 12px;
+  }
+  .admin-page-frame section,
+  .admin-page-frame .panel,
+  .admin-page-frame .card,
+  .admin-page-frame .widget,
+  .admin-page-frame .box {
+    padding: 10px;
+  }
+}
+
+/* ============================================================
+   NEW: Admin Modal Base Styles (fixes modal behind layers + scroll)
+   Use these classes in your reject modal markup:
+   - overlay: class="admin-modal-overlay"
+   - panel:   class="admin-modal-panel"
+   ============================================================ */
+
+.admin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--admin-modal-z);
+
+  /* dim + blur (premium, but subtle) */
+  background: rgba(10, 16, 28, 0.55);
+  backdrop-filter: blur(6px);
+
+  /* critical: allow modal content to scroll on small screens */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+
+  /* ensures content isn’t glued to edges */
+  padding: clamp(14px, 3vw, 28px);
+
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.admin-modal-panel {
+  width: min(720px, 100%);
+  margin-top: clamp(18px, 6vh, 64px);
+
+  background: #fff;
+  border: 1px solid var(--admin-border);
+  border-radius: 18px;
+  box-shadow: 0 22px 60px rgba(2, 8, 23, 0.35);
+
+  overflow: hidden;
+}
+
+.admin-modal-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--admin-border);
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-modal-title {
+  font-weight: 900;
+  color: var(--admin-ink);
+  letter-spacing: .01em;
+}
+
+.admin-modal-body {
+  padding: 16px;
+  max-height: min(70vh, 720px);
+  overflow: auto;
+}
+
+.admin-modal-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--admin-border);
+  background: #fff;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* ============================================================
+   NEW: Scroll lock helpers (use in JS correctly)
+   - Add/remove this class on BOTH html and body when modal opens/closes
+   ============================================================ */
+html.admin-lock-scroll,
+body.admin-lock-scroll {
+  overflow: hidden !important;
+}

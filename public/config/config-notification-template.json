@@ -1,0 +1,35 @@
+{
+  "templates": [
+    {
+      "name": "order_confirmation",
+      "channel": "email",
+      "subject": "Order Confirmed – The DNA Lab Store",
+      "body_en": "Dear {{name}}, your order {{order_id}} has been confirmed. Thank you for shopping with us.",
+      "body_bn": "প্রিয় {{name}}, আপনার অর্ডার {{order_id}} নিশ্চিত করা হয়েছে। আমাদের সাথে থাকার জন্য ধন্যবাদ।",
+      "audit_log": true,
+      "compliance": "BD + Intl"
+    },
+    {
+      "name": "reward_earned",
+      "channel": "dashboard",
+      "subject": "You Earned Reward Points!",
+      "body_en": "Congrats {{name}}, you earned {{points}} points for {{reason}}.",
+      "body_bn": "অভিনন্দন {{name}}, আপনি {{reason}} এর জন্য {{points}} পয়েন্ট পেয়েছেন।",
+      "audit_log": true,
+      "compliance": "BD + Intl"
+    },
+    {
+      "name": "refund_initiated",
+      "channel": "sms",
+      "subject": "",
+      "body_en": "Your refund for order {{order_id}} has been initiated. Allow 5-7 days for completion.",
+      "body_bn": "আপনার অর্ডার {{order_id}}-এর রিফান্ড প্রসেস শুরু হয়েছে। ৫-৭ দিনের মধ্যে সম্পন্ন হবে।",
+      "audit_log": true,
+      "compliance": "BD + Intl"
+    }
+  ],
+  "audit_settings": {
+    "immutable_log": true,
+    "bd_law_compliance": true
+  }
+}

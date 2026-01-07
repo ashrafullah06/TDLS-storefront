@@ -1,0 +1,20 @@
+# src/lib/graphql/fragments/product.graphql
+
+# Minimal, schema-safe product fragment that matches Strapi v4 patterns.
+# NOTE:
+# - Product fields like name/title vary by project. We only include fields we
+#   KNOW exist from your error hints: cost_price and categories (plural).
+# - You can add more fields later once Codegen succeeds.
+
+fragment ProductBasics on Product {
+  cost_price
+  categories {
+    data {
+      id
+      attributes {
+        name
+        slug
+      }
+    }
+  }
+}

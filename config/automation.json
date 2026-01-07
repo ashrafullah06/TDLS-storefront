@@ -1,0 +1,5 @@
+{
+  "return.received": [
+    { "type": "restock_from_return" }
+  ]
+}

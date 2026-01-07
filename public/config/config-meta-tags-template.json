@@ -1,0 +1,21 @@
+{
+  "default": {
+    "title": "THE DNA LAB Store – Premium Bangladesh Clothing, Rewards & Returns",
+    "description": "Shop premium, ethical apparel from THE DNA LAB Store. Seamless refunds, transparent rewards, secure checkout. 100% BD-compliant. File of truth certified.",
+    "keywords": "Bangladesh, clothing, returns, refunds, rewards, ethical, compliance, file of truth, THE DNA LAB",
+    "canonical": "https://www.thednalabstore.com/"
+  },
+  "seasonal": [
+    {
+      "name": "Eid 2025",
+      "title": "Eid Special Collection – THE DNA LAB Store",
+      "description": "Celebrate Eid with our exclusive Bangladesh collection. Premium apparel, bonus rewards, easy returns.",
+      "keywords": "Eid, premium, collection, Bangladesh, clothing, gifts, returns, rewards"
+    }
+  ],
+  "compliance": {
+    "bd_law": true,
+    "gdpr": true,
+    "audit_policy": "file of truth"
+  }
+}

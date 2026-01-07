@@ -1,0 +1,43 @@
+{
+  "title": "THE DNA LAB",
+  "subtitle": "STORE",
+  "tagline": "Divina Naturalis Aesthetica (DNA)",
+  "cta_text": "Shop Now",
+  "cta_link": "/shop",
+  "nav_links": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Shop Now",
+      "href": "/shop"
+    },
+    {
+      "label": "Login",
+      "href": "/login"
+    }
+  ],
+  "logoList": [
+    "/logos/logo-gold.svg",
+    "/logos/logo-silver.svg",
+    "/logos/logo-maroon.svg",
+    "/logos/logo-bright-blue.svg",
+    "/logos/gold-tree.svg",
+    "/logos/logo-forestgreen.svg"
+  ],
+  "product_images": [
+    {
+      "url": "/assets/products/tshirt1.png"
+    },
+    {
+      "url": "/assets/products/tshirt2.png"
+    },
+    {
+      "url": "/assets/products/tshirt3.png"
+    }
+  ],
+  "tdlc_section_title": "THE DNA LAB CLOTHING (TDLC)",
+  "tdlc_section_tagline": "Simplicity Is The Ultimate Sophistication",
+  "footer_text": "\u00a9 THE DNA LAB STORE 2026"
+}

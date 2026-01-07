@@ -1,0 +1,25 @@
+{
+  "appName": "The DNA Lab Store",
+  "appShortName": "TDLC",
+  "themeColor": "#000000",
+  "backgroundColor": "#000000",
+  "icon": {
+    "ios": "appstore-icon.png",
+    "android": "playstore-icon.png",
+    "svgVariants": {
+      "base": "gold-tree.svg",
+      "tdlc": "gold-tree-tdlc.svg",
+      "clothing": "gold-tree-clothing.svg",
+      "store": "gold-tree-store.svg"
+    }
+  },
+  "splashScreen": "splash-screen.png",
+  "branding": {
+    "logo": "gold-tree.svg",
+    "fonts": [
+      "Playfair Display",
+      "Libre Baskerville"
+    ],
+    "website": "www.thednalabstore.com"
+  }
+}

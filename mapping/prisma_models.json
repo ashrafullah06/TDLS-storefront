@@ -1,0 +1,11 @@
+{
+  "Order":     {"model":"order","createdAt":"createdAt","status":"status","total":"total","customerId":"customerId"},
+  "OrderItem": {"model":"orderItem","orderId":"orderId","productId":"productId","variantId":"variantId","qty":"quantity","price":"price","cost":"cost"},
+  "Payment":   {"model":"payment","amount":"amount","status":"status","orderId":"orderId","provider":"provider","eventId":"eventId","createdAt":"createdAt"},
+  "Inventory": {"model":"inventory","variantId":"variantId","sku":"sku","onHand":"onHand","reserved":"reserved","warehouseId":"warehouseId","updatedAt":"updatedAt"},
+  "Warehouse": {"model":"warehouse","id":"id","name":"name"},
+  "Return":    {"model":"return","orderId":"orderId","status":"status","createdAt":"createdAt"},
+  "ReturnItem":{"model":"returnItem","returnId":"returnId","variantId":"variantId","qty":"quantity"},
+  "Shipment":  {"model":"shipment","orderId":"orderId","carrier":"carrier","tracking":"tracking","labelUrl":"labelUrl","status":"status"},
+  "User":      {"model":"user","id":"id","email":"email","name":"name","isActive":"isActive"}
+}

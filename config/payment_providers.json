@@ -1,0 +1,14 @@
+{
+  "gateways": [
+    { "key": "stripe", "enabled": false, "secret_env": "STRIPE_SECRET_KEY" },
+    { "key": "sslcommerz", "enabled": false, "store_id_env": "SSLC_STORE_ID", "store_pass_env": "SSLC_STORE_PASS" },
+    { "key": "bkash", "enabled": false, "username_env": "BKASH_USERNAME", "password_env": "BKASH_PASSWORD", "app_key_env": "BKASH_APP_KEY", "app_secret_env": "BKASH_APP_SECRET" },
+    { "key": "nagad", "enabled": false, "merchant_id_env": "NAGAD_MERCHANT_ID", "priv_key_env": "NAGAD_PRIV_KEY", "pub_key_env": "NAGAD_PUB_KEY" }
+  ],
+  "fees": {
+    "stripe": { "pct": 2.9, "fixed": 0.3 },
+    "sslcommerz": { "pct": 2.0, "fixed": 0.0 },
+    "bkash": { "pct": 1.85, "fixed": 0.0 },
+    "nagad": { "pct": 1.5, "fixed": 0.0 }
+  }
+}

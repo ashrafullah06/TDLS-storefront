@@ -1,0 +1,5 @@
+{
+  "max_balance": 100000,
+  "max_tx_amount": 50000,
+  "allow_negative": false
+}

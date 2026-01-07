@@ -1,0 +1,16 @@
+fragment MediaFile on UploadFile {
+  url
+  alternativeText
+  width
+  height
+  size
+  mime
+}
+
+fragment MediaSingle on UploadFileEntityResponse {
+  data { attributes { ...MediaFile } }
+}
+
+fragment MediaMany on UploadFileRelationResponseCollection {
+  data { attributes { ...MediaFile } }
+}

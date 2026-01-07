@@ -1,0 +1,39 @@
+{
+  "policyTitle": "Refund & Exchange Policy",
+  "effectiveDate": "2025-07-01",
+  "jurisdiction": "Bangladesh",
+  "corePrinciples": [
+    "Transparent, customer-first policy for all refunds and exchanges.",
+    "Fully compliant with Bangladesh Digital Commerce Policy, Consumer Rights Protection Act, and DPDP.",
+    "Every request is logged and auditable. Fraud/abuse is strictly controlled by automated and manual review."
+  ],
+  "refundWindowDays": 7,
+  "exchangeWindowDays": 14,
+  "returnableItems": [
+    "Unworn/unwashed clothing in original packaging with all tags",
+    "Manufacturing defects (verified by QC)"
+  ],
+  "nonReturnableItems": [
+    "Worn or used garments",
+    "Custom/special edition products",
+    "Hygiene-sensitive goods"
+  ],
+  "procedure": {
+    "step1": "Submit a return/exchange request online with order ID and reason.",
+    "step2": "Support will contact within 2 working days for eligibility verification.",
+    "step3": "If approved, return must be shipped back to our official address (customer pays unless product is faulty).",
+    "step4": "Refunds are processed to original payment method within 7 days after QC approval."
+  },
+  "fraudPrevention": {
+    "maxReturnsPerYear": 3,
+    "abuseDetection": true,
+    "manualReview": true,
+    "auditTrail": true
+  },
+  "escalation": {
+    "firstContact": "support@thednalabstore.com",
+    "escalateTo": "admin@thednalabstore.com",
+    "arbitration": "Bangladesh Consumer Protection Authority"
+  },
+  "disclaimer": "This policy may be updated periodically to comply with Bangladesh law and to protect consumer rights."
+}

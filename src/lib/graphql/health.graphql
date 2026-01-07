@@ -1,0 +1,3 @@
+query IntrospectionPing {
+  __schema { queryType { name } }
+}

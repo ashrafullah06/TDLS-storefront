@@ -1,0 +1,9 @@
+# *
+User-agent: *
+Allow: /
+
+# Host
+Host: https://www.thednalabstore.com
+
+# Sitemaps
+Sitemap: https://www.thednalabstore.com/sitemap.xml
