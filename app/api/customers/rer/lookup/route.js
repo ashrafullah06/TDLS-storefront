@@ -1,6 +1,9 @@
+//app/api/customers/rer/lookup/route.js
 export const dynamic = 'force-dynamic';
 
-import prisma from '../../../../../lib/prisma';
+// RIGHT
+import prisma from "@/lib/prisma";
+
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);

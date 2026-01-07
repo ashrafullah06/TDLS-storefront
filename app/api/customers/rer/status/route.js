@@ -1,6 +1,7 @@
+//app/api/customers/rer/status/route.js
 export const dynamic = 'force-dynamic';
 
-import prisma from '../../../../../lib/prisma';
+import prisma from "@/lib/prisma";
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
