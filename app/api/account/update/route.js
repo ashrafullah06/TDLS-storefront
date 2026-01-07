@@ -1,7 +1,8 @@
+//app/api/account/update/route.js
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
-import { auth } from '@/app/api/auth/[...nextauth]/route';
+import { auth } from "../../auth/[...nextauth]/route";
 
 const STRAPI_URL = process.env.STRAPI_URL || 'http://localhost:1337';
 const STRAPI_SYNC_SECRET = process.env.STRAPI_SYNC_SECRET || '';

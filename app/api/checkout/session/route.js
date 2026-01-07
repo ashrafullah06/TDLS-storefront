@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import prisma from "@/lib/prisma";
-import authOptions from "@/lib/auth-options";
+import authOptions from "@/lib/authoptions";
 
 function normalizeBdPhone(phone) {
   if (!phone) return null;
