@@ -1,6 +1,6 @@
 export const dynamic = 'force-dynamic';
 
-import prisma from '../../../../../lib/prisma';
+import prisma from "@/lib/prisma";
 import { NextResponse } from 'next/server';
 
 async function readText(fd, key) {
