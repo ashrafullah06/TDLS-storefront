@@ -1,0 +1,15 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../src/generated/prisma/strapi"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("STRAPI_DATABASE_URL")
+}
+
+// Do NOT add models here.
+// Pull from Strapi DB with:
+// npx prisma db pull --schema prisma/strapi/schema.prisma
+// npx prisma format --schema prisma/strapi/schema.prisma
+// npx prisma generate --schema prisma/strapi/schema.prisma

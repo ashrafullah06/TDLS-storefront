@@ -114,7 +114,7 @@ node_modules/
 yarn-error.log
 npm-debug.log*
 pnpm-debug.log*
-yarn-debug.log*
+yarn-debug.log
 yarn-error.log*
 
 ############################
@@ -163,12 +163,21 @@ prisma/**/schema.backup.prisma
 *.backup.*
 
 ############################
-# Prisma generated clients + engines (do not commit)
+# Prisma generated clients + engines
 ############################
 
 prisma/generated/
-src/generated/prisma/
 **/query_engine-*.node
+
+# --- IMPORTANT: keep generated Prisma clients tracked for Vercel builds ---
+# Some other ignore rule(s) may be ignoring src/generated/prisma; this block forces it back in.
+src/generated/*
+!src/generated/prisma/
+!src/generated/prisma/**
+!src/generated/prisma/app/
+!src/generated/prisma/app/**
+!src/generated/prisma/strapi/
+!src/generated/prisma/strapi/**
 
 ############################
 # Build outputs
