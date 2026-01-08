@@ -1,4 +1,4 @@
-############################
+############################ 
 # OS X
 ############################
 
@@ -178,6 +178,11 @@ src/generated/*
 !src/generated/prisma/app/**
 !src/generated/prisma/strapi/
 !src/generated/prisma/strapi/**
+
+# --- IMPORTANT: do NOT commit Prisma platform engines inside src/generated ---
+src/generated/**/query_engine-*.node
+src/generated/**/libquery_engine-*.node
+src/generated/**/schema-engine-*.node
 
 ############################
 # Build outputs
