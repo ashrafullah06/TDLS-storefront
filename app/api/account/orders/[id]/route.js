@@ -58,11 +58,28 @@ function safeDecode(v) {
  */
 export async function GET(_req, { params }) {
   try {
-    // IMPORTANT: lazy-load these to avoid build-time module evaluation failures on Vercel
-    const [{ default: prisma }, { auth }] = await Promise.all([
-      import("@/lib/prisma"),
-      import("@/lib/auth"),
-    ]);
+    /**
+     * CRITICAL BUILD-SAFETY:
+     * During `next build` (Vercel "Collecting page data"), Next may evaluate route modules
+     * in ways that can trigger server init paths. Avoid initializing Prisma/Auth during build.
+     * This does NOT affect runtime requests.
+     */
+    const phase = String(process.env.NEXT_PHASE || "");
+    if (phase.includes("phase-production-build")) {
+      return json({ ok: true, build: true }, 200);
+    }
+
+    // IMPORTANT: lazy-load these to avoid module evaluation failures on Vercel
+    let prisma, auth;
+    try {
+      const modPrisma = await import("@/lib/prisma");
+      const modAuth = await import("@/lib/auth");
+      prisma = modPrisma?.default;
+      auth = modAuth?.auth;
+    } catch (e) {
+      console.error("[api/account/orders/[id] init] ", e);
+      return json({ ok: false, error: "SERVER_INIT_FAILED" }, 500);
+    }
 
     const session = await auth();
     const userId = session?.user?.id || null;
