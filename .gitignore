@@ -190,3 +190,9 @@ src/generated/**/schema-engine-*.node
 
 dist/
 build/
+
+# Prisma generated engines / binaries (do not commit)
+src/generated/prisma/**/query-engine-*.exe
+src/generated/prisma/**/runtime/binary.*
+prisma/**/*.bak*
+
