@@ -1,5 +1,6 @@
 // FILE: next.config.ts
 import type { NextConfig } from "next";
+import { URL } from "url";
 
 type HostSpec = { protocol: "http" | "https"; hostname: string; port?: string };
 
@@ -45,7 +46,7 @@ const nextConfig: NextConfig = {
   // Output File Tracing
   outputFileTracingRoot: process.cwd(),
   outputFileTracingExcludes: {
-    "*": [
+    "/**": [
       // Avoid Windows user-profile junctions / protected locations.
       // Do NOT reference "Application Data" (junction). Use AppData instead.
       "**/AppData/**",
@@ -67,15 +68,18 @@ const nextConfig: NextConfig = {
   },
 
   // Ensure Prisma engines / generated clients are included in Vercel output tracing
+  // IMPORTANT: Keys must be route globs like "/api/hello" (not "app/**" or "pages/**")
   outputFileTracingIncludes: {
-    "app/**": [
+    "/api/**": [
       "./node_modules/.prisma/client/**",
       "./node_modules/@prisma/client/**",
+      "./node_modules/@prisma/engines/**",
       "./src/generated/prisma/**",
     ],
-    "pages/**": [
+    "/**": [
       "./node_modules/.prisma/client/**",
       "./node_modules/@prisma/client/**",
+      "./node_modules/@prisma/engines/**",
       "./src/generated/prisma/**",
     ],
   },

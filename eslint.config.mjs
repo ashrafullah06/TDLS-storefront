@@ -3,6 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FlatCompat } from "@eslint/eslintrc";
 
+import reactHooks from "eslint-plugin-react-hooks";
+import importPlugin from "eslint-plugin-import";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -33,6 +36,10 @@ export default [
 
   // Project-wide tuning: keep signal, avoid blocking deploy on style-only issues
   {
+    plugins: {
+      "react-hooks": reactHooks,
+      import: importPlugin,
+    },
     rules: {
       "@next/next/no-html-link-for-pages": "warn",
       "import/no-anonymous-default-export": "off",
@@ -42,6 +49,10 @@ export default [
   // JS/JSX: allow legacy require() patterns and make common “blockers” non-fatal
   {
     files: ["**/*.{js,jsx,mjs,cjs}"],
+    plugins: {
+      "react-hooks": reactHooks,
+      import: importPlugin,
+    },
     rules: {
       "@typescript-eslint/no-require-imports": "off",
       "@typescript-eslint/no-var-requires": "off",
@@ -73,6 +84,10 @@ export default [
   // TS/TSX: keep unused checks as warnings (still visible, not deployment-blocking)
   {
     files: ["**/*.{ts,tsx}"],
+    plugins: {
+      "react-hooks": reactHooks,
+      import: importPlugin,
+    },
     rules: {
       "@typescript-eslint/no-unused-vars": [
         "warn",

@@ -25,7 +25,7 @@
     "strapi:gen": "prisma generate --schema prisma/strapi/schema.prisma",
     "strapi:sync": "npm run strapi:validate && npm run strapi:pull && npm run strapi:format && npm run strapi:gen",
     "strapi:studio:ro": "dotenv -e .env -- prisma studio --schema=prisma/strapi/schema.prisma",
-    "prisma:generate:vercel": "npm run app:gen",
+    "prisma:generate:vercel": "npm run prisma:generate:all && node scripts/prisma/copy-engines.mjs",
     "prisma:generate:all": "npm run app:gen && npm run strapi:gen",
     "prisma:pull:strapi": "dotenv -e .env -- prisma db pull --schema=prisma/strapi/schema.prisma && dotenv -e .env -- prisma format --schema=prisma/strapi/schema.prisma && dotenv -e .env -- prisma generate --schema=prisma/strapi/schema.prisma",
     "prisma:gen:strapi": "dotenv -e .env -- prisma generate --schema=prisma/strapi/schema.prisma",
