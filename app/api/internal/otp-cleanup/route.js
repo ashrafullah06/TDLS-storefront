@@ -4,16 +4,29 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 
-const prisma = globalThis.__prisma || new PrismaClient();
-if (!globalThis.__prisma) globalThis.__prisma = prisma;
+let prisma = globalThis.__prisma__ || null;
+
+async function getPrisma() {
+  if (prisma) return prisma;
+
+  // Dynamic import prevents build-time Prisma initialization failure
+  const prismaMod = await import("@/lib/prisma");
+  const prismaClient = prismaMod?.default ?? prismaMod?.prisma ?? prismaMod;
+
+  prisma = globalThis.__prisma__ ?? prismaClient;
+  if (!globalThis.__prisma__) globalThis.__prisma__ = prisma;
+
+  return prisma;
+}
 
 // Protect this route with a simple bearer token
 const CRON_TOKEN = process.env.INTERNAL_CRON_TOKEN || "";
 
 export async function GET(req) {
   try {
+    const prisma = await getPrisma();
+
     const auth = req.headers.get("authorization") || "";
     const ok = CRON_TOKEN && auth === `Bearer ${CRON_TOKEN}`;
     if (!ok) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
