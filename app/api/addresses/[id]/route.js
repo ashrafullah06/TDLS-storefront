@@ -1,5 +1,8 @@
 // FILE: my-project/app/api/addresses/[id]/route.js
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+export const fetchCache = "force-no-store";
 
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
