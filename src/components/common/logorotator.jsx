@@ -180,7 +180,7 @@ const LogoRotator = React.memo(function LogoRotator() {
       sweep.style.animation = "none";
       // Force reflow to restart animation
       // eslint-disable-next-line no-unused-expressions
-      sweep.offsetHeight;
+      sweep.getBoundingClientRect();
       sweep.style.animation = `tdlcSheen ${SHEEN_MS}ms cubic-bezier(0.22,1,0.36,1) both`;
     };
 

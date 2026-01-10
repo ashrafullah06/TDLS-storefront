@@ -1,3 +1,4 @@
+// FILE: tsconfig.json
 {
   "compilerOptions": {
     "target": "ES2017",
@@ -15,7 +16,9 @@
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@/src/*": ["./src/*"],
+      "@/config/*": ["./config/*"]
     },
     "baseUrl": "."
   },

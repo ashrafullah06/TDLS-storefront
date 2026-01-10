@@ -803,7 +803,6 @@ export default function ClientUX({ product }) {
     };
   }, []);
 
-
   // Unified action feedback (success/fail) for wishlist/share/copy/rating/reviews.
   // Updated: execution notice now anchors near the CTA that was clicked (no new panels/drawers).
   const [toast, setToast] = useState({
@@ -897,7 +896,6 @@ export default function ClientUX({ product }) {
     [closeToast, computeToastPosFromEl]
   );
 
-
   const ensureCustomerAuthed = useCallback(
     (redirectPath = null) => {
       // If auth has not been checked yet, we still allow UI to render,
@@ -917,7 +915,6 @@ export default function ClientUX({ product }) {
     },
     [customerAuth.checked, customerAuth.userId, router, showToast]
   );
-
 
   useEffect(() => {
     return () => {
@@ -2557,8 +2554,6 @@ export default function ClientUX({ product }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  if (!product) return null;
-
   const gridStyle = isNarrow ? { ...S.grid, gridTemplateColumns: "1fr" } : S.grid;
 
   /* ---------------- details categories (only show real fields) ---------------- */
@@ -2739,6 +2734,8 @@ export default function ClientUX({ product }) {
     }
     return null;
   };
+
+  if (!product) return null;
 
   /* ---------------- render ---------------- */
   return (
@@ -3337,151 +3334,172 @@ export default function ClientUX({ product }) {
                   <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap: 10, marginTop: 12 }}>
                     <div>
                       <div style={S.sectionLabel}>Name (optional)</div>
-                      <input value={reviewName} onChange={(e) => setReviewName(e.target.value)} style={S.input} />
+                      <input
+                        value={reviewName}
+                        onChange={(e) => setReviewName(e.target.value)}
+                        style={S.input}
+                        placeholder="Your name"
+                        autoComplete="name"
+                      />
                     </div>
+
                     <div>
                       <div style={S.sectionLabel}>Email (optional)</div>
-                      <input value={reviewEmail} onChange={(e) => setReviewEmail(e.target.value)} style={S.input} />
+                      <input
+                        value={reviewEmail}
+                        onChange={(e) => setReviewEmail(e.target.value)}
+                        style={S.input}
+                        placeholder="your@email.com"
+                        autoComplete="email"
+                      />
                     </div>
                   </div>
 
                   <div style={{ marginTop: 10 }}>
-                    <div style={S.sectionLabel}>Your Review (optional)</div>
-                    <div style={{ ...S.subtleMeta, marginTop: 4 }}>You can submit only a star rating, or add a short review.</div>
-                    <textarea value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} style={S.textarea} />
+                    <div style={S.sectionLabel}>Review (optional)</div>
+                    <textarea
+                      value={reviewComment}
+                      onChange={(e) => setReviewComment(e.target.value)}
+                      style={S.textarea}
+                      placeholder="Write your review (optional)"
+                    />
                   </div>
 
-                  <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                  <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                     <button
                       type="button"
-                      onClick={(e) => submitReview(e.currentTarget)}
                       style={S.reviewSubmit}
+                      onClick={(e) => submitReview(e.currentTarget)}
                       disabled={reviewSubmitBusy}
                     >
-                      {reviewSubmitBusy ? "Submitting..." : (String(reviewComment || "").trim().length ? "Submit Review" : "Submit Rating")}
+                      {reviewSubmitBusy ? "Submitting..." : "Submit"}
                     </button>
                   </div>
 
                   <div style={S.reviewList}>
-                    {reviewsBusy ? (
-                      <div style={{ ...S.subtleMeta, alignSelf: "flex-start" }}>Loading…</div>
-                    ) : null}
+                    {(Array.isArray(reviews) ? reviews : []).map((r) => {
+                      const rid = r?.id ?? r?._id ?? r?.reviewId ?? "";
+                      const rname = r?.displayName || r?.name || "Customer";
+                      const rating = Number(r?.rating ?? r?.stars ?? r?.score ?? 0);
+                      const body = r?.body || r?.comment || r?.text || "";
+                      const createdAt = r?.createdAt || r?.created_at || r?.date || null;
+                      const helpful = typeof r?.helpfulCount === "number" ? r.helpfulCount : 0;
+                      const notHelpful = typeof r?.notHelpfulCount === "number" ? r.notHelpfulCount : 0;
 
-                    {!reviewsBusy && (!reviews || reviews.length === 0) ? (
-                      <div style={{ marginTop: 10 }}>
-                        <p style={S.para}>No reviews yet. Be the first to review this product.</p>
-                      </div>
-                    ) : null}
-
-                    {Array.isArray(reviews) &&
-                      reviews.map((r, i) => {
-                        const rating = Number(r?.rating ?? r?.stars ?? r?.score ?? 0);
-                        const comment = r?.body ?? r?.comment ?? r?.message ?? r?.text ?? "";
-                        const by = r?.displayName ?? r?.name ?? r?.customerName ?? r?.user?.name ?? "Customer";
-                        const created = r?.createdAt || r?.created_at || r?.date || r?.timestamp || null;
-
-                        const helpfulCount = Number(r?.helpfulCount ?? 0);
-                        const notHelpfulCount = Number(r?.notHelpfulCount ?? 0);
-                        const myVote = Number(r?.myVote ?? 0);
-
-                        return (
-                          <div key={r?.id || `${i}`} style={S.reviewItem}>
-                            <div style={S.reviewTop}>
-                              <div style={S.reviewName}>{String(by)}</div>
-                              <div style={S.reviewMeta}>{created ? String(created) : ""}</div>
+                      return (
+                        <div key={String(rid) || `${rname}-${createdAt || ""}-${Math.random()}`} style={S.reviewItem}>
+                          <div style={S.reviewTop}>
+                            <div>
+                              <div style={S.reviewName}>{String(rname || "Customer")}</div>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                                {[1, 2, 3, 4, 5].map((n) => (
+                                  <Star
+                                    key={n}
+                                    filled={rating >= n}
+                                    onClick={() => {}}
+                                    disabled
+                                    title={`${rating || 0} / 5`}
+                                  />
+                                ))}
+                              </div>
                             </div>
-
-                            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                              {[1, 2, 3, 4, 5].map((n) => (
-                                <Star key={n} filled={rating >= n} onClick={() => {}} title="" size={16} disabled />
-                              ))}
+                            <div style={S.reviewMeta}>
+                              {createdAt ? String(createdAt) : ""}
                             </div>
-
-                            {comment ? (
-                              <div style={{ marginTop: 8 }}>
-                                <p style={S.para}>{String(comment)}</p>
-                              </div>
-                            ) : null}
-
-                            {r?.id ? (
-                              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                                <button
-                                  type="button"
-                                  onClick={() => voteReview(r.id, 1)}
-                                  style={S.smallBtn}
-                                  title="Helpful"
-                                >
-                                  Helpful {helpfulCount ? `(${helpfulCount})` : ""}
-                                  {myVote === 1 ? " • Selected" : ""}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => voteReview(r.id, -1)}
-                                  style={S.smallBtn}
-                                  title="Not Helpful"
-                                >
-                                  Not Helpful {notHelpfulCount ? `(${notHelpfulCount})` : ""}
-                                  {myVote === -1 ? " • Selected" : ""}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setReportOpenId(String(r.id));
-                                    setReportReason("");
-                                    setValidationError(null);
-                                  }}
-                                  style={S.smallBtn}
-                                  title="Report review"
-                                >
-                                  Report
-                                </button>
-                              </div>
-                            ) : null}
-
-                            {reportOpenId && String(reportOpenId) === String(r?.id) ? (
-                              <div style={{ marginTop: 10, padding: 10, borderRadius: 14, border: "1px solid rgba(15,33,71,.14)", background: "#fff" }}>
-                                <div style={S.sectionLabel}>Report Reason</div>
-                                <textarea value={reportReason} onChange={(e) => setReportReason(e.target.value)} style={S.textarea} />
-                                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
-                                  <button
-                                    type="button"
-                                    style={S.smallBtn}
-                                    onClick={() => {
-                                      setReportOpenId(null);
-                                      setReportReason("");
-                                    }}
-                                    disabled={reportBusy}
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button type="button" style={S.reviewSubmit} onClick={reportReview} disabled={reportBusy}>
-                                    {reportBusy ? "Submitting..." : "Submit Report"}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : null}
                           </div>
-                        );
-                      })}
 
-                    {!reviewsBusy && reviewHasMore ? (
-                      <div style={{ marginTop: 12, display: "flex", justifyContent: "center" }}>
-                        <button type="button" onClick={loadMoreReviews} style={S.reviewSubmit}>
-                          Load More Reviews
-                        </button>
+                          {body ? (
+                            <div style={{ marginTop: 10 }}>
+                              <p style={S.para}>{String(body)}</p>
+                            </div>
+                          ) : null}
+
+                          <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              style={S.smallBtn}
+                              onClick={() => voteReview(rid, 1)}
+                            >
+                              Helpful ({helpful})
+                            </button>
+                            <button
+                              type="button"
+                              style={S.smallBtn}
+                              onClick={() => voteReview(rid, -1)}
+                            >
+                              Not Helpful ({notHelpful})
+                            </button>
+                            <button
+                              type="button"
+                              style={S.smallBtn}
+                              onClick={() => {
+                                setReportOpenId(String(rid));
+                                setReportReason("");
+                                setValidationError(null);
+                              }}
+                            >
+                              Report
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {reviewsBusy ? (
+                      <div style={{ ...S.validationBox, marginTop: 10, borderColor: "rgba(15,33,71,.16)", background: "#fff", color: "#0f2147" }}>
+                        <div style={S.validationTitle}>Loading</div>
+                        <div>Loading reviews...</div>
                       </div>
+                    ) : null}
+
+                    {!reviewsBusy && (!Array.isArray(reviews) || reviews.length === 0) ? (
+                      <div style={{ ...S.validationBox, marginTop: 10, borderColor: "rgba(15,33,71,.16)", background: "#fff", color: "#0f2147" }}>
+                        <div style={S.validationTitle}>Reviews</div>
+                        <div>No reviews yet.</div>
+                      </div>
+                    ) : null}
+
+                    {reviewHasMore ? (
+                      <button type="button" onClick={loadMoreReviews} style={S.smallBtn} disabled={reviewsBusy}>
+                        {reviewsBusy ? "Loading..." : "Load more"}
+                      </button>
                     ) : null}
                   </div>
-                </div>
 
-                <div style={{ height: 10 }} />
+                  {reportOpenId ? (
+                    <div style={{ marginTop: 12, padding: 12, borderRadius: 14, border: "1px solid rgba(15,33,71,.14)", background: "#fff" }}>
+                      <div style={S.sectionLabel}>Report review</div>
+                      <textarea
+                        value={reportReason}
+                        onChange={(e) => setReportReason(e.target.value)}
+                        style={S.textarea}
+                        placeholder="Write a short reason (min 3 characters)"
+                      />
+                      <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <button type="button" style={S.reviewSubmit} onClick={reportReview} disabled={reportBusy}>
+                          {reportBusy ? "Submitting..." : "Submit report"}
+                        </button>
+                        <button
+                          type="button"
+                          style={S.smallBtn}
+                          onClick={() => {
+                            setReportOpenId(null);
+                            setReportReason("");
+                          }}
+                          disabled={reportBusy}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
       <BottomFloatingBar />
     </>
   );

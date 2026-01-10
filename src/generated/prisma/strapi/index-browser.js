@@ -20,12 +20,12 @@ exports.Prisma = Prisma
 exports.$Enums = {}
 
 /**
- * Prisma Client JS version: 6.13.0
- * Query Engine version: 361e86d0ea4987e9f53a565309b3eed797a6bcbd
+ * Prisma Client JS version: 6.14.0
+ * Query Engine version: 717184b7b35ea05dfa71a3236b7af656013e1e49
  */
 Prisma.prismaVersion = {
-  client: "6.13.0",
-  engine: "361e86d0ea4987e9f53a565309b3eed797a6bcbd"
+  client: "6.14.0",
+  engine: "717184b7b35ea05dfa71a3236b7af656013e1e49"
 }
 
 Prisma.PrismaClientKnownRequestError = () => {
@@ -120,9 +120,1248 @@ exports.Prisma.TransactionIsolationLevel = makeStrictEnum({
   Serializable: 'Serializable'
 });
 
+exports.Prisma.AboutsScalarFieldEnum = {
+  id: 'id',
+  title: 'title',
+  slug: 'slug',
+  content: 'content',
+  seo_description: 'seo_description',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Admin_permissionsScalarFieldEnum = {
+  id: 'id',
+  action: 'action',
+  action_parameters: 'action_parameters',
+  subject: 'subject',
+  properties: 'properties',
+  conditions: 'conditions',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Admin_permissions_role_linksScalarFieldEnum = {
+  id: 'id',
+  permission_id: 'permission_id',
+  role_id: 'role_id',
+  permission_order: 'permission_order'
+};
+
+exports.Prisma.Admin_rolesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  code: 'code',
+  description: 'description',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Admin_usersScalarFieldEnum = {
+  id: 'id',
+  firstname: 'firstname',
+  lastname: 'lastname',
+  username: 'username',
+  email: 'email',
+  password: 'password',
+  reset_password_token: 'reset_password_token',
+  registration_token: 'registration_token',
+  is_active: 'is_active',
+  blocked: 'blocked',
+  prefered_language: 'prefered_language',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Admin_users_roles_linksScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  role_id: 'role_id',
+  role_order: 'role_order',
+  user_order: 'user_order'
+};
+
+exports.Prisma.Age_groupsScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  priority: 'priority',
+  unit: 'unit',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Age_groups_audience_categories_linksScalarFieldEnum = {
+  id: 'id',
+  age_group_id: 'age_group_id',
+  audience_category_id: 'audience_category_id',
+  audience_category_order: 'audience_category_order',
+  age_group_order: 'age_group_order'
+};
+
+exports.Prisma.Archive_recordsScalarFieldEnum = {
+  id: 'id',
+  archive_reason: 'archive_reason',
+  archived_at: 'archived_at',
+  is_archived: 'is_archived',
+  archive_note: 'archive_note',
+  archive_uid: 'archive_uid',
+  restore_possible: 'restore_possible',
+  restored_at: 'restored_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Archive_records_affected_order_linksScalarFieldEnum = {
+  id: 'id',
+  archive_record_id: 'archive_record_id',
+  order_id: 'order_id'
+};
+
+exports.Prisma.Archive_records_affected_product_linksScalarFieldEnum = {
+  id: 'id',
+  archive_record_id: 'archive_record_id',
+  product_id: 'product_id'
+};
+
+exports.Prisma.Archive_records_archive_by_linksScalarFieldEnum = {
+  id: 'id',
+  archive_record_id: 'archive_record_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Archive_records_restored_by_linksScalarFieldEnum = {
+  id: 'id',
+  archive_record_id: 'archive_record_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Audience_categoriesScalarFieldEnum = {
+  id: 'id',
+  description: 'description',
+  slug: 'slug',
+  priority: 'priority',
+  name: 'name',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Brand_tiersScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  priority: 'priority',
+  is_active: 'is_active',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Brand_tiers_products_linksScalarFieldEnum = {
+  id: 'id',
+  brand_tier_id: 'brand_tier_id',
+  product_id: 'product_id',
+  product_order: 'product_order',
+  brand_tier_order: 'brand_tier_order'
+};
+
+exports.Prisma.CategoriesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  short_description: 'short_description',
+  priority: 'priority',
+  is_active: 'is_active',
+  is_featured: 'is_featured',
+  category_code: 'category_code',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Components_contact_social_linksScalarFieldEnum = {
+  id: 'id',
+  platform: 'platform',
+  links: 'links'
+};
+
+exports.Prisma.Components_order_components_address_snapshotsScalarFieldEnum = {
+  id: 'id',
+  full_name: 'full_name',
+  phone_number: 'phone_number',
+  address_line_1: 'address_line_1',
+  address_line_2_union: 'address_line_2_union',
+  police_station_town_upazila: 'police_station_town_upazila',
+  postal_code: 'postal_code',
+  district: 'district',
+  division: 'division',
+  country: 'country',
+  note: 'note'
+};
+
+exports.Prisma.Components_order_components_product_itemsScalarFieldEnum = {
+  id: 'id',
+  product_name_snapshot: 'product_name_snapshot',
+  product_price_snapshot: 'product_price_snapshot',
+  selected_color: 'selected_color',
+  selected_size: 'selected_size',
+  quantity: 'quantity',
+  subtotal_price: 'subtotal_price'
+};
+
+exports.Prisma.Components_order_components_product_items_product_ref_linksScalarFieldEnum = {
+  id: 'id',
+  product_items_id: 'product_items_id',
+  product_id: 'product_id'
+};
+
+exports.Prisma.Components_product_details_product_identitiesScalarFieldEnum = {
+  id: 'id',
+  factory_batch_code: 'factory_batch_code',
+  label_serial_code: 'label_serial_code',
+  tag_serial_code: 'tag_serial_code',
+  internal_notes: 'internal_notes',
+  verified_at: 'verified_at',
+  verification_status: 'verification_status'
+};
+
+exports.Prisma.Components_product_details_product_identities_arch_ref_linksScalarFieldEnum = {
+  id: 'id',
+  product_identity_id: 'product_identity_id',
+  archive_record_id: 'archive_record_id'
+};
+
+exports.Prisma.Components_product_details_product_identities_creator_linksScalarFieldEnum = {
+  id: 'id',
+  product_identity_id: 'product_identity_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Components_product_details_product_identities_verifier_linksScalarFieldEnum = {
+  id: 'id',
+  product_identity_id: 'product_identity_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Components_sections_hero_slides_1sScalarFieldEnum = {
+  id: 'id',
+  title: 'title',
+  subtitle: 'subtitle',
+  cta_text: 'cta_text',
+  cta_link: 'cta_link',
+  overlay_color: 'overlay_color',
+  overlay_opacity: 'overlay_opacity'
+};
+
+exports.Prisma.Components_variant_product_variantsScalarFieldEnum = {
+  id: 'id',
+  color_name: 'color_name',
+  color_code: 'color_code'
+};
+
+exports.Prisma.Components_variant_product_variants_componentsScalarFieldEnum = {
+  id: 'id',
+  entity_id: 'entity_id',
+  component_id: 'component_id',
+  component_type: 'component_type',
+  field: 'field',
+  order: 'order'
+};
+
+exports.Prisma.Components_variant_size_stocksScalarFieldEnum = {
+  id: 'id',
+  size_name: 'size_name',
+  stock_quantity: 'stock_quantity',
+  price_override: 'price_override',
+  generated_sku: 'generated_sku',
+  inventory_count: 'inventory_count',
+  reorder_level: 'reorder_level',
+  price: 'price',
+  compare_at_price: 'compare_at_price',
+  is_active: 'is_active',
+  restock_date: 'restock_date',
+  sold_count: 'sold_count',
+  backorder_allowed: 'backorder_allowed',
+  warehouse_location: 'warehouse_location',
+  barcode: 'barcode',
+  inventory_status: 'inventory_status'
+};
+
+exports.Prisma.ContactsScalarFieldEnum = {
+  id: 'id',
+  title: 'title',
+  slug: 'slug',
+  email: 'email',
+  phone: 'phone',
+  address: 'address',
+  map_embed_code: 'map_embed_code',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Contacts_componentsScalarFieldEnum = {
+  id: 'id',
+  entity_id: 'entity_id',
+  component_id: 'component_id',
+  component_type: 'component_type',
+  field: 'field',
+  order: 'order'
+};
+
+exports.Prisma.Events_products_collectionsScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  type: 'type',
+  start_datetime: 'start_datetime',
+  end_datetime: 'end_datetime',
+  priority: 'priority',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Events_products_collections_audience_categories_linksScalarFieldEnum = {
+  id: 'id',
+  events_products_collection_id: 'events_products_collection_id',
+  audience_category_id: 'audience_category_id',
+  audience_category_order: 'audience_category_order',
+  events_products_collection_order: 'events_products_collection_order'
+};
+
+exports.Prisma.Events_products_collections_products_linksScalarFieldEnum = {
+  id: 'id',
+  events_products_collection_id: 'events_products_collection_id',
+  product_id: 'product_id',
+  product_order: 'product_order',
+  events_products_collection_order: 'events_products_collection_order'
+};
+
+exports.Prisma.FilesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  alternative_text: 'alternative_text',
+  caption: 'caption',
+  width: 'width',
+  height: 'height',
+  formats: 'formats',
+  hash: 'hash',
+  ext: 'ext',
+  mime: 'mime',
+  size: 'size',
+  url: 'url',
+  preview_url: 'preview_url',
+  provider: 'provider',
+  provider_metadata: 'provider_metadata',
+  folder_path: 'folder_path',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Files_folder_linksScalarFieldEnum = {
+  id: 'id',
+  file_id: 'file_id',
+  folder_id: 'folder_id',
+  file_order: 'file_order'
+};
+
+exports.Prisma.Files_related_morphsScalarFieldEnum = {
+  id: 'id',
+  file_id: 'file_id',
+  related_id: 'related_id',
+  related_type: 'related_type',
+  field: 'field',
+  order: 'order'
+};
+
+exports.Prisma.Gender_groupsScalarFieldEnum = {
+  id: 'id',
+  gender_group: 'gender_group',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  priority: 'priority',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Gender_groups_age_groups_linksScalarFieldEnum = {
+  id: 'id',
+  gender_group_id: 'gender_group_id',
+  age_group_id: 'age_group_id',
+  age_group_order: 'age_group_order',
+  gender_group_order: 'gender_group_order'
+};
+
+exports.Prisma.Global_settingsScalarFieldEnum = {
+  id: 'id',
+  default_warehouse_location: 'default_warehouse_location',
+  sku_format: 'sku_format',
+  category_code_rules: 'category_code_rules',
+  autofill_enabled: 'autofill_enabled',
+  default_reorder_level: 'default_reorder_level',
+  default_backorder_allowed: 'default_backorder_allowed',
+  shipping_policy: 'shipping_policy',
+  return_and_exchange_policy: 'return_and_exchange_policy',
+  refund_policy: 'refund_policy',
+  redeem_policy: 'redeem_policy',
+  cancellation_policy: 'cancellation_policy',
+  order_policy: 'order_policy',
+  privacy_policy: 'privacy_policy',
+  terms_and_conditions: 'terms_and_conditions',
+  default_currency: 'default_currency',
+  contact_email: 'contact_email',
+  customer_support_phone: 'customer_support_phone',
+  whatsapp_support_number: 'whatsapp_support_number',
+  live_chat_enabled: 'live_chat_enabled',
+  payment_policy: 'payment_policy',
+  faq_url: 'faq_url',
+  support_hours: 'support_hours',
+  about_us: 'about_us',
+  career_info: 'career_info',
+  facebook_url: 'facebook_url',
+  instagram_url: 'instagram_url',
+  youtube_url: 'youtube_url',
+  maintenance_mode: 'maintenance_mode',
+  site_launch_date: 'site_launch_date',
+  sitemap_url: 'sitemap_url',
+  loyalty_program_info: 'loyalty_program_info',
+  discount_policy: 'discount_policy',
+  gift_card_policy: 'gift_card_policy',
+  voucher_policy: 'voucher_policy',
+  affiliate_program_info: 'affiliate_program_info',
+  supplier_policy: 'supplier_policy',
+  brand_story: 'brand_story',
+  default_tax_rate: 'default_tax_rate',
+  digital_wallet_policy: 'digital_wallet_policy',
+  newsletter_signup_url: 'newsletter_signup_url',
+  twitter_url: 'twitter_url',
+  data_protection_policy: 'data_protection_policy',
+  legal_disclaimer: 'legal_disclaimer',
+  business_registration_number: 'business_registration_number',
+  operating_hours: 'operating_hours',
+  default_meta_title: 'default_meta_title',
+  default_meta_description: 'default_meta_description',
+  google_analytics_id: 'google_analytics_id',
+  mobile_app_download_url: 'mobile_app_download_url',
+  api_status_page_url: 'api_status_page_url',
+  store_location_google_map: 'store_location_google_map',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id',
+  prices_are_tax_inclusive: 'prices_are_tax_inclusive',
+  unsold_default: 'unsold_default',
+  margin_defaul: 'margin_defaul',
+  allocation_method: 'allocation_method',
+  rounding_rule: 'rounding_rule',
+  finance_banner_message: 'finance_banner_message'
+};
+
+exports.Prisma.HomepagesScalarFieldEnum = {
+  id: 'id',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Homepages_componentsScalarFieldEnum = {
+  id: 'id',
+  entity_id: 'entity_id',
+  component_id: 'component_id',
+  component_type: 'component_type',
+  field: 'field',
+  order: 'order'
+};
+
+exports.Prisma.LoyaltypointhistoriesScalarFieldEnum = {
+  id: 'id',
+  points: 'points',
+  activity: 'activity',
+  date: 'date',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Loyaltypointhistories_users_permissions_user_linksScalarFieldEnum = {
+  id: 'id',
+  loyaltypointhistory_id: 'loyaltypointhistory_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.OrdersScalarFieldEnum = {
+  id: 'id',
+  order_id: 'order_id',
+  status: 'status',
+  total_amount: 'total_amount',
+  payment_method: 'payment_method',
+  payment_status: 'payment_status',
+  transaction_id: 'transaction_id',
+  placed_at: 'placed_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Orders_componentsScalarFieldEnum = {
+  id: 'id',
+  entity_id: 'entity_id',
+  component_id: 'component_id',
+  component_type: 'component_type',
+  field: 'field',
+  order: 'order'
+};
+
+exports.Prisma.Orders_user_linksScalarFieldEnum = {
+  id: 'id',
+  order_id: 'order_id',
+  user_id: 'user_id',
+  order_order: 'order_order'
+};
+
+exports.Prisma.PoliciesScalarFieldEnum = {
+  id: 'id',
+  title: 'title',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  last_updated_by_personnel: 'last_updated_by_personnel',
+  is_active: 'is_active',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.ProductsScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  short_description: 'short_description',
+  available: 'available',
+  is_featured: 'is_featured',
+  cost_price: 'cost_price',
+  supplier: 'supplier',
+  audit_log: 'audit_log',
+  internal_notes: 'internal_notes',
+  is_archived: 'is_archived',
+  meta_description: 'meta_description',
+  preorder: 'preorder',
+  preorder_eta: 'preorder_eta',
+  product_code: 'product_code',
+  care_instructions: 'care_instructions',
+  fit_type: 'fit_type',
+  model_info: 'model_info',
+  country_of_origin: 'country_of_origin',
+  size_guide_url: 'size_guide_url',
+  estimated_delivery: 'estimated_delivery',
+  preorder_note: 'preorder_note',
+  review_count: 'review_count',
+  supplier_contact: 'supplier_contact',
+  product_history: 'product_history',
+  disable_frontend: 'disable_frontend',
+  seo_keywords: 'seo_keywords',
+  base_sku: 'base_sku',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Products_age_groups_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  age_group_id: 'age_group_id',
+  age_group_order: 'age_group_order',
+  product_order: 'product_order'
+};
+
+exports.Prisma.Products_audience_categories_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  audience_category_id: 'audience_category_id',
+  audience_category_order: 'audience_category_order',
+  product_order: 'product_order'
+};
+
+exports.Prisma.Products_categories_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  category_id: 'category_id',
+  category_order: 'category_order',
+  product_order: 'product_order'
+};
+
+exports.Prisma.Products_componentsScalarFieldEnum = {
+  id: 'id',
+  entity_id: 'entity_id',
+  component_id: 'component_id',
+  component_type: 'component_type',
+  field: 'field',
+  order: 'order'
+};
+
+exports.Prisma.Products_gender_groups_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  gender_group_id: 'gender_group_id',
+  gender_group_order: 'gender_group_order',
+  product_order: 'product_order'
+};
+
+exports.Prisma.Products_last_updated_by_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Products_listed_by_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Products_tags_linksScalarFieldEnum = {
+  id: 'id',
+  product_id: 'product_id',
+  tag_id: 'tag_id',
+  tag_order: 'tag_order',
+  product_order: 'product_order'
+};
+
+exports.Prisma.ReferralsScalarFieldEnum = {
+  id: 'id',
+  is_redeemed: 'is_redeemed',
+  add_activated_at: 'add_activated_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Referrals_referrer_linksScalarFieldEnum = {
+  id: 'id',
+  referral_id: 'referral_id',
+  user_id: 'user_id',
+  referral_order: 'referral_order'
+};
+
+exports.Prisma.Referrals_reffered_linksScalarFieldEnum = {
+  id: 'id',
+  referral_id: 'referral_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.ReviewsScalarFieldEnum = {
+  id: 'id',
+  comment: 'comment',
+  author_name: 'author_name',
+  verified: 'verified',
+  helpful_count: 'helpful_count',
+  status: 'status',
+  is_featured: 'is_featured',
+  locale: 'locale',
+  response: 'response',
+  content: 'content',
+  rating: 'rating',
+  reviewed_at: 'reviewed_at',
+  approved: 'approved',
+  reply: 'reply',
+  likes: 'likes',
+  flags: 'flags',
+  is_archived: 'is_archived',
+  archive_reason: 'archive_reason',
+  archive_date: 'archive_date',
+  audit_log: 'audit_log',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Reviews_approved_by_linksScalarFieldEnum = {
+  id: 'id',
+  review_id: 'review_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Reviews_archived_by_linksScalarFieldEnum = {
+  id: 'id',
+  review_id: 'review_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Reviews_product_linksScalarFieldEnum = {
+  id: 'id',
+  review_id: 'review_id',
+  product_id: 'product_id',
+  review_order: 'review_order'
+};
+
+exports.Prisma.Reviews_user_linksScalarFieldEnum = {
+  id: 'id',
+  review_id: 'review_id',
+  user_id: 'user_id',
+  review_order: 'review_order'
+};
+
+exports.Prisma.Strapi_api_token_permissionsScalarFieldEnum = {
+  id: 'id',
+  action: 'action',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_api_token_permissions_token_linksScalarFieldEnum = {
+  id: 'id',
+  api_token_permission_id: 'api_token_permission_id',
+  api_token_id: 'api_token_id',
+  api_token_permission_order: 'api_token_permission_order'
+};
+
+exports.Prisma.Strapi_api_tokensScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  description: 'description',
+  type: 'type',
+  access_key: 'access_key',
+  last_used_at: 'last_used_at',
+  expires_at: 'expires_at',
+  lifespan: 'lifespan',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_audit_logsScalarFieldEnum = {
+  id: 'id',
+  action: 'action',
+  date: 'date',
+  payload: 'payload',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_audit_logs_user_linksScalarFieldEnum = {
+  id: 'id',
+  audit_log_id: 'audit_log_id',
+  user_id: 'user_id'
+};
+
+exports.Prisma.Strapi_core_store_settingsScalarFieldEnum = {
+  id: 'id',
+  key: 'key',
+  value: 'value',
+  type: 'type',
+  environment: 'environment',
+  tag: 'tag'
+};
+
+exports.Prisma.Strapi_database_schemaScalarFieldEnum = {
+  id: 'id',
+  schema: 'schema',
+  time: 'time',
+  hash: 'hash'
+};
+
+exports.Prisma.Strapi_migrationsScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  time: 'time'
+};
+
+exports.Prisma.Strapi_release_actionsScalarFieldEnum = {
+  id: 'id',
+  type: 'type',
+  target_id: 'target_id',
+  target_type: 'target_type',
+  content_type: 'content_type',
+  locale: 'locale',
+  is_entry_valid: 'is_entry_valid',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_release_actions_release_linksScalarFieldEnum = {
+  id: 'id',
+  release_action_id: 'release_action_id',
+  release_id: 'release_id',
+  release_action_order: 'release_action_order'
+};
+
+exports.Prisma.Strapi_releasesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  released_at: 'released_at',
+  scheduled_at: 'scheduled_at',
+  timezone: 'timezone',
+  status: 'status',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_transfer_token_permissionsScalarFieldEnum = {
+  id: 'id',
+  action: 'action',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_transfer_token_permissions_token_linksScalarFieldEnum = {
+  id: 'id',
+  transfer_token_permission_id: 'transfer_token_permission_id',
+  transfer_token_id: 'transfer_token_id',
+  transfer_token_permission_order: 'transfer_token_permission_order'
+};
+
+exports.Prisma.Strapi_transfer_tokensScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  description: 'description',
+  access_key: 'access_key',
+  last_used_at: 'last_used_at',
+  expires_at: 'expires_at',
+  lifespan: 'lifespan',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_webhooksScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  url: 'url',
+  headers: 'headers',
+  events: 'events',
+  enabled: 'enabled'
+};
+
+exports.Prisma.Strapi_workflowsScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  content_types: 'content_types',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_workflows_stagesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  color: 'color',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Strapi_workflows_stages_permissions_linksScalarFieldEnum = {
+  id: 'id',
+  workflow_stage_id: 'workflow_stage_id',
+  permission_id: 'permission_id',
+  permission_order: 'permission_order'
+};
+
+exports.Prisma.Strapi_workflows_stages_workflow_linksScalarFieldEnum = {
+  id: 'id',
+  workflow_stage_id: 'workflow_stage_id',
+  workflow_id: 'workflow_id',
+  workflow_stage_order: 'workflow_stage_order'
+};
+
+exports.Prisma.TagsScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  description: 'description',
+  tag_type: 'tag_type',
+  is_featured: 'is_featured',
+  priority: 'priority',
+  color_code: 'color_code',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Tags_categories_linksScalarFieldEnum = {
+  id: 'id',
+  tag_id: 'tag_id',
+  category_id: 'category_id',
+  category_order: 'category_order',
+  tag_order: 'tag_order'
+};
+
+exports.Prisma.Up_permissionsScalarFieldEnum = {
+  id: 'id',
+  action: 'action',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Up_permissions_role_linksScalarFieldEnum = {
+  id: 'id',
+  permission_id: 'permission_id',
+  role_id: 'role_id',
+  permission_order: 'permission_order'
+};
+
+exports.Prisma.Up_rolesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  description: 'description',
+  type: 'type',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Up_usersScalarFieldEnum = {
+  id: 'id',
+  username: 'username',
+  email: 'email',
+  provider: 'provider',
+  password: 'password',
+  reset_password_token: 'reset_password_token',
+  confirmation_token: 'confirmation_token',
+  confirmed: 'confirmed',
+  blocked: 'blocked',
+  phone_number: 'phone_number',
+  date_of_birth: 'date_of_birth',
+  gender: 'gender',
+  last_login: 'last_login',
+  birth_day: 'birth_day',
+  marriage_day: 'marriage_day',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Up_users_role_linksScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  role_id: 'role_id',
+  user_order: 'user_order'
+};
+
+exports.Prisma.Upload_foldersScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  path_id: 'path_id',
+  path: 'path',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Upload_folders_parent_linksScalarFieldEnum = {
+  id: 'id',
+  folder_id: 'folder_id',
+  inv_folder_id: 'inv_folder_id',
+  folder_order: 'folder_order'
+};
+
+exports.Prisma.Gateway_fee_schedulesScalarFieldEnum = {
+  id: 'id',
+  provider: 'provider',
+  pct: 'pct',
+  fixed: 'fixed',
+  min_fee: 'min_fee',
+  cap_fee: 'cap_fee',
+  effective_from: 'effective_from',
+  effective_to: 'effective_to',
+  notes: 'notes',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.OverheadsScalarFieldEnum = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  bucket: 'bucket',
+  annual_amount: 'annual_amount',
+  depreciation_years: 'depreciation_years',
+  effective_from: 'effective_from',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Promobar_configsScalarFieldEnum = {
+  id: 'id',
+  enabled: 'enabled',
+  background_color: 'background_color',
+  text_color: 'text_color',
+  closable: 'closable',
+  speed_px_per_sec: 'speed_px_per_sec',
+  gap_ms: 'gap_ms',
+  dwell_ms: 'dwell_ms',
+  animation: 'animation',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id',
+  starts_at: 'starts_at',
+  ends_at: 'ends_at'
+};
+
+exports.Prisma.Promobar_messagesScalarFieldEnum = {
+  id: 'id',
+  enabled: 'enabled',
+  order: 'order',
+  message: 'message',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Sub_categoriesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  priority: 'priority',
+  type: 'type',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Sub_categories_products_linksScalarFieldEnum = {
+  id: 'id',
+  sub_category_id: 'sub_category_id',
+  product_id: 'product_id',
+  product_order: 'product_order',
+  sub_category_order: 'sub_category_order'
+};
+
+exports.Prisma.Super_categoriesScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  slug: 'slug',
+  priority: 'priority',
+  type: 'type',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  published_at: 'published_at',
+  created_by_id: 'created_by_id',
+  updated_by_id: 'updated_by_id'
+};
+
+exports.Prisma.Super_categories_products_linksScalarFieldEnum = {
+  id: 'id',
+  super_category_id: 'super_category_id',
+  product_id: 'product_id',
+  product_order: 'product_order',
+  super_category_order: 'super_category_order'
+};
+
+exports.Prisma.SortOrder = {
+  asc: 'asc',
+  desc: 'desc'
+};
+
+exports.Prisma.NullableJsonNullValueInput = {
+  DbNull: Prisma.DbNull,
+  JsonNull: Prisma.JsonNull
+};
+
+exports.Prisma.QueryMode = {
+  default: 'default',
+  insensitive: 'insensitive'
+};
+
+exports.Prisma.JsonNullValueFilter = {
+  DbNull: Prisma.DbNull,
+  JsonNull: Prisma.JsonNull,
+  AnyNull: Prisma.AnyNull
+};
+
+exports.Prisma.NullsOrder = {
+  first: 'first',
+  last: 'last'
+};
+
 
 exports.Prisma.ModelName = {
-
+  abouts: 'abouts',
+  admin_permissions: 'admin_permissions',
+  admin_permissions_role_links: 'admin_permissions_role_links',
+  admin_roles: 'admin_roles',
+  admin_users: 'admin_users',
+  admin_users_roles_links: 'admin_users_roles_links',
+  age_groups: 'age_groups',
+  age_groups_audience_categories_links: 'age_groups_audience_categories_links',
+  archive_records: 'archive_records',
+  archive_records_affected_order_links: 'archive_records_affected_order_links',
+  archive_records_affected_product_links: 'archive_records_affected_product_links',
+  archive_records_archive_by_links: 'archive_records_archive_by_links',
+  archive_records_restored_by_links: 'archive_records_restored_by_links',
+  audience_categories: 'audience_categories',
+  brand_tiers: 'brand_tiers',
+  brand_tiers_products_links: 'brand_tiers_products_links',
+  categories: 'categories',
+  components_contact_social_links: 'components_contact_social_links',
+  components_order_components_address_snapshots: 'components_order_components_address_snapshots',
+  components_order_components_product_items: 'components_order_components_product_items',
+  components_order_components_product_items_product_ref_links: 'components_order_components_product_items_product_ref_links',
+  components_product_details_product_identities: 'components_product_details_product_identities',
+  components_product_details_product_identities_arch_ref_links: 'components_product_details_product_identities_arch_ref_links',
+  components_product_details_product_identities_creator_links: 'components_product_details_product_identities_creator_links',
+  components_product_details_product_identities_verifier_links: 'components_product_details_product_identities_verifier_links',
+  components_sections_hero_slides_1s: 'components_sections_hero_slides_1s',
+  components_variant_product_variants: 'components_variant_product_variants',
+  components_variant_product_variants_components: 'components_variant_product_variants_components',
+  components_variant_size_stocks: 'components_variant_size_stocks',
+  contacts: 'contacts',
+  contacts_components: 'contacts_components',
+  events_products_collections: 'events_products_collections',
+  events_products_collections_audience_categories_links: 'events_products_collections_audience_categories_links',
+  events_products_collections_products_links: 'events_products_collections_products_links',
+  files: 'files',
+  files_folder_links: 'files_folder_links',
+  files_related_morphs: 'files_related_morphs',
+  gender_groups: 'gender_groups',
+  gender_groups_age_groups_links: 'gender_groups_age_groups_links',
+  global_settings: 'global_settings',
+  homepages: 'homepages',
+  homepages_components: 'homepages_components',
+  loyaltypointhistories: 'loyaltypointhistories',
+  loyaltypointhistories_users_permissions_user_links: 'loyaltypointhistories_users_permissions_user_links',
+  orders: 'orders',
+  orders_components: 'orders_components',
+  orders_user_links: 'orders_user_links',
+  policies: 'policies',
+  products: 'products',
+  products_age_groups_links: 'products_age_groups_links',
+  products_audience_categories_links: 'products_audience_categories_links',
+  products_categories_links: 'products_categories_links',
+  products_components: 'products_components',
+  products_gender_groups_links: 'products_gender_groups_links',
+  products_last_updated_by_links: 'products_last_updated_by_links',
+  products_listed_by_links: 'products_listed_by_links',
+  products_tags_links: 'products_tags_links',
+  referrals: 'referrals',
+  referrals_referrer_links: 'referrals_referrer_links',
+  referrals_reffered_links: 'referrals_reffered_links',
+  reviews: 'reviews',
+  reviews_approved_by_links: 'reviews_approved_by_links',
+  reviews_archived_by_links: 'reviews_archived_by_links',
+  reviews_product_links: 'reviews_product_links',
+  reviews_user_links: 'reviews_user_links',
+  strapi_api_token_permissions: 'strapi_api_token_permissions',
+  strapi_api_token_permissions_token_links: 'strapi_api_token_permissions_token_links',
+  strapi_api_tokens: 'strapi_api_tokens',
+  strapi_audit_logs: 'strapi_audit_logs',
+  strapi_audit_logs_user_links: 'strapi_audit_logs_user_links',
+  strapi_core_store_settings: 'strapi_core_store_settings',
+  strapi_database_schema: 'strapi_database_schema',
+  strapi_migrations: 'strapi_migrations',
+  strapi_release_actions: 'strapi_release_actions',
+  strapi_release_actions_release_links: 'strapi_release_actions_release_links',
+  strapi_releases: 'strapi_releases',
+  strapi_transfer_token_permissions: 'strapi_transfer_token_permissions',
+  strapi_transfer_token_permissions_token_links: 'strapi_transfer_token_permissions_token_links',
+  strapi_transfer_tokens: 'strapi_transfer_tokens',
+  strapi_webhooks: 'strapi_webhooks',
+  strapi_workflows: 'strapi_workflows',
+  strapi_workflows_stages: 'strapi_workflows_stages',
+  strapi_workflows_stages_permissions_links: 'strapi_workflows_stages_permissions_links',
+  strapi_workflows_stages_workflow_links: 'strapi_workflows_stages_workflow_links',
+  tags: 'tags',
+  tags_categories_links: 'tags_categories_links',
+  up_permissions: 'up_permissions',
+  up_permissions_role_links: 'up_permissions_role_links',
+  up_roles: 'up_roles',
+  up_users: 'up_users',
+  up_users_role_links: 'up_users_role_links',
+  upload_folders: 'upload_folders',
+  upload_folders_parent_links: 'upload_folders_parent_links',
+  gateway_fee_schedules: 'gateway_fee_schedules',
+  overheads: 'overheads',
+  promobar_configs: 'promobar_configs',
+  promobar_messages: 'promobar_messages',
+  sub_categories: 'sub_categories',
+  sub_categories_products_links: 'sub_categories_products_links',
+  super_categories: 'super_categories',
+  super_categories_products_links: 'super_categories_products_links'
 };
 
 /**

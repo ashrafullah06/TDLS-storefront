@@ -421,7 +421,7 @@ export default function RbacPanel() {
 
       <p className="text-xs text-gray-500">
         Changes saved here are stored in the{" "}
-        <code>AppSetting("rbac_matrix")</code> record and used by the admin
+        <code>AppSetting(&quot;rbac_matrix&quot;)</code> record and used by the admin
         permission checks (e.g. <code>requireAdmin()</code>).{" "}
         <span className="font-semibold">
           Superadmin always retains full access

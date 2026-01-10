@@ -75,7 +75,6 @@ const ADDRESS_MUTATION_PURPOSES = new Set([
 function parseOtpFromRequest(req, body, fallbackExpectedPurpose) {
   const h = req.headers;
 
-  // Optional base64 “otp-token”
   const token =
     h.get("x-otp-token") ||
     h.get("X-Otp-Token") ||
@@ -256,7 +255,7 @@ function canonAddress(input, existing) {
   };
 }
 
-/** Normalize DB address into frontend-friendly payload (FIX: flatten identity fields). */
+/** Normalize DB address into frontend-friendly payload (flatten identity fields). */
 function normalizeAddress(a) {
   if (!a) return null;
   const g = a.granular || {};
@@ -264,15 +263,26 @@ function normalizeAddress(a) {
     id: a.id,
     isDefault: !!a.isDefault,
 
-    // FIX: these must exist so checkout tiles can show them reliably
-    name: (a.name ?? g.name ?? null) != null ? String(a.name ?? g.name).trim() || null : null,
+    name:
+      (a.name ?? g.name ?? null) != null
+        ? String(a.name ?? g.name).trim() || null
+        : null,
     phone:
       normalizePhone(a.phone ?? g.phone ?? null) ||
       normalizePhone(g.phone ?? null) ||
       null,
-    email: (a.email ?? g.email ?? null) != null ? String(a.email ?? g.email).trim().toLowerCase() || null : null,
-    label: (a.label ?? g.label ?? null) != null ? String(a.label ?? g.label).trim() || null : null,
-    notes: (a.notes ?? g.notes ?? null) != null ? String(a.notes ?? g.notes).trim() || null : null,
+    email:
+      (a.email ?? g.email ?? null) != null
+        ? String(a.email ?? g.email).trim().toLowerCase() || null
+        : null,
+    label:
+      (a.label ?? g.label ?? null) != null
+        ? String(a.label ?? g.label).trim() || null
+        : null,
+    notes:
+      (a.notes ?? g.notes ?? null) != null
+        ? String(a.notes ?? g.notes).trim() || null
+        : null,
 
     line1: a.line1,
     line2: a.line2,
@@ -296,8 +306,12 @@ function normalizeAddress(a) {
   };
 }
 
-/** Exported: Load list + default for a user (used by [id] route). */
-export async function loadListAndDefault(userId) {
+/**
+ * IMPORTANT:
+ * This helper MUST NOT be exported from a route module,
+ * otherwise Next.js will fail type-checking the route exports.
+ */
+async function loadListAndDefault(userId) {
   const list = await prisma.address.findMany({
     where: { userId, archivedAt: null },
     orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
@@ -314,8 +328,8 @@ export async function loadListAndDefault(userId) {
   };
 }
 
-/** Exported: hard/soft delete helper (used by [id] route). */
-export async function deleteAddressForUser(userId, id) {
+/** hard/soft delete helper (used internally by this route). */
+async function deleteAddressForUser(userId, id) {
   const existing = await prisma.address.findFirst({
     where: { id, userId, archivedAt: null },
   });
@@ -325,7 +339,6 @@ export async function deleteAddressForUser(userId, id) {
     throw e;
   }
 
-  // Soft-delete and handle default reassignment here (safer for all callers)
   await prisma.$transaction(async (tx) => {
     await tx.address.update({
       where: { id },
@@ -591,7 +604,6 @@ export async function DELETE(req) {
       }
     }
 
-    // Use shared helper (handles default reassignment)
     const { addresses, defaultId } = await deleteAddressForUser(userId, String(id));
 
     const def = addresses.find((a) => String(a.id) === String(defaultId)) || null;

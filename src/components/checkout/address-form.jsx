@@ -1,642 +1,981 @@
-// FILE: src/components/auth/otpform.jsx
+// FILE: src/components/checkout/address-form.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
 
-const NAVY = "#0f2147";
-const NAVY_GRAD = "linear-gradient(135deg,#162a4d 0%,#0b1633 100%)";
-const GREY_BORDER = "#E4E7EE";
+/** Brand palette (must match checkout-page.js / address-picker.jsx) */
+const NAVY = "#0F2147";
+const MUTED = "#6B7280";
+const BORDER = "#DFE3EC";
 
-/* ========= EASY-TO-TUNE SPACING TOKENS ========= */
-/** Page padding from viewport edges (outside card) */
-const PAGE_PADDING_X = "px-4 md:px-8";
-const PAGE_PADDING_Y = "py-10";
+/* ---------------- phone helpers (mirrors checkout-page.js) ---------------- */
+function normalizeBDPhone(p = "") {
+  // Accept BD mobile formats:
+  // +8801XXXXXXXXX, 8801XXXXXXXXX, 01XXXXXXXXX, 08801XXXXXXXXX, 008801XXXXXXXXX
+  // Also auto-corrects mistaken "+01..." into "+8801..."
+  let s = String(p || "").trim();
+  if (!s) return "";
 
-/** Card inner padding (distance of text from card border) */
-const CARD_PADDING_X = "px-7 md:px-10 lg:px-12";
-const CARD_PADDING_Y_TOP = "pt-8";
-const CARD_PADDING_Y_BOTTOM = "pb-10";
+  // Remove spaces and common separators
+  s = s.replace(/[\s-()]/g, "");
 
-/** Gap between main CTA button and helper text below */
-const CTA_TO_HELPER_GAP = "pt-4";
+  // Convert "00" international prefix to "+"
+  if (s.startsWith("00")) s = `+${s.slice(2)}`;
 
-/** Gap around primary CTA block */
-const CTA_BLOCK_MARGIN_TOP = "mt-1";
-const CTA_BLOCK_MARGIN_BOTTOM = "mb-1";
+  // Handle "0880..." (some users prefix 0 before country code)
+  if (s.startsWith("0880")) s = s.slice(1); // -> "880..."
 
-/** Gap between small resend CTA and text ("Didn't get a code?") */
-const RESEND_ROW_GAP = "gap-2";
-/* =============================================== */
+  // Fix mistaken "+01..." into "+8801..."
+  if (s.startsWith("+01")) {
+    // "+017..." -> "+88017..."
+    return `+88${s.slice(1)}`;
+  }
 
-/* ---------- small helpers ---------- */
-const fmt = (s) => {
-  const m = Math.floor(s / 60);
-  const ss = String(s % 60).padStart(2, "0");
-  return `${m}:${ss}`;
-};
+  // Normalize common valid forms
+  if (s.startsWith("+8801")) return s;
+  if (s.startsWith("8801")) return `+${s}`;
+  if (s.startsWith("01")) return `+88${s}`;
 
-const PURPOSE_SET = new Set([
-  "signup",
-  "login",
-  "address_create",
-  "address_update",
-  "address_delete",
-  "mobile_update",
-  "cod_confirm",
-  "order_confirm",
-  "payment_gateway_auth",
-  "email_update",
-  "password_change",
-  "wallet_transfer",
-  "refund_destination_confirm",
-  "reward_redeem_confirm",
-  "privacy_request_confirm",
-  "rbac_login",
-  "rbac_elevate",
-  "rbac_sensitive_action",
-]);
+  // If user provided "+880..." already, keep it (even if later validated)
+  if (s.startsWith("+880")) return s;
 
-const PURPOSE_ALIASES = {
-  cod: "cod_confirm",
-  place_order: "cod_confirm",
-  checkout_confirm: "order_confirm",
-  order: "order_confirm",
-  address_add: "address_create",
-  add_address: "address_create",
-  edit_address: "address_update",
-  delete_address: "address_delete",
-  change_phone: "mobile_update",
-  change_email: "email_update",
-  change_password: "password_change",
-  gateway_auth: "payment_gateway_auth",
-  pg_otp: "payment_gateway_auth",
-  admin_login: "rbac_login",
-  elevate: "rbac_elevate",
-  sudo_action: "rbac_sensitive_action",
-};
+  // If user typed "1XXXXXXXXX" (10 digits starting with 1), assume missing 880
+  if (/^1\d{9}$/.test(s)) return `+880${s}`;
 
-function normalizePurposeClient(raw) {
-  const p = String(raw || "").trim().toLowerCase();
-  if (PURPOSE_SET.has(p)) return p;
-  const mapped = PURPOSE_ALIASES[p] || p;
-  if (PURPOSE_SET.has(mapped)) return mapped;
-  return "login";
+  return s.startsWith("+") ? s : `+${s}`;
 }
 
-/* Purpose → compact context text */
-function buildContext(purpose) {
-  const base = {
-    kind: "customer",
-    pill: "Security check",
-    title: "Enter the 6-digit code",
-    subtitle: "This step keeps your TDLC account safer.",
-    cta: "Verify & continue",
-  };
-
-  if (purpose === "signup" || purpose === "login") {
-    return {
-      ...base,
-      pill: "Sign-in verification",
-      subtitle: "A quick code to confirm it’s really you.",
-      cta: "Verify & sign in",
-    };
-  }
-
-  if (purpose === "cod_confirm") {
-    return {
-      kind: "cod",
-      pill: "Cash-on-Delivery",
-      title: "Confirm your COD order",
-      subtitle: "We verify your number before shipping a COD parcel.",
-      cta: "Confirm COD order",
-    };
-  }
-
-  if (purpose === "order_confirm") {
-    return {
-      kind: "checkout",
-      pill: "Checkout verification",
-      title: "Confirm this checkout",
-      subtitle: "One last step to lock in your order details.",
-      cta: "Confirm & place order",
-    };
-  }
-
-  if (purpose === "payment_gateway_auth") {
-    return {
-      kind: "payment",
-      pill: "Payment verification",
-      title: "Verify this payment",
-      subtitle: "We add an extra security layer to payment attempts.",
-      cta: "Confirm payment",
-    };
-  }
-
-  if (
-    purpose === "email_update" ||
-    purpose === "mobile_update" ||
-    purpose === "address_create" ||
-    purpose === "address_update" ||
-    purpose === "address_delete" ||
-    purpose === "password_change"
-  ) {
-    return {
-      kind: "profile",
-      pill: "Account changes",
-      title: "Approve this change",
-      subtitle: "We verify your identity before updating your details.",
-      cta: "Approve & continue",
-    };
-  }
-
-  if (purpose === "wallet_transfer" || purpose === "refund_destination_confirm") {
-    return {
-      kind: "finance",
-      pill: "Wallet & refunds",
-      title: "Confirm this money action",
-      subtitle: "We double-check before moving funds or refunds.",
-      cta: "Confirm & continue",
-    };
-  }
-
-  if (purpose === "reward_redeem_confirm") {
-    return {
-      kind: "loyalty",
-      pill: "Rewards",
-      title: "Confirm reward redemption",
-      subtitle: "We protect your TDLC rewards from misuse.",
-      cta: "Redeem rewards",
-    };
-  }
-
-  if (purpose === "privacy_request_confirm") {
-    return {
-      kind: "privacy",
-      pill: "Privacy & data",
-      title: "Confirm this privacy request",
-      subtitle: "We verify before exporting or deleting your data.",
-      cta: "Confirm request",
-    };
-  }
-
-  if (
-    purpose === "rbac_login" ||
-    purpose === "rbac_elevate" ||
-    purpose === "rbac_sensitive_action"
-  ) {
-    return {
-      kind: "admin",
-      pill: "Admin verification",
-      title: "",
-      subtitle: "",
-      cta: "Approve & continue",
-    };
-  }
-
-  return base;
+function isValidBDMobile(p = "") {
+  const n = normalizeBDPhone(p);
+  return /^\+8801\d{9}$/.test(n);
 }
 
-export default function OtpForm() {
-  const router = useRouter();
-  const search = useSearchParams();
+/* ---------------- lightweight remember + suggestions (localStorage) ---------------- */
+const DRAFT_KEY = "tdlc_checkout_address_draft_v1";
+const HIST_KEY = "tdlc_checkout_address_history_v1";
 
-  const to = search?.get("to") || "";
-  const via = (search?.get("via") || "sms").toLowerCase();
-  const purposeParam = search?.get("purpose") || "login";
-  const purpose = normalizePurposeClient(purposeParam);
+function safeParse(json, fallback) {
+  try {
+    const v = JSON.parse(json);
+    return v && typeof v === "object" ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
-  const redirectTo =
-    (search?.get("checkout")
-      ? "/checkout"
-      : search?.get("redirect") || "/customer/dashboard") ||
-    "/customer/dashboard";
+function uniqPush(arr, v, limit = 8) {
+  const s = String(v || "").trim();
+  if (!s) return arr;
+  const next = [s, ...(arr || []).filter((x) => String(x).trim() && String(x).trim() !== s)];
+  return next.slice(0, limit);
+}
 
-  const remember = search?.get("remember") === "1";
-  const sessionId = search?.get("session") || null;
+function readDraft() {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(DRAFT_KEY);
+  return raw ? safeParse(raw, null) : null;
+}
 
-  const [digits, setDigits] = useState(["", "", "", "", "", ""]);
-  const [otp, setOtp] = useState("");
-  const [err, setErr] = useState("");
-  const [verifying, setVerifying] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [expires, setExpires] = useState(0);
+function writeDraft(obj) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify(obj || {}));
+  } catch {}
+}
 
-  const abortCtrlRef = useRef(null);
-  const lastKeyRef = useRef("");
-  const inputRefs = useRef([]);
+function readHistory() {
+  if (typeof window === "undefined") return {};
+  const raw = window.localStorage.getItem(HIST_KEY);
+  return raw ? safeParse(raw, {}) : {};
+}
 
-  const context = useMemo(() => buildContext(purpose), [purpose]);
-  const isAdminFlow = context.kind === "admin";
-  const isCodFlow = context.kind === "cod";
+function writeHistory(obj) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(HIST_KEY, JSON.stringify(obj || {}));
+  } catch {}
+}
 
-  /* ---------- Timer ---------- */
+/* ---------------- Address Form ---------------- */
+export default function AddressForm({
+  title,
+  subtitle,
+  prefill,
+  includeUserFields = true,
+  requirePhone = true,
+  showMakeDefault = false,
+  forceDefault = false,
+  submitLabel = "Continue",
+  onCancel,
+  onSubmit,
+  onDraftChange,
+  validateSignal = 0,
+}) {
+  const [vals, setVals] = useState(() => {
+    const draft = readDraft();
+    const p = (prefill && typeof prefill === "object") ? prefill : {};
+    return {
+      name: "",
+      phone: "",
+      email: "",
+      houseNo: "",
+      houseName: "",
+      apartmentNo: "",
+      floorNo: "",
+      streetAddress: "",
+      address2: "",
+      village: "",
+      postOffice: "",
+      union: "",
+      policeStation: "",
+      upazila: "",
+      district: "",
+      division: "",
+      postalCode: "",
+      countryIso2: "BD",
+      makeDefault: false,
+
+      ...(draft && typeof draft === "object" ? draft : {}),
+      ...(p && typeof p === "object" ? p : {}),
+    };
+  });
+
+  const [history, setHistory] = useState(() => readHistory());
+
+  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  const lastDraftSigRef = useRef("");
+  const saveTimerRef = useRef(null);
+
+  // common datalist suggestions (minimal but useful, plus user’s own history)
+  const divisionSuggestions = useMemo(() => {
+    const base = [
+      "Dhaka",
+      "Chattogram",
+      "Rajshahi",
+      "Khulna",
+      "Barishal",
+      "Sylhet",
+      "Rangpur",
+      "Mymensingh",
+    ];
+    const extra = (history?.division || []).filter(Boolean);
+    return Array.from(new Set([...extra, ...base]));
+  }, [history]);
+
   useEffect(() => {
-    if (expires <= 0) return;
-    const t = setInterval(() => {
-      setExpires((s) => (s > 0 ? s - 1 : 0));
-    }, 1000);
-    return () => clearInterval(t);
-  }, [expires]);
+    setHistory(readHistory());
+  }, []);
 
-  /* ---------- Android Web OTP (SMS only) ---------- */
   useEffect(() => {
-    if (typeof window === "undefined" || !("OTPCredential" in window) || via !== "sms")
-      return;
-    try {
-      abortCtrlRef.current?.abort();
-      const ac = new AbortController();
-      abortCtrlRef.current = ac;
-      // @ts-ignore
-      navigator.credentials
-        .get({ otp: { transport: ["sms"] }, signal: ac.signal })
-        .then((cred) => {
-          if (!cred?.code) return;
-          const v = String(cred.code).replace(/[^\d]/g, "").slice(0, 6);
-          const arr = v.split("");
-          while (arr.length < 6) arr.push("");
-          setDigits(arr);
-          setOtp(v);
-        })
-        .catch(() => {});
-    } catch {}
-    return () => abortCtrlRef.current?.abort();
-  }, [via]);
+    // Prefill can change frequently in some flows.
+    // Merge only owned fields and avoid state update loops.
+    const p = (prefill && typeof prefill === "object") ? prefill : {};
+    const patch = {
+      name: p.name,
+      phone: p.phone,
+      email: p.email,
+      houseNo: p.houseNo,
+      houseName: p.houseName,
+      apartmentNo: p.apartmentNo,
+      floorNo: p.floorNo,
+      streetAddress: p.streetAddress ?? p.address1 ?? p.line1,
+      address2: p.address2 ?? p.line2,
+      village: p.village,
+      postOffice: p.postOffice,
+      union: p.union,
+      policeStation: p.policeStation,
+      upazila: p.upazila ?? p.city,
+      district: p.district ?? p.state,
+      division: p.division,
+      postalCode: p.postalCode,
+      countryIso2: p.countryIso2,
+      makeDefault: p.makeDefault,
+      label: p.label,
+      id: p.id,
+    };
 
-  /* ---------- Mask + labels ---------- */
-  const mask = useMemo(() => {
-    if (!to) return "";
-    if (to.includes("@")) {
-      const [u, d] = to.split("@");
-      return `${u?.slice(0, 2)}***@${d}`;
-    }
-    const t = to.replace(/^\+/, "");
-    return `+${t.slice(0, 2)}***${t.slice(-2)}`;
-  }, [to]);
+    setVals((prev) => {
+      const next = { ...prev };
 
-  const viaLabel = useMemo(() => {
-    if (via === "email") return "email";
-    if (via === "whatsapp") return "WhatsApp";
-    return "SMS";
-  }, [via]);
-
-  /* ---------- Request / bootstrap OTP ---------- */
-  async function bootstrapOtp(silent = true) {
-    if (!to || !purpose) return;
-    try {
-      if (!silent) {
-        setErr("");
-        setSending(true);
+      for (const k of Object.keys(patch)) {
+        if (patch[k] !== undefined) next[k] = patch[k];
       }
-      const channel =
-        via === "email" ? "EMAIL" : via === "whatsapp" ? "WHATSAPP" : "SMS";
 
-      // ✔ unified new route
-      const r = await fetch("/api/request-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          identifier: to,
-          purpose,
-          channel,
-          allowNew: purpose === "signup",
-          sessionId,
-        }),
+      next.countryIso2 = String(next.countryIso2 || "BD").toUpperCase();
+
+      const owned = [
+        "name",
+        "phone",
+        "email",
+        "houseNo",
+        "houseName",
+        "apartmentNo",
+        "floorNo",
+        "streetAddress",
+        "address2",
+        "village",
+        "postOffice",
+        "union",
+        "policeStation",
+        "upazila",
+        "district",
+        "division",
+        "postalCode",
+        "countryIso2",
+        "makeDefault",
+        "label",
+        "id",
+      ];
+
+      for (const k of owned) {
+        const a = prev?.[k];
+        const b = next?.[k];
+        if (!Object.is(a, b)) return next;
+      }
+      return prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(prefill || {})]);
+
+  // persist draft smoothly (debounced)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      writeDraft({
+        ...vals,
+        countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
+        makeDefault: forceDefault ? true : !!vals.makeDefault,
       });
-      const jr = await r.json().catch(() => ({}));
+    }, 200);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [vals, forceDefault]);
 
-      if (!r.ok) {
-        if (!silent) {
-          setErr(jr?.error || "Unable to send the code right now.");
-        }
+  useEffect(() => {
+    if (!validateSignal) return;
+
+    setError("");
+    setFieldErrors({});
+
+    const name = String(vals.name || "").trim();
+    const phoneRaw = String(vals.phone || "").trim();
+    const phone = normalizeBDPhone(phoneRaw);
+
+    const errs = {};
+    const missingLabels = [];
+
+    if (includeUserFields) {
+      if (!name) errs.name = "required";
+
+      if (requirePhone) {
+        if (!phone) errs.phone = "required";
+        else if (!isValidBDMobile(phone)) errs.phone = "invalid";
+      }
+    }
+
+    const line1 = String(vals.streetAddress || vals.address1 || vals.line1 || "").trim();
+    const city = String(vals.upazila || vals.city || "").trim();
+    const dist = String(vals.district || vals.state || "").trim();
+
+    if (!line1) errs.streetAddress = "required";
+    if (!city) errs.upazila = "required";
+    if (!dist) errs.district = "required";
+
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
+
+      if (errs.name) missingLabels.push("Full name");
+      if (errs.phone === "required") missingLabels.push("Mobile number");
+      if (errs.streetAddress) missingLabels.push("Street Address");
+      if (errs.upazila) missingLabels.push("Upazila / City");
+      if (errs.district) missingLabels.push("District");
+
+      if (errs.phone === "invalid") {
+        setError(
+          "Mobile number format is invalid. Use 017XXXXXXXX, 88017XXXXXXXX, +88017XXXXXXXX, or 088017XXXXXXXX."
+        );
         return;
       }
 
-      const ttl = Number(jr?.ttlSeconds) || 0;
-      if (ttl > 0) setExpires(ttl);
-    } catch (e) {
-      if (!silent) setErr(e?.message || "Unable to send the code.");
-    } finally {
-      if (!silent) setSending(false);
+      setError(
+        missingLabels.length
+          ? `Please complete the highlighted fields: ${missingLabels.join(", ")}.`
+          : "Please complete the highlighted fields."
+      );
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validateSignal]);
+
+  function setField(k, v) {
+    setVals((p) => ({ ...p, [k]: v }));
+  }
+
+  function isCompleteLocal(a) {
+    const line1 = a.streetAddress || a.address1 || a.line1 || "";
+    const city = a.upazila || a.city || "";
+    const dist = a.district || a.state || "";
+    const country = (a.countryIso2 || "BD").toString().toUpperCase();
+    if (!line1.trim() || !city.trim() || !dist.trim() || !country.trim()) return false;
+    return true;
   }
 
   useEffect(() => {
-    const key = `${to}|${via}|${purpose}`;
-    if (!to) return;
-    if (lastKeyRef.current !== key) {
-      lastKeyRef.current = key;
-      setDigits(["", "", "", "", "", ""]);
-      setOtp("");
-      setErr("");
-      setExpires(0);
-      bootstrapOtp(true);
+    if (typeof onDraftChange !== "function") return;
+
+    const nameRaw = String(vals.name ?? "");
+    const phoneRaw = String(vals.phone ?? "");
+    const emailRaw = String(vals.email ?? "");
+
+    const nameNorm = nameRaw.trim();
+    const phoneNorm = normalizeBDPhone(phoneRaw);
+    const emailNorm = emailRaw.trim().toLowerCase();
+
+    const candidate = {
+      ...vals,
+
+      // keep raw user inputs
+      name: nameRaw,
+      phone: phoneRaw,
+      email: emailRaw,
+
+      // provide normalized variants for parent logic
+      nameNormalized: nameNorm,
+      phoneNormalized: phoneNorm,
+      emailNormalized: emailNorm,
+
+      countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
+      makeDefault: forceDefault ? true : !!vals.makeDefault,
+    };
+
+    const phoneValid = !requirePhone || isValidBDMobile(phoneNorm);
+    const userOk = !includeUserFields || (!!nameNorm && phoneValid);
+
+    const complete = userOk && isCompleteLocal(candidate);
+
+    const sig = JSON.stringify({
+      v: candidate,
+      complete,
+      includeUserFields: !!includeUserFields,
+      requirePhone: !!requirePhone,
+      forceDefault: !!forceDefault,
+    });
+
+    if (sig === lastDraftSigRef.current) return;
+    lastDraftSigRef.current = sig;
+    onDraftChange(candidate, complete);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vals, includeUserFields, requirePhone, forceDefault, showMakeDefault]);
+
+  function rememberField(field, value) {
+    const s = String(value || "").trim();
+    if (!s) return;
+
+    const next = {
+      ...(history || {}),
+      [field]: uniqPush(history?.[field] || [], s, 10),
+    };
+    setHistory(next);
+    writeHistory(next);
+  }
+
+  async function handleSubmit(e) {
+    e?.preventDefault?.();
+    setError("");
+    setFieldErrors({});
+
+    const name = String(vals.name || "").trim();
+    const phoneRaw = String(vals.phone || "").trim();
+    const phone = normalizeBDPhone(phoneRaw);
+    const email = String(vals.email || "").trim().toLowerCase();
+
+    const errs = {};
+
+    if (includeUserFields) {
+      if (!name) errs.name = "required";
+
+      if (requirePhone) {
+        if (!phoneRaw) errs.phone = "required";
+        else if (!isValidBDMobile(phoneRaw)) errs.phone = "invalid";
+      }
     }
-  }, [to, via, purpose]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---------- OTP input handlers ---------- */
-  const handleDigitChange = (index, value) => {
-    const v = value.replace(/[^\d]/g, "").slice(-1); // single digit
-    const next = [...digits];
-    next[index] = v;
-    setDigits(next);
-    const joined = next.join("");
-    setOtp(joined);
+    const street = String(vals.streetAddress || vals.address1 || vals.line1 || "").trim();
+    const city = String(vals.upazila || vals.city || "").trim();
+    const dist = String(vals.district || vals.state || "").trim();
 
-    if (v && index < 5) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
+    if (!street) errs.streetAddress = "required";
+    if (!city) errs.upazila = "required";
+    if (!dist) errs.district = "required";
 
-  const handleDigitKeyDown = (index, e) => {
-    if (e.key === "Backspace" && !digits[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-      return;
-    }
-    if (e.key === "ArrowLeft" && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-      e.preventDefault();
-    }
-    if (e.key === "ArrowRight" && index < 5) {
-      inputRefs.current[index + 1]?.focus();
-      e.preventDefault();
-    }
-  };
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
 
-  /* ---------- Actions ---------- */
-  async function verify() {
-    if (verifying) return;
-    setErr("");
-    if (!/^\d{6}$/.test(otp)) {
-      setErr("Enter the 6-digit code.");
-      return;
-    }
-
-    setVerifying(true);
-    try {
-      // 1) Verify OTP with your API (sets otp_session + consumes row)
-      const r = await fetch("/api/verify-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          identifier: to,
-          purpose,
-          code: otp.trim(),
-          rememberDevice: remember,
-          sessionId,
-        }),
-      });
-
-      const jr = await r.json().catch(() => ({}));
-
-      if (!r.ok || !(jr?.ok || jr?.verified)) {
-        if (jr?.attemptsLeft != null) {
-          setErr(
-            `That code didn’t work. You have ${jr.attemptsLeft} attempt(s) left.`
-          );
-        } else if (jr?.error === "OTP_NOT_FOUND_OR_EXPIRED") {
-          setErr("This code has expired. Tap resend to get a new one.");
-        } else if (jr?.error === "OTP_MISMATCH") {
-          setErr("That code didn’t match. Please try again.");
-        } else {
-          setErr(jr?.error || "Invalid or expired code.");
-        }
-        setVerifying(false);
+      const missingLabels = [];
+      if (errs.name) missingLabels.push("Full name");
+      if (errs.phone === "required") missingLabels.push("Mobile number");
+      if (errs.phone === "invalid") {
+        setError(
+          "Mobile number format is invalid. Use 017XXXXXXXX, 88017XXXXXXXX, +88017XXXXXXXX, or 088017XXXXXXXX."
+        );
         return;
       }
+      if (errs.streetAddress) missingLabels.push("Street Address");
+      if (errs.upazila) missingLabels.push("Upazila / City");
+      if (errs.district) missingLabels.push("District");
 
-      // 2) NextAuth establishes the session (for login / signup).
-      await signIn("credentials", {
-        redirect: true,
-        type: "otp",
-        identifier: to,
-        code: otp.trim(),
-        purpose,
-        callbackUrl: `${redirectTo}?login=1`,
-      });
-    } catch (e) {
-      setErr(e?.message || "Verification failed. Please try again.");
-      setVerifying(false);
+      setError(
+        missingLabels.length
+          ? `Please complete the highlighted fields: ${missingLabels.join(", ")}.`
+          : "Please complete the highlighted fields."
+      );
+      return;
     }
+
+    // remember key fields for next checkout
+    rememberField("streetAddress", street);
+    rememberField("address2", vals.address2);
+    rememberField("upazila", city);
+    rememberField("district", dist);
+    rememberField("division", vals.division);
+    rememberField("postOffice", vals.postOffice);
+    rememberField("policeStation", vals.policeStation);
+    rememberField("union", vals.union);
+
+    const candidate = {
+      ...vals,
+      name,
+      phone,
+      email,
+      countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
+      makeDefault: forceDefault ? true : !!vals.makeDefault,
+    };
+
+    const res = await onSubmit?.(candidate);
+    if (res === false) return;
   }
 
-  async function resend() {
-    if (sending || expires > 0) return;
-    await bootstrapOtp(false);
-    setDigits(["", "", "", "", "", ""]);
-    setOtp("");
-    inputRefs.current[0]?.focus();
-  }
-
-  const canResend = !sending && expires === 0;
-  const canVerify = !verifying && otp.length === 6;
-
-  /* ---------- UI ---------- */
   return (
-    <section className={`${PAGE_PADDING_X} ${PAGE_PADDING_Y}`}>
-      <div className="mx-auto max-w-4xl">
-        <div className="relative">
-          {/* Glow / emboss background */}
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 rounded-[28px] blur-xl opacity-80"
-            style={{ background: NAVY_GRAD }}
-          />
+    <form onSubmit={handleSubmit} className="ca-form">
+      {title ? <div className="ca-title">{title}</div> : null}
+      {subtitle ? <div className="ca-sub">{subtitle}</div> : null}
 
-          {/* Card */}
-          <div
-            className="relative rounded-[24px] border shadow-[0_18px_40px_rgba(0,0,0,0.65)] border-[rgba(255,255,255,0.08)] bg-[rgba(8,15,32,0.97)] backdrop-blur-md overflow-hidden"
-            style={{ color: "#f9fafb" }}
-          >
-            <div
-              className={`${CARD_PADDING_X} ${CARD_PADDING_Y_TOP} ${CARD_PADDING_Y_BOTTOM} flex flex-col gap-6`}
-            >
-              {/* Top row: step + timer */}
-              <div className="flex items-center justify-between gap-4">
-                <span className="inline-flex items-center rounded-full border border-[rgba(226,232,255,0.38)] px-3 py-1 text-[10px] font-semibold tracking-[0.18em] uppercase text-[rgba(226,232,255,0.9)] whitespace-nowrap">
-                  Step 2 of 2 · {context.pill}
-                </span>
-                {expires > 0 && (
-                  <span className="text-[11px] text-[rgba(209,213,255,0.95)] text-right leading-snug">
-                    Code expires in{" "}
-                    <strong className="font-semibold">{fmt(expires)}</strong>
-                  </span>
-                )}
-              </div>
+      {error ? <div className="ca-error">{error}</div> : null}
 
-              {/* Headline + description */}
-              <div className="space-y-2 max-w-xl mx-auto">
-                <h1
-                  className={`text-[22px] md:text-[24px] font-semibold leading-snug tracking-tight ${
-                    isAdminFlow
-                      ? "text-white text-center"
-                      : "text-[rgba(239,242,255,0.96)]"
-                  }`}
-                >
-                  {context.title}
-                </h1>
-                <p className="text-xs md:text-[13px] text-[rgba(209,213,255,0.94)] leading-relaxed text-center md:text-left">
-                  {mask ? (
-                    <>
-                      We sent a 6-digit code to{" "}
-                      <span className="font-semibold text-white">{mask}</span>{" "}
-                      via{" "}
-                      <span className="font-semibold text-white">
-                        {viaLabel}
-                      </span>
-                      .
-                    </>
-                  ) : (
-                    <>We sent a 6-digit code to your {viaLabel.toLowerCase()}.</>
-                  )}
-                </p>
-                {context.subtitle && (
-                  <p className="text-[11px] md:text-[12px] text-[rgba(156,172,230,0.96)] leading-relaxed">
-                    {context.subtitle}
-                  </p>
-                )}
-              </div>
+      {/* datalists for suggestions */}
+      <datalist id="dl-upazila">
+        {(history?.upazila || []).map((x) => (
+          <option key={`u-${x}`} value={x} />
+        ))}
+      </datalist>
+      <datalist id="dl-district">
+        {(history?.district || []).map((x) => (
+          <option key={`d-${x}`} value={x} />
+        ))}
+      </datalist>
+      <datalist id="dl-division">
+        {divisionSuggestions.map((x) => (
+          <option key={`dv-${x}`} value={x} />
+        ))}
+      </datalist>
+      <datalist id="dl-po">
+        {(history?.postOffice || []).map((x) => (
+          <option key={`po-${x}`} value={x} />
+        ))}
+      </datalist>
+      <datalist id="dl-ps">
+        {(history?.policeStation || []).map((x) => (
+          <option key={`ps-${x}`} value={x} />
+        ))}
+      </datalist>
+      <datalist id="dl-union">
+        {(history?.union || []).map((x) => (
+          <option key={`un-${x}`} value={x} />
+        ))}
+      </datalist>
+      <datalist id="dl-street">
+        {(history?.streetAddress || []).map((x) => (
+          <option key={`st-${x}`} value={x} />
+        ))}
+      </datalist>
 
-              {/* OTP row + resend + errors */}
-              <div className="space-y-4">
-                <div className="flex justify-center">
-                  <div className="flex justify-between gap-3 w-full max-w-[360px]">
-                    {Array.from({ length: 6 }).map((_, idx) => (
-                      <input
-                        key={idx}
-                        ref={(el) => (inputRefs.current[idx] = el)}
-                        type="text"
-                        inputMode="numeric"
-                        autoComplete={idx === 0 ? "one-time-code" : "off"}
-                        pattern="[0-9]*"
-                        maxLength={1}
-                        value={digits[idx]}
-                        onChange={(e) => handleDigitChange(idx, e.target.value)}
-                        onKeyDown={(e) => handleDigitKeyDown(idx, e)}
-                        className="flex-1 max-w-[48px] aspect-square rounded-[12px] text-center text-[20px] font-semibold outline-none"
-                        style={{
-                          backgroundColor: "#f9fafb",
-                          border: digits[idx]
-                            ? "2px solid rgba(30,64,175,0.9)"
-                            : `1.5px solid ${GREY_BORDER}`,
-                          color: NAVY,
-                          boxShadow: digits[idx]
-                            ? "0 0 0 1px rgba(59,130,246,0.4)"
-                            : "0 0 0 0 rgba(0,0,0,0)",
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
+      {includeUserFields ? (
+        <div className="ca-grid">
+          <div className={`ca-field${fieldErrors.name ? " invalid" : ""}`}>
+            <label>
+              Full name <span className="req">*</span>
+            </label>
+            <input
+              name="fullName"
+              autoComplete="name"
+              autoCapitalize="words"
+              spellCheck={false}
+              value={vals.name || ""}
+              onChange={(e) => setField("name", e.target.value)}
+              placeholder="Your full name"
+              onBlur={() => rememberField("name", vals.name)}
+            />
+          </div>
 
-                <div
-                  className={`flex flex-col sm:flex-row sm:items-center sm:justify-between ${RESEND_ROW_GAP} w-full max-w-[360px] mx-auto`}
-                >
-                  <p className="text-[11px] text-slate-300/85 leading-snug">
-                    Didn&apos;t get a code?
-                  </p>
-                  <button
-                    type="button"
-                    onClick={resend}
-                    disabled={!canResend}
-                    className="inline-flex items-center justify-center rounded-2xl px-4 py-[9px] text-[12px] md:text-[13px] font-medium text-center whitespace-nowrap transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-[1px] hover:shadow-md"
-                    style={{
-                      backgroundColor: "#f9fafb",
-                      color: NAVY,
-                      border: `1.5px solid ${GREY_BORDER}`,
-                    }}
-                  >
-                    {expires > 0
-                      ? `Resend in ${fmt(expires)}`
-                      : sending
-                      ? "Sending…"
-                      : "Resend code"}
-                  </button>
-                </div>
+          <div className={`ca-field${fieldErrors.phone ? " invalid" : ""}`}>
+            <label>
+              Mobile number {requirePhone ? <span className="req">*</span> : null}
+            </label>
+            <input
+              name="phone"
+              autoComplete="tel"
+              inputMode="tel"
+              spellCheck={false}
+              value={vals.phone || ""}
+              onChange={(e) => setField("phone", e.target.value)}
+              onBlur={(e) => {
+                const n = normalizeBDPhone(e.target.value);
+                if (n && n !== vals.phone) setField("phone", n);
+                rememberField("phone", n || e.target.value);
+              }}
+              placeholder="017XXXXXXXX / +88017XXXXXXXX"
+            />
+          </div>
 
-                {err && (
-                  <div
-                    className="rounded-2xl px-4 py-3 text-[12.5px] max-w-[480px]"
-                    style={{
-                      color: "#9f1d20",
-                      background: "#fff5f5",
-                      border: "1px solid #ffdada",
-                    }}
-                    role="alert"
-                    aria-live="polite"
-                  >
-                    {err}
-                  </div>
-                )}
-              </div>
-
-              {/* Primary CTA */}
-              <div
-                className={`max-w-[420px] ${CTA_BLOCK_MARGIN_TOP} ${CTA_BLOCK_MARGIN_BOTTOM}`}
-              >
-                <button
-                  type="button"
-                  onClick={verify}
-                  disabled={!canVerify}
-                  className="w-full inline-flex items-center justify-center rounded-[999px] px-8 py-[13px] md:py-[14px] text-[15px] md:text-[16px] font-semibold tracking-[0.03em] text-slate-950 transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundImage:
-                      "linear-gradient(135deg,#fde68a 0%,#fbbf24 40%,#d97706 100%)",
-                    boxShadow: canVerify
-                      ? "0 14px 32px rgba(0,0,0,0.7)"
-                      : "0 10px 24px rgba(0,0,0,0.45)",
-                  }}
-                  onMouseDown={(e) => {
-                    if (e.currentTarget.disabled) return;
-                    e.currentTarget.style.transform =
-                      "translateY(0.5px) scale(0.99)";
-                    e.currentTarget.style.boxShadow =
-                      "0 8px 20px rgba(0,0,0,0.6)";
-                  }}
-                  onMouseUp={(e) => {
-                    e.currentTarget.style.transform = "";
-                    e.currentTarget.style.boxShadow =
-                      "0 14px 32px rgba(0,0,0,0.7)";
-                  }}
-                >
-                  {verifying ? "Verifying…" : context.cta}
-                </button>
-              </div>
-
-              {/* Helper text */}
-              <div className={`space-y-2 ${CTA_TO_HELPER_GAP}`}>
-                <p className="text-center text-[11px] md:text-[12px] text-[rgba(209,213,255,0.9)] leading-snug">
-                  Wrong{" "}
-                  {viaLabel === "email" ? "email address" : "phone number"}?{" "}
-                  <a
-                    href="/login"
-                    className="underline underline-offset-2 font-medium"
-                    style={{ color: "#f9fafb" }}
-                  >
-                    Go back & change it
-                  </a>
-                </p>
-
-                {isAdminFlow && (
-                  <p className="text-[10.5px] text-center text-[rgba(186,197,255,0.95)] leading-relaxed">
-                    For admin/staff accounts, this OTP protects refunds, stock
-                    updates and role changes from unauthorized access.
-                  </p>
-                )}
-
-                {isCodFlow && (
-                  <p className="text-[10.5px] text-center text-[rgba(186,197,255,0.95)] leading-relaxed">
-                    For Cash-on-Delivery orders, we only ship after confirming
-                    this number. This reduces fake orders and protects your
-                    address.
-                  </p>
-                )}
-              </div>
-            </div>
+          <div className="ca-field">
+            <label>Email (optional)</label>
+            <input
+              name="email"
+              autoComplete="email"
+              inputMode="email"
+              spellCheck={false}
+              value={vals.email || ""}
+              onChange={(e) => setField("email", e.target.value)}
+              placeholder="name@email.com"
+              onBlur={() => rememberField("email", vals.email)}
+            />
           </div>
         </div>
+      ) : null}
+
+      <div className="ca-grid">
+        <div className="ca-field">
+          <label>House No</label>
+          <input
+            name="houseNo"
+            autoComplete="address-line1"
+            value={vals.houseNo || ""}
+            onChange={(e) => setField("houseNo", e.target.value)}
+            placeholder="House No"
+            onBlur={() => rememberField("houseNo", vals.houseNo)}
+          />
+        </div>
+        <div className="ca-field">
+          <label>House Name</label>
+          <input
+            name="houseName"
+            value={vals.houseName || ""}
+            onChange={(e) => setField("houseName", e.target.value)}
+            placeholder="House Name"
+            onBlur={() => rememberField("houseName", vals.houseName)}
+          />
+        </div>
+        <div className="ca-field">
+          <label>Apartment No</label>
+          <input
+            name="apartmentNo"
+            value={vals.apartmentNo || ""}
+            onChange={(e) => setField("apartmentNo", e.target.value)}
+            placeholder="Apartment"
+            onBlur={() => rememberField("apartmentNo", vals.apartmentNo)}
+          />
+        </div>
+        <div className="ca-field">
+          <label>Floor No</label>
+          <input
+            name="floorNo"
+            value={vals.floorNo || ""}
+            onChange={(e) => setField("floorNo", e.target.value)}
+            placeholder="Floor"
+            onBlur={() => rememberField("floorNo", vals.floorNo)}
+          />
+        </div>
       </div>
-    </section>
+
+      <div className="ca-grid">
+        <div className={`ca-field ca-span3${fieldErrors.streetAddress ? " invalid" : ""}`}>
+          <label>
+            Street Address <span className="req">*</span>
+          </label>
+          <input
+            name="addressLine1"
+            autoComplete="address-line1"
+            list="dl-street"
+            autoCapitalize="words"
+            value={vals.streetAddress || vals.address1 || ""}
+            onChange={(e) => setField("streetAddress", e.target.value)}
+            placeholder="Street / Road / Area"
+            onBlur={() => rememberField("streetAddress", vals.streetAddress)}
+          />
+        </div>
+        <div className="ca-field ca-span3">
+          <label>Address line 2 (optional)</label>
+          <input
+            name="addressLine2"
+            autoComplete="address-line2"
+            autoCapitalize="words"
+            value={vals.address2 || ""}
+            onChange={(e) => setField("address2", e.target.value)}
+            placeholder="Nearby landmark / extra details"
+            onBlur={() => rememberField("address2", vals.address2)}
+          />
+        </div>
+      </div>
+
+      <div className="ca-grid">
+        <div className={`ca-field${fieldErrors.upazila ? " invalid" : ""}`}>
+          <label>
+            Upazila / City <span className="req">*</span>
+          </label>
+          <input
+            name="city"
+            autoComplete="address-level2"
+            list="dl-upazila"
+            autoCapitalize="words"
+            value={vals.upazila || vals.city || ""}
+            onChange={(e) => setField("upazila", e.target.value)}
+            placeholder="Upazila / City"
+            onBlur={() => rememberField("upazila", vals.upazila)}
+          />
+        </div>
+
+        <div className={`ca-field${fieldErrors.district ? " invalid" : ""}`}>
+          <label>
+            District <span className="req">*</span>
+          </label>
+          <input
+            name="district"
+            autoComplete="address-level1"
+            list="dl-district"
+            autoCapitalize="words"
+            value={vals.district || ""}
+            onChange={(e) => setField("district", e.target.value)}
+            placeholder="District"
+            onBlur={() => rememberField("district", vals.district)}
+          />
+        </div>
+
+        <div className="ca-field">
+          <label>Division (optional)</label>
+          <input
+            name="division"
+            list="dl-division"
+            autoCapitalize="words"
+            value={vals.division || ""}
+            onChange={(e) => setField("division", e.target.value)}
+            placeholder="Division"
+            onBlur={() => rememberField("division", vals.division)}
+          />
+        </div>
+
+        <div className="ca-field">
+          <label>Postal Code (optional)</label>
+          <input
+            name="postalCode"
+            autoComplete="postal-code"
+            inputMode="numeric"
+            value={vals.postalCode || ""}
+            onChange={(e) => setField("postalCode", e.target.value)}
+            placeholder="Postal code"
+            onBlur={() => rememberField("postalCode", vals.postalCode)}
+          />
+        </div>
+      </div>
+
+      <div className="ca-grid">
+        <div className="ca-field">
+          <label>Post Office (optional)</label>
+          <input
+            name="postOffice"
+            list="dl-po"
+            autoCapitalize="words"
+            value={vals.postOffice || ""}
+            onChange={(e) => setField("postOffice", e.target.value)}
+            placeholder="Post Office"
+            onBlur={() => rememberField("postOffice", vals.postOffice)}
+          />
+        </div>
+        <div className="ca-field">
+          <label>Union (optional)</label>
+          <input
+            name="union"
+            list="dl-union"
+            autoCapitalize="words"
+            value={vals.union || ""}
+            onChange={(e) => setField("union", e.target.value)}
+            placeholder="Union"
+            onBlur={() => rememberField("union", vals.union)}
+          />
+        </div>
+        <div className="ca-field">
+          <label>Police Station / Thana (optional)</label>
+          <input
+            name="policeStation"
+            list="dl-ps"
+            autoCapitalize="words"
+            value={vals.policeStation || vals.thana || ""}
+            onChange={(e) => setField("policeStation", e.target.value)}
+            placeholder="Police Station / Thana"
+            onBlur={() => rememberField("policeStation", vals.policeStation)}
+          />
+        </div>
+        <div className="ca-field">
+          <label>Country</label>
+          <select
+            name="country"
+            autoComplete="country"
+            value={(vals.countryIso2 || "BD").toString().toUpperCase()}
+            onChange={(e) => setField("countryIso2", e.target.value)}
+          >
+            <option value="BD">Bangladesh (BD)</option>
+          </select>
+        </div>
+      </div>
+
+      {showMakeDefault || forceDefault ? (
+        <label className="chk">
+          <input
+            type="checkbox"
+            checked={forceDefault ? true : !!vals.makeDefault}
+            onChange={(e) => {
+              if (forceDefault) return;
+              setField("makeDefault", e.target.checked);
+            }}
+            disabled={forceDefault}
+          />
+          <span>Make this my default address</span>
+        </label>
+      ) : null}
+
+      <div className="ca-actions">
+        <button type="button" className="ca-btn ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="submit" className="ca-btn primary">
+          {submitLabel}
+        </button>
+      </div>
+
+      <style jsx>{`
+        /* Center + widen the form, reduce vertical height */
+        .ca-form {
+          width: min(1180px, 100%);
+          margin: 0 auto;
+          display: grid;
+          gap: 10px;
+
+          padding: 10px 12px;
+          padding-top: calc(10px + env(safe-area-inset-top));
+          padding-bottom: calc(
+            12px + env(safe-area-inset-bottom) + var(--bottom-floating-h, 0px)
+          );
+
+          align-content: start;
+          box-sizing: border-box;
+        }
+
+        .ca-title {
+          font-weight: 900;
+          color: ${NAVY};
+          font-size: 15px;
+          line-height: 1.2;
+          letter-spacing: 0.02em;
+        }
+        .ca-sub {
+          color: ${MUTED};
+          font-weight: 700;
+          font-size: 12.5px;
+          line-height: 1.25;
+          margin-top: -4px;
+        }
+        .ca-error {
+          background: #fff1f2;
+          border: 1px solid #fecdd3;
+          color: #9f1239;
+          border-radius: 14px;
+          padding: 10px 12px;
+          font-weight: 800;
+          font-size: 12.5px;
+          line-height: 1.25;
+        }
+
+        /* Desktop: triple column, premium spacing, no clipping */
+        .ca-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(160px, 1fr));
+          gap: 10px;
+          align-items: start;
+        }
+        .ca-span2 {
+          grid-column: span 2;
+        }
+        .ca-span3 {
+          grid-column: span 3;
+        }
+
+        .ca-field {
+          display: grid;
+          gap: 6px;
+          min-width: 0;
+        }
+        .ca-field label {
+          color: ${NAVY};
+          font-weight: 900;
+          font-size: 11px;
+          line-height: 1.1;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          opacity: 0.92;
+        }
+
+        .req {
+          color: #dc2626;
+          font-weight: 900;
+        }
+
+        /* Invalid state */
+        .ca-field.invalid label {
+          color: #dc2626;
+          opacity: 1;
+        }
+        .ca-field.invalid input,
+        .ca-field.invalid select,
+        .ca-field.invalid textarea {
+          border-color: #dc2626 !important;
+          box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14) !important;
+        }
+
+        /* Deep-pond input style: inset shadows + soft depth + safe inner padding */
+        .ca-field input,
+        .ca-field select {
+          height: 44px;
+          border: 1px solid rgba(223, 227, 236, 0.95);
+          border-radius: 14px;
+          padding: 0 14px; /* safe distance from edges (your request) */
+          font-weight: 800;
+          font-size: 13px;
+          color: ${NAVY};
+          outline: none;
+
+          background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+          box-shadow:
+            inset 0 2px 8px rgba(15, 33, 71, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.9),
+            0 10px 22px rgba(15, 33, 71, 0.06);
+          transition: box-shadow 150ms ease, border-color 150ms ease, transform 120ms ease;
+          box-sizing: border-box;
+          width: 100%;
+        }
+
+        .ca-field input::placeholder {
+          color: rgba(107, 114, 128, 0.82);
+          font-weight: 700;
+          letter-spacing: 0.01em;
+        }
+
+        .ca-field input:focus,
+        .ca-field select:focus {
+          border-color: rgba(15, 33, 71, 0.38);
+          box-shadow:
+            inset 0 2px 9px rgba(15, 33, 71, 0.10),
+            0 0 0 4px rgba(14, 165, 233, 0.14),
+            0 12px 26px rgba(15, 33, 71, 0.10);
+          transform: translateY(-0.5px);
+        }
+
+        .chk {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: ${NAVY};
+          font-weight: 900;
+          font-size: 12.5px;
+          margin-top: 2px;
+        }
+
+        .ca-actions {
+          display: flex;
+          gap: 10px;
+          justify-content: flex-end;
+          padding-top: 6px;
+        }
+        .ca-btn {
+          height: 44px;
+          border-radius: 9999px;
+          font-weight: 900;
+          padding: 0 18px;
+          border: 1px solid ${BORDER};
+          background: #fff;
+          color: ${NAVY};
+          font-size: 13px;
+          box-shadow: 0 10px 18px rgba(15, 33, 71, 0.06);
+          transition: transform 120ms ease, box-shadow 150ms ease;
+        }
+        .ca-btn:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 14px 26px rgba(15, 33, 71, 0.10);
+        }
+        .ca-btn:active {
+          transform: translateY(0px);
+          box-shadow: 0 10px 18px rgba(15, 33, 71, 0.08);
+        }
+        .ca-btn.primary {
+          border: 0;
+          background: linear-gradient(135deg, #0f2147 0%, #0ea5e9 100%);
+          color: #fff;
+          box-shadow: 0 16px 34px rgba(15, 33, 71, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        }
+        .ca-btn.ghost {
+          background: #fff;
+          border: 1px solid ${BORDER};
+        }
+
+        @media (max-width: 1024px) {
+          .ca-form {
+            width: min(980px, 100%);
+          }
+          .ca-grid {
+            grid-template-columns: repeat(2, minmax(160px, 1fr));
+          }
+          .ca-span3 {
+            grid-column: span 2;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .ca-form {
+            width: min(920px, 100%);
+            padding: 10px 10px;
+          }
+          .ca-grid {
+            grid-template-columns: repeat(2, minmax(140px, 1fr));
+            gap: 10px;
+          }
+          .ca-span2,
+          .ca-span3 {
+            grid-column: span 2;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .ca-grid {
+            grid-template-columns: 1fr;
+          }
+          .ca-span2,
+          .ca-span3 {
+            grid-column: span 1;
+          }
+        }
+      `}</style>
+    </form>
   );
 }

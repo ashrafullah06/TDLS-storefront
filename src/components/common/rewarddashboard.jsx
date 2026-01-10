@@ -1,6 +1,7 @@
+// src/components/common/rewarddashboard.jsx
 import React, { useEffect, useState } from 'react';
 
-export default function rewarddashboard({ userId }) {
+export default function RewardDashboard({ userId }) {
   const [points, setPoints] = useState(0);
   const [history, setHistory] = useState([]);
 

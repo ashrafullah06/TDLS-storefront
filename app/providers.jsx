@@ -1,7 +1,7 @@
 // FILE: app/providers.jsx
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useMemo, useRef } from "react";
 import { SessionProvider } from "next-auth/react";
 import { usePathname, useSearchParams } from "next/navigation";
 
@@ -27,7 +27,7 @@ function isAdminPath(pathname) {
   return p === "/admin" || p.startsWith("/admin/");
 }
 
-export default function Providers({ children }) {
+function ProvidersInner({ children }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -163,5 +163,13 @@ export default function Providers({ children }) {
     >
       {children}
     </SessionProvider>
+  );
+}
+
+export default function Providers({ children }) {
+  return (
+    <Suspense fallback={null}>
+      <ProvidersInner>{children}</ProvidersInner>
+    </Suspense>
   );
 }

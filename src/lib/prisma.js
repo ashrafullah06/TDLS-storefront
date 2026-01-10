@@ -1,5 +1,6 @@
 // FILE: src/lib/prisma.js
-import { PrismaClient } from "@prisma/client";
+import "server-only";
+import { PrismaClient } from "@/generated/prisma/app";
 
 /**
  * Hardened Prisma singleton for Next.js (Turbopack/Dev/Prod).

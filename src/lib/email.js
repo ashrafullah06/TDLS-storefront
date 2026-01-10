@@ -255,6 +255,13 @@ export async function sendOtpEmail({
   return sendWithFailover(mail);
 }
 
+/**
+ * Compatibility alias:
+ * Some routes import { sendVerificationEmail } from "@/lib/email".
+ * Keep behavior identical by mapping it to the existing OTP email sender.
+ */
+export const sendVerificationEmail = sendOtpEmail;
+
 export async function sendOrderConfirmation({
   to,
   orderId,

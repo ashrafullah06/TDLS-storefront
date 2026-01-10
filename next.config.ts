@@ -25,36 +25,47 @@ function addSpec(map: Map<string, HostSpec>, spec: HostSpec | null) {
 
 const specs = new Map<string, HostSpec>();
 
-// Safe defaults for your production domains
 addSpec(specs, { protocol: "https", hostname: "www.thednalabstore.com" });
 addSpec(specs, { protocol: "https", hostname: "thednalabstore.com" });
-
-// Cloudflare R2 public media domain
 addSpec(specs, { protocol: "https", hostname: "media.thednalabstore.com" });
-
-// Strapi (prod) domain default — also supports env overrides below
 addSpec(specs, { protocol: "https", hostname: "cms.thednalabstore.com" });
 
-// Strapi host from env (supports both dev + prod)
-const envStrapi =
-  specFromUrl(process.env.NEXT_PUBLIC_STRAPI_URL) ||
-  specFromUrl(process.env.STRAPI_URL) ||
-  null;
+addSpec(
+  specs,
+  specFromUrl(process.env.NEXT_PUBLIC_STRAPI_URL) || specFromUrl(process.env.STRAPI_URL) || null
+);
 
-addSpec(specs, envStrapi);
-
-// Local dev fallbacks (common cases)
 addSpec(specs, { protocol: "http", hostname: "127.0.0.1", port: "1337" });
 addSpec(specs, { protocol: "http", hostname: "localhost", port: "1337" });
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-
-  // Security: avoid disclosing Next.js via header
   poweredByHeader: false,
 
-  // If you use Next/Image for product images from Strapi or R2,
-  // allow those hosts here (supports both dev + prod).
+  // Output File Tracing
+  outputFileTracingRoot: process.cwd(),
+  outputFileTracingExcludes: {
+    "*": [
+      // Avoid Windows user-profile junctions / protected locations.
+      // Do NOT reference "Application Data" (junction). Use AppData instead.
+      "**/AppData/**",
+      "**/Cookies/**",
+      "**/Local Settings/**",
+      "**/NTUSER.DAT*",
+      "**/$RECYCLE.BIN/**",
+      "**/Documents and Settings/**",
+      "**/System Volume Information/**",
+
+      // Add absolute-forward-slash patterns to avoid any Windows glob resolver
+      // accidentally touching the "Application Data" junction while evaluating.
+      "C:/Users/**/AppData/**",
+      "C:/$Recycle.Bin/**",
+      "C:/$RECYCLE.BIN/**",
+      "C:/System Volume Information/**",
+      "C:/Documents and Settings/**",
+    ],
+  },
+
   images: {
     remotePatterns: Array.from(specs.values()).map((s) => ({
       protocol: s.protocol,
@@ -64,12 +75,46 @@ const nextConfig: NextConfig = {
     })),
   },
 
-  // Keep checks ON for safe production builds
-  eslint: {
-    ignoreDuringBuilds: false,
-  },
-  typescript: {
-    ignoreBuildErrors: false,
+  eslint: { ignoreDuringBuilds: false },
+  typescript: { ignoreBuildErrors: false },
+
+  webpack: (config) => {
+    /**
+     * WINDOWS EPERM FIX:
+     * Do NOT merge existing `watchOptions.ignored` (it may contain non-string items).
+     * Provide only valid non-empty string globs so webpack schema validation passes.
+     */
+    const ignoredGlobs: string[] = [
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/.next/**",
+      "**/.vercel/**",
+      "**/.turbo/**",
+
+      // Windows protected junctions / dirs that can throw EPERM when scanned
+      // IMPORTANT: do NOT include "Application Data" here (junction). Use AppData instead.
+      "C:\\\\Users\\\\**\\\\AppData\\\\**",
+      "C:\\\\Users\\\\**\\\\Cookies\\\\**",
+      "C:\\\\Users\\\\**\\\\Local Settings\\\\**",
+      "C:\\\\Users\\\\**\\\\NTUSER.DAT*",
+      "C:\\\\$Recycle.Bin\\\\**",
+      "C:\\\\System Volume Information\\\\**",
+      "C:\\\\Documents and Settings\\\\**",
+
+      // Also include forward-slash absolute patterns (some resolvers normalize this way)
+      "C:/Users/**/AppData/**",
+      "C:/$Recycle.Bin/**",
+      "C:/$RECYCLE.BIN/**",
+      "C:/System Volume Information/**",
+      "C:/Documents and Settings/**",
+    ];
+
+    config.watchOptions = {
+      ...(config.watchOptions || {}),
+      ignored: ignoredGlobs,
+    };
+
+    return config;
   },
 };
 

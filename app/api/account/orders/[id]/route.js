@@ -4,7 +4,7 @@ export const revalidate = 0;
 
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth } from "@/lib/auth";
+import { auth } from "@/lib/auth";
 
 function json(body, status = 200) {
   return new NextResponse(JSON.stringify(body), {
@@ -21,7 +21,8 @@ function isAdmin(roles) {
 
 export async function GET(req, { params }) {
   try {
-    const { roles } = await requireAuth(req);
+    const session = await auth();
+    const roles = session?.user?.roles ?? session?.user?.role ?? null;
     if (!isAdmin(roles)) {
       return json({ ok: false, error: "FORBIDDEN" }, 403);
     }
@@ -58,7 +59,8 @@ export async function GET(req, { params }) {
 
 export async function PATCH(req, { params }) {
   try {
-    const { roles } = await requireAuth(req);
+    const session = await auth();
+    const roles = session?.user?.roles ?? session?.user?.role ?? null;
     if (!isAdmin(roles)) {
       return json({ ok: false, error: "FORBIDDEN" }, 403);
     }

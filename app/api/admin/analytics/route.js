@@ -1,6 +1,6 @@
 // FILE: app/api/admin/analytics/route.js
 import { NextResponse } from "next/server";
-import { PrismaClient, Prisma } from "@prisma/client";
+import { PrismaClient, Prisma } from "@/generated/prisma/app";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

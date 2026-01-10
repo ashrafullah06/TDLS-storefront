@@ -1,5 +1,7 @@
 // my-project/app/api/addresses/default/route.js
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
@@ -14,7 +16,7 @@ export async function POST(req) {
     const { addressId } = await req.json().catch(() => ({}));
     if (!addressId) return NextResponse.json({ ok: false, error: "address_id_required" }, { status: 400 });
 
-    const saved = await prisma.$transaction(async tx => {
+    const saved = await prisma.$transaction(async (tx) => {
       const target = await tx.address.findFirst({ where: { id: addressId, userId, archivedAt: null } });
       if (!target) return null;
       await tx.address.updateMany({ where: { userId, archivedAt: null }, data: { isDefault: false } });

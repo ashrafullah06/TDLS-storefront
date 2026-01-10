@@ -1,16 +1,14 @@
-// app/api/customers/me/route.js
+// FILE: app/api/customers/me/address/default/route.js
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { getServerSession } from "next-auth";
-import authOptions from "@/lib/auth";
+import { auth } from "@/lib/auth";
 
 /**
- * Minimal, safe unification:
- * - If caller is ADMIN and provides ?user_id=... or header x-user-id, read that user.
- * - Otherwise, return the current session user's summary (no override).
- * - Shape preserved: { id, email, phone, tier, points, referral_id }
+ * Returns the user's default address.
+ * - Admin can inspect another user via ?user_id= or x-user-id header (same rule as /api/customers/me).
+ * - Otherwise returns the signed-in user's own default address.
  */
 
 function getRequestedUserId(req) {
@@ -20,53 +18,62 @@ function getRequestedUserId(req) {
 
 function isAdmin(session) {
   if (!session?.user) return false;
-  const role = session.user.role || (Array.isArray(session.user.roles) ? session.user.roles[0] : null);
+  const role =
+    session.user.role ||
+    (Array.isArray(session.user.roles) ? session.user.roles[0] : null);
   return role === "admin" || role === "superadmin";
 }
 
+const DEFAULT_ADDRESS_SELECT = {
+  id: true,
+  line1: true,
+  line2: true,
+  city: true,
+  state: true,
+  postalCode: true,
+  countryIso2: true,
+  phone: true,
+  label: true,
+};
+
 export async function GET(req) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
 
-    // Decide target user
+    // Decide target user (aligned with /api/customers/me)
     let targetUserId = null;
-
     const requested = getRequestedUserId(req);
+
     if (requested && isAdmin(session)) {
-      // Admin may inspect any user via user_id/x-user-id
       targetUserId = requested;
     } else {
-      // Otherwise, must be signed-in and we use session user only
-      if (!session?.user?.id) {
-        // Preserve old behavior: previously 401 when missing user_id;
-        // now we standardize to not exposing anything without a session.
+      const selfId =
+        session?.user?.id || session?.user?.uid || session?.user?.sub || null;
+
+      if (!selfId) {
         return NextResponse.json({ error: "unauthorized" }, { status: 401 });
       }
-      targetUserId = session.user.id;
+      targetUserId = selfId;
     }
 
     const user = await prisma.user.findUnique({
       where: { id: targetUserId },
-      include: { loyaltyAccount: true },
+      select: {
+        id: true,
+        defaultAddress: { select: DEFAULT_ADDRESS_SELECT },
+      },
     });
 
     if (!user) {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
 
-    // Preserve original payload keys (no placeholders)
-    const payload = {
-      id: user.id,
-      email: user.email,
-      phone: user.phone,
-      tier: user.loyaltyAccount?.tier || null,
-      points: user.loyaltyAccount?.currentPoints ?? 0,
-      referral_id: null, // keep as-is; wire real value when available
-    };
-
-    return NextResponse.json(payload, { status: 200 });
+    return NextResponse.json(
+      { defaultAddress: user.defaultAddress || null },
+      { status: 200 }
+    );
   } catch (err) {
-    console.error("[GET /api/customers/me] ", err);
+    console.error("[GET /api/customers/me/address/default] ", err);
     return NextResponse.json({ error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }

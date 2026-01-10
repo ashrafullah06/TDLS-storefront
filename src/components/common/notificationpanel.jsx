@@ -1,6 +1,7 @@
+//src/components/common/notificationpanel.jsx
 import React, { useEffect, useState } from 'react';
 
-export default function notificationpanel({ userId }) {
+export default function NotificationPanel({ userId }) {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {

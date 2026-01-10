@@ -46,17 +46,15 @@ function detectIdentifier(raw) {
   return { type: null };
 }
 
-function requireEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is required`);
+function getOtpSecret() {
+  const v = process.env.OTP_SECRET;
+  if (!v) throw new Error("OTP_SECRET is required");
   return v;
 }
 
-const OTP_SECRET = requireEnv("OTP_SECRET");
-
 function hmacFor(userId, purpose, code) {
   return crypto
-    .createHmac("sha256", OTP_SECRET)
+    .createHmac("sha256", getOtpSecret())
     .update(`${userId}:${purpose}:${code}`)
     .digest("hex");
 }

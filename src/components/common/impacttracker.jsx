@@ -144,6 +144,37 @@ function Tooltip({ text, children }) {
   );
 }
 
+function MetricCard({ label, icon, unit, val, inView }) {
+  const animatedVal = useAnimatedNumber(val, 0, inView);
+
+  return (
+    <div
+      className={`flex flex-col items-center bg-white/90 rounded-xl border border-green-100 shadow-sm px-3 py-4 transition-all group hover:scale-105 focus-within:scale-105 outline-none`}
+      tabIndex={0}
+      aria-label={label}
+    >
+      <img
+        src={icon}
+        alt={label}
+        className="h-10 w-10 mb-2 object-contain"
+        loading="lazy"
+        style={{ filter: "drop-shadow(0 2px 6px #e5fbe5)" }}
+      />
+      <span className="font-black text-2xl md:text-3xl text-green-900 mb-0.5">
+        {animatedVal.toLocaleString()}
+        {unit && (
+          <span className="font-bold text-green-700 text-base ml-1">
+            {unit}
+          </span>
+        )}
+      </span>
+      <span className="text-xs md:text-sm font-semibold text-green-700 text-center leading-tight">
+        {label}
+      </span>
+    </div>
+  );
+}
+
 export default function ImpactTracker({
   impact: impactFromProps = null,
   apiBase = "",
@@ -198,14 +229,13 @@ export default function ImpactTracker({
           impactKeys.length
         )} gap-5 md:gap-7 lg:gap-10 justify-center items-center`}
       >
-        {impactKeys.map((key, idx) => {
+        {impactKeys.map((key) => {
           const strapiVal =
             impact && typeof impact[key] === "number" && impact[key] > 0
               ? impact[key]
               : null;
           const fallback = HARDCODED_METRICS[key] || {};
           const val = strapiVal !== null ? strapiVal : fallback.value;
-          const animatedVal = useAnimatedNumber(val, 0, inView);
 
           // Strapi tooltip support: expects impact[`${key}_tooltip`] (or fallback)
           const strapiTooltip =
@@ -225,30 +255,13 @@ export default function ImpactTracker({
 
           return (
             <Tooltip text={tooltip} key={key}>
-              <div
-                className={`flex flex-col items-center bg-white/90 rounded-xl border border-green-100 shadow-sm px-3 py-4 transition-all group hover:scale-105 focus-within:scale-105 outline-none`}
-                tabIndex={0}
-                aria-label={label}
-              >
-                <img
-                  src={icon}
-                  alt={label}
-                  className="h-10 w-10 mb-2 object-contain"
-                  loading="lazy"
-                  style={{ filter: "drop-shadow(0 2px 6px #e5fbe5)" }}
-                />
-                <span className="font-black text-2xl md:text-3xl text-green-900 mb-0.5">
-                  {animatedVal.toLocaleString()}
-                  {unit && (
-                    <span className="font-bold text-green-700 text-base ml-1">
-                      {unit}
-                    </span>
-                  )}
-                </span>
-                <span className="text-xs md:text-sm font-semibold text-green-700 text-center leading-tight">
-                  {label}
-                </span>
-              </div>
+              <MetricCard
+                label={label}
+                icon={icon}
+                unit={unit}
+                val={val}
+                inView={inView}
+              />
             </Tooltip>
           );
         })}

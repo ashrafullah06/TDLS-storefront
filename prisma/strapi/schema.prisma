@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../../src/generated/prisma/strapi"
 }
 
 datasource db {
@@ -1688,23 +1689,26 @@ model upload_folders_parent_links {
 }
 
 model gateway_fee_schedules {
-  id                                                           Int          @id @default(autoincrement())
-  provider                                                     String?      @db.VarChar(255)
-  pct                                                          Decimal?     @db.Decimal(10, 2)
-  fixed                                                        Decimal?     @db.Decimal(10, 2)
-  min_fee                                                      Decimal?     @db.Decimal(10, 2)
-  cap_fee                                                      Decimal?     @db.Decimal(10, 2)
-  effective_from                                               DateTime?    @db.Timestamp(6)
-  effective_to                                                 DateTime?    @db.Timestamp(6)
-  notes                                                        Json?
-  created_at                                                   DateTime?    @db.Timestamp(6)
-  updated_at                                                   DateTime?    @db.Timestamp(6)
-  published_at                                                 DateTime?    @db.Timestamp(6)
-  created_by_id                                                Int?
-  updated_by_id                                                Int?
-  admin_users_gateway_fee_schedules_created_by_idToadmin_users admin_users? @relation("gateway_fee_schedules_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "gateway_fee_schedules_created_by_id_fk")
-  admin_users_gateway_fee_schedules_updated_by_idToadmin_users admin_users? @relation("gateway_fee_schedules_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "gateway_fee_schedules_updated_by_id_fk")
+  id             Int       @id @default(autoincrement())
+  provider       String?   @db.VarChar(255)
+  pct            Decimal?  @db.Decimal(10, 2)
+  fixed          Decimal?  @db.Decimal(10, 2)
+  min_fee        Decimal?  @db.Decimal(10, 2)
+  cap_fee        Decimal?  @db.Decimal(10, 2)
+  effective_from DateTime? @db.Timestamp(6)
+  effective_to   DateTime? @db.Timestamp(6)
+  notes          Json?
+  created_at     DateTime? @db.Timestamp(6)
+  updated_at     DateTime? @db.Timestamp(6)
+  published_at   DateTime? @db.Timestamp(6)
+  created_by_id  Int?
+  updated_by_id  Int?
 
+  // FIX: relation must be on ONE line (Prisma schema parser requirement)
+  admin_users_gateway_fee_schedules_created_by_idToadmin_users admin_users? @relation("gateway_fee_schedules_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction)
+  admin_users_gateway_fee_schedules_updated_by_idToadmin_users admin_users? @relation("gateway_fee_schedules_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction)
+
+  // keep your existing indexes exactly as-is
   @@index([created_by_id], map: "gateway_fee_schedules_created_by_id_fk")
   @@index([updated_by_id], map: "gateway_fee_schedules_updated_by_id_fk")
 }
@@ -1722,11 +1726,11 @@ model overheads {
   published_at                                     DateTime?    @db.Timestamp(6)
   created_by_id                                    Int?
   updated_by_id                                    Int?
-  admin_users_overheads_created_by_idToadmin_users admin_users? @relation("overheads_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "overheads_created_by_id_fk")
-  admin_users_overheads_updated_by_idToadmin_users admin_users? @relation("overheads_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "overheads_updated_by_id_fk")
+  admin_users_overheads_created_by_idToadmin_users admin_users? @relation("overheads_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "overheads_created_by_id_fk__admin_users")
+  admin_users_overheads_updated_by_idToadmin_users admin_users? @relation("overheads_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "overheads_updated_by_id_fk__admin_users")
 
-  @@index([created_by_id], map: "overheads_created_by_id_fk")
-  @@index([updated_by_id], map: "overheads_updated_by_id_fk")
+  @@index([created_by_id], map: "overheads_created_by_id_fk__admin_users__idx")
+  @@index([updated_by_id], map: "overheads_updated_by_id_fk__admin_users__idx")
 }
 
 model promobar_configs {
@@ -1746,11 +1750,11 @@ model promobar_configs {
   updated_by_id                                           Int?
   starts_at                                               DateTime?    @db.Timestamp(6)
   ends_at                                                 DateTime?    @db.Timestamp(6)
-  admin_users_promobar_configs_created_by_idToadmin_users admin_users? @relation("promobar_configs_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "promobar_configs_created_by_id_fk")
-  admin_users_promobar_configs_updated_by_idToadmin_users admin_users? @relation("promobar_configs_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "promobar_configs_updated_by_id_fk")
+  admin_users_promobar_configs_created_by_idToadmin_users admin_users? @relation("promobar_configs_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "promobar_configs_created_by_id_fk__admin_users")
+  admin_users_promobar_configs_updated_by_idToadmin_users admin_users? @relation("promobar_configs_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "promobar_configs_updated_by_id_fk__admin_users")
 
-  @@index([created_by_id], map: "promobar_configs_created_by_id_fk")
-  @@index([updated_by_id], map: "promobar_configs_updated_by_id_fk")
+  @@index([created_by_id], map: "promobar_configs_created_by_id_fk__admin_users__idx")
+  @@index([updated_by_id], map: "promobar_configs_updated_by_id_fk__admin_users__idx")
 }
 
 model promobar_messages {
@@ -1763,11 +1767,11 @@ model promobar_messages {
   published_at                                             DateTime?    @db.Timestamp(6)
   created_by_id                                            Int?
   updated_by_id                                            Int?
-  admin_users_promobar_messages_created_by_idToadmin_users admin_users? @relation("promobar_messages_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "promobar_messages_created_by_id_fk")
-  admin_users_promobar_messages_updated_by_idToadmin_users admin_users? @relation("promobar_messages_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "promobar_messages_updated_by_id_fk")
+  admin_users_promobar_messages_created_by_idToadmin_users admin_users? @relation("promobar_messages_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "promobar_messages_created_by_id_fk__admin_users")
+  admin_users_promobar_messages_updated_by_idToadmin_users admin_users? @relation("promobar_messages_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "promobar_messages_updated_by_id_fk__admin_users")
 
-  @@index([created_by_id], map: "promobar_messages_created_by_id_fk")
-  @@index([updated_by_id], map: "promobar_messages_updated_by_id_fk")
+  @@index([created_by_id], map: "promobar_messages_created_by_id_fk__admin_users__idx")
+  @@index([updated_by_id], map: "promobar_messages_updated_by_id_fk__admin_users__idx")
 }
 
 model sub_categories {
@@ -1781,12 +1785,12 @@ model sub_categories {
   published_at                                          DateTime?                       @db.Timestamp(6)
   created_by_id                                         Int?
   updated_by_id                                         Int?
-  admin_users_sub_categories_created_by_idToadmin_users admin_users?                    @relation("sub_categories_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "sub_categories_created_by_id_fk")
-  admin_users_sub_categories_updated_by_idToadmin_users admin_users?                    @relation("sub_categories_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "sub_categories_updated_by_id_fk")
+  admin_users_sub_categories_created_by_idToadmin_users admin_users?                    @relation("sub_categories_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "sub_categories_created_by_id_fk__admin_users")
+  admin_users_sub_categories_updated_by_idToadmin_users admin_users?                    @relation("sub_categories_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "sub_categories_updated_by_id_fk__admin_users")
   sub_categories_products_links                         sub_categories_products_links[]
 
-  @@index([created_by_id], map: "sub_categories_created_by_id_fk")
-  @@index([updated_by_id], map: "sub_categories_updated_by_id_fk")
+  @@index([created_by_id], map: "sub_categories_created_by_id_fk__admin_users__idx")
+  @@index([updated_by_id], map: "sub_categories_updated_by_id_fk__admin_users__idx")
 }
 
 model sub_categories_products_links {
@@ -1795,12 +1799,12 @@ model sub_categories_products_links {
   product_id         Int?
   product_order      Float?
   sub_category_order Float?
-  sub_categories     sub_categories? @relation(fields: [sub_category_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sub_categories_products_links_fk")
-  products           products?       @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sub_categories_products_links_inv_fk")
+  sub_categories     sub_categories? @relation(fields: [sub_category_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sub_categories_products_links_sub_category_fk")
+  products           products?       @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sub_categories_products_links_product_fk")
 
   @@unique([sub_category_id, product_id], map: "sub_categories_products_links_unique")
-  @@index([sub_category_id], map: "sub_categories_products_links_fk")
-  @@index([product_id], map: "sub_categories_products_links_inv_fk")
+  @@index([sub_category_id], map: "sub_categories_products_links_sub_category_fk__idx")
+  @@index([product_id], map: "sub_categories_products_links_product_fk__idx")
   @@index([product_order], map: "sub_categories_products_links_order_fk")
   @@index([sub_category_order], map: "sub_categories_products_links_order_inv_fk")
 }
@@ -1816,12 +1820,12 @@ model super_categories {
   published_at                                            DateTime?                         @db.Timestamp(6)
   created_by_id                                           Int?
   updated_by_id                                           Int?
-  admin_users_super_categories_created_by_idToadmin_users admin_users?                      @relation("super_categories_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "super_categories_created_by_id_fk")
-  admin_users_super_categories_updated_by_idToadmin_users admin_users?                      @relation("super_categories_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "super_categories_updated_by_id_fk")
+  admin_users_super_categories_created_by_idToadmin_users admin_users?                      @relation("super_categories_created_by_idToadmin_users", fields: [created_by_id], references: [id], onUpdate: NoAction, map: "super_categories_created_by_id_fk__admin_users")
+  admin_users_super_categories_updated_by_idToadmin_users admin_users?                      @relation("super_categories_updated_by_idToadmin_users", fields: [updated_by_id], references: [id], onUpdate: NoAction, map: "super_categories_updated_by_id_fk__admin_users")
   super_categories_products_links                         super_categories_products_links[]
 
-  @@index([created_by_id], map: "super_categories_created_by_id_fk")
-  @@index([updated_by_id], map: "super_categories_updated_by_id_fk")
+  @@index([created_by_id], map: "super_categories_created_by_id_fk__admin_users__idx")
+  @@index([updated_by_id], map: "super_categories_updated_by_id_fk__admin_users__idx")
 }
 
 model super_categories_products_links {
@@ -1830,12 +1834,12 @@ model super_categories_products_links {
   product_id           Int?
   product_order        Float?
   super_category_order Float?
-  super_categories     super_categories? @relation(fields: [super_category_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "super_categories_products_links_fk")
-  products             products?         @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "super_categories_products_links_inv_fk")
+  super_categories     super_categories? @relation(fields: [super_category_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "super_categories_products_links_super_category_fk")
+  products             products?         @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "super_categories_products_links_product_fk")
 
   @@unique([super_category_id, product_id], map: "super_categories_products_links_unique")
-  @@index([super_category_id], map: "super_categories_products_links_fk")
-  @@index([product_id], map: "super_categories_products_links_inv_fk")
+  @@index([super_category_id], map: "super_categories_products_links_super_category_fk__idx")
+  @@index([product_id], map: "super_categories_products_links_product_fk__idx")
   @@index([product_order], map: "super_categories_products_links_order_fk")
   @@index([super_category_order], map: "super_categories_products_links_order_inv_fk")
 }

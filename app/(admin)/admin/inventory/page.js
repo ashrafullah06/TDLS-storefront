@@ -1,3 +1,5 @@
+//app/(admin)/admin/inventory/page.js
+// FILE: app/(admin)/admin/inventory/page.js
 export const dynamic = "force-dynamic";
 
 import { auth } from "@/lib/auth";
@@ -39,7 +41,8 @@ function n(v) {
 
 /* ───────────────── server action: stock movement ───────────────── */
 
-export async function applyStockMovement(formData) {
+// NOTE: must NOT be exported from a Next.js page module (causes build/type error)
+async function applyStockMovement(formData) {
   "use server";
 
   const session = await auth();
@@ -483,9 +486,7 @@ export default async function InventoryPage({ searchParams }) {
                       </div>
                     </td>
                     <td className="px-3 py-2 align-top text-neutral-800">
-                      {r.sku || (
-                        <span className="text-neutral-400">—</span>
-                      )}
+                      {r.sku || <span className="text-neutral-400">—</span>}
                       {r.barcode && (
                         <div className="text-[10px] text-neutral-500">
                           {r.barcode}
@@ -493,14 +494,10 @@ export default async function InventoryPage({ searchParams }) {
                       )}
                     </td>
                     <td className="px-3 py-2 align-top">
-                      {r.colorName || (
-                        <span className="text-neutral-400">—</span>
-                      )}
+                      {r.colorName || <span className="text-neutral-400">—</span>}
                     </td>
                     <td className="px-3 py-2 align-top">
-                      {r.sizeName || (
-                        <span className="text-neutral-400">—</span>
-                      )}
+                      {r.sizeName || <span className="text-neutral-400">—</span>}
                     </td>
                     <td className="px-3 py-2 align-top text-right tabular-nums">
                       {r.onHand}

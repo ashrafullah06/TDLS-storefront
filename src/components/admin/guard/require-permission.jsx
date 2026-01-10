@@ -201,10 +201,10 @@ export default function RequirePermission({
     return n.map(normalizePerm).filter(Boolean);
   }, [need]);
 
+  const u = useMemo(() => normalizeUserInput(user), [user]);
+
   // If nothing required, pass-through.
   if (!needs.length) return children;
-
-  const u = useMemo(() => normalizeUserInput(user), [user]);
 
   // If user not ready, DO NOT deny (denial often triggers chains that feel like logout).
   if (!u) {

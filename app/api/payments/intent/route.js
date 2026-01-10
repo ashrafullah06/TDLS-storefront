@@ -1,7 +1,10 @@
 // app/api/payments/intent/route.js
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { stripe } from "@/lib/stripe"; // export new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' })
-import { prisma } from "@/lib/db";     // your Prisma client
+import Stripe from "stripe";
+import prisma from "@/lib/prisma";
 
 export async function POST(req) {
   try {
@@ -26,6 +29,10 @@ export async function POST(req) {
       if (!process.env.STRIPE_SECRET_KEY) {
         return NextResponse.json({ ok: false, error: "STRIPE_NOT_CONFIGURED" }, { status: 500 });
       }
+
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+        apiVersion: "2024-06-20",
+      });
 
       // Amount in the smallest currency unit
       const amount = Math.round(Number(order.grandTotal) * 100);

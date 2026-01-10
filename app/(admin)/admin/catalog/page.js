@@ -171,7 +171,7 @@ function NavyCard({ title, sub, right, children, className = "" }) {
       ].join(" ")}
       style={{ ["--navy"]: NAVY }}
     >
-      {(title || sub || right) ? (
+      {title || sub || right ? (
         <header className="border-b border-white/10 px-6 py-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
@@ -199,11 +199,7 @@ function NavyBadge({ tone = "neutral", children }) {
       ? "border-sky-300/30 bg-sky-400/10 text-sky-100"
       : "border-white/15 bg-white/10 text-white";
 
-  return (
-    <span className={["inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold", cls].join(" ")}>
-      {children}
-    </span>
-  );
+  return <span className={["inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold", cls].join(" ")}>{children}</span>;
 }
 
 function NavyButton({ children, onClick, disabled, className = "", title }) {
@@ -262,9 +258,7 @@ function InlineStatus({ tone = "neutral", text }) {
 }
 
 function Skeleton({ className = "" }) {
-  return (
-    <div className={["animate-pulse rounded-2xl bg-gradient-to-r from-white/10 via-white/5 to-white/10", className].join(" ")} />
-  );
+  return <div className={["animate-pulse rounded-2xl bg-gradient-to-r from-white/10 via-white/5 to-white/10", className].join(" ")} />;
 }
 
 /* -------------------- Animated Tab Strip (distinctive + premium) -------------------- */
@@ -394,7 +388,7 @@ function buildInitialState(searchParams) {
 
 const FILTER_KEYS = new Set(["q", "status", "stock", "bridge", "media", "lowThreshold", "sort", "page", "pageSize", "view", "tab"]);
 
-export default function CatalogPage() {
+function CatalogPageInner() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -845,9 +839,7 @@ export default function CatalogPage() {
                   <div className="h-10 w-px bg-white/15" />
                 </div>
               ) : null}
-              {filters.tab === "browse" ? (
-                <TabStrip value={filters.view} onChange={(v) => onFilter({ view: v })} items={VIEW_ITEMS} />
-              ) : null}
+              {filters.tab === "browse" ? <TabStrip value={filters.view} onChange={(v) => onFilter({ view: v })} items={VIEW_ITEMS} /> : null}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1208,10 +1200,7 @@ export default function CatalogPage() {
                         <SoftNavyButton disabled={filters.page <= 1 || list.loading} onClick={() => onFilter({ page: Math.max(1, filters.page - 1) })}>
                           Prev
                         </SoftNavyButton>
-                        <SoftNavyButton
-                          disabled={filters.page >= totalPages || list.loading}
-                          onClick={() => onFilter({ page: clamp(filters.page + 1, 1, totalPages) })}
-                        >
+                        <SoftNavyButton disabled={filters.page >= totalPages || list.loading} onClick={() => onFilter({ page: clamp(filters.page + 1, 1, totalPages) })}>
                           Next
                         </SoftNavyButton>
                       </div>
@@ -1362,11 +1351,7 @@ export default function CatalogPage() {
                                   {p?.status ? <NavyBadge tone={statusTone(p.status)}>{p.status}</NavyBadge> : null}
                                   {!hasBridge ? <NavyBadge tone="warn">No app bridge</NavyBadge> : <NavyBadge tone="ok">Bridged</NavyBadge>}
                                   <NavyBadge tone={availTone}>
-                                    {hasAvail
-                                      ? Number(totalAvail ?? 0) > 0
-                                        ? `Available: ${Number(totalAvail ?? 0)}`
-                                        : "Out of stock"
-                                      : "Availability: —"}
+                                    {hasAvail ? (Number(totalAvail ?? 0) > 0 ? `Available: ${Number(totalAvail ?? 0)}` : "Out of stock") : "Availability: —"}
                                   </NavyBadge>
                                   {priceLabel ? <NavyBadge tone="neutral">{priceLabel}</NavyBadge> : null}
                                 </div>
@@ -1422,15 +1407,11 @@ export default function CatalogPage() {
                                         {thumb ? (
                                           <img src={thumb} alt={safeImgAlt(p?.title, p?.slug)} className="h-full w-full object-cover" loading="lazy" />
                                         ) : (
-                                          <div className="flex h-full w-full items-center justify-center text-[10px] font-extrabold text-neutral-500">
-                                            No media
-                                          </div>
+                                          <div className="flex h-full w-full items-center justify-center text-[10px] font-extrabold text-neutral-500">No media</div>
                                         )}
                                       </div>
                                       <div className="min-w-0">
-                                        <div className="truncate text-sm font-extrabold text-neutral-900">
-                                          {p?.title || p?.slug || `#${p?.id ?? "—"}`}
-                                        </div>
+                                        <div className="truncate text-sm font-extrabold text-neutral-900">{p?.title || p?.slug || `#${p?.id ?? "—"}`}</div>
                                         <div className="truncate text-xs text-neutral-600">
                                           ID: {p?.id ?? "—"}
                                           {p?.slug ? ` • ${p.slug}` : ""}
@@ -1445,9 +1426,7 @@ export default function CatalogPage() {
                                         {p.status}
                                       </span>
                                     ) : (
-                                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold text-neutral-700">
-                                        —
-                                      </span>
+                                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold text-neutral-700">—</span>
                                     )}
                                   </td>
 
@@ -1473,9 +1452,7 @@ export default function CatalogPage() {
                                         <span className="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-extrabold text-red-700">0</span>
                                       )
                                     ) : (
-                                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold text-neutral-700">
-                                        —
-                                      </span>
+                                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold text-neutral-700">—</span>
                                     )}
                                   </td>
 
@@ -1485,9 +1462,7 @@ export default function CatalogPage() {
                                         {priceLabel}
                                       </span>
                                     ) : (
-                                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold text-neutral-700">
-                                        —
-                                      </span>
+                                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold text-neutral-700">—</span>
                                     )}
                                   </td>
 
@@ -1706,9 +1681,7 @@ export default function CatalogPage() {
                               />
                             </div>
                           ) : (
-                            <div className="flex h-72 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-sm font-extrabold text-white/70">
-                              No media
-                            </div>
+                            <div className="flex h-72 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-sm font-extrabold text-white/70">No media</div>
                           )}
 
                           <div className="mt-4 grid grid-cols-4 gap-2">
@@ -1752,9 +1725,7 @@ export default function CatalogPage() {
                                 <NavyBadge tone={Number(selected.product.availability.totalAvailable ?? 0) > 0 ? "ok" : "bad"}>
                                   Total available: {Number(selected.product.availability.totalAvailable ?? 0)}
                                 </NavyBadge>
-                                {selected.warehouseMode ? (
-                                  <NavyBadge tone="info">Computed: {Number(selected.product.availability.computedTotalAvailable ?? 0)}</NavyBadge>
-                                ) : null}
+                                {selected.warehouseMode ? <NavyBadge tone="info">Computed: {Number(selected.product.availability.computedTotalAvailable ?? 0)}</NavyBadge> : null}
                               </>
                             ) : (
                               <NavyBadge tone="neutral">—</NavyBadge>
@@ -1845,9 +1816,7 @@ export default function CatalogPage() {
                                               {mapped ? (
                                                 <span className="font-extrabold text-neutral-900">{app?.sku || "—"}</span>
                                               ) : (
-                                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-extrabold text-amber-800">
-                                                  Unmapped
-                                                </span>
+                                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-extrabold text-amber-800">Unmapped</span>
                                               )}
                                             </td>
                                             <td className="px-3 py-2 text-xs">
@@ -1918,9 +1887,7 @@ export default function CatalogPage() {
                             ))}
 
                             {!selected.loading && Array.isArray(selected.variantsMatrix) && selected.variantsMatrix.length === 0 ? (
-                              <div className="rounded-3xl border border-white/10 bg-white/10 p-5 text-sm font-extrabold text-white/80">
-                                No variants found in Strapi for this product.
-                              </div>
+                              <div className="rounded-3xl border border-white/10 bg-white/10 p-5 text-sm font-extrabold text-white/80">No variants found in Strapi for this product.</div>
                             ) : null}
                           </div>
                         </div>
@@ -1972,12 +1939,8 @@ export default function CatalogPage() {
                   {selected.product?.short_description || selected.product?.description ? (
                     <div className="mt-5 rounded-3xl border border-white/10 bg-white/10 p-5">
                       <div className="text-sm font-extrabold">Description</div>
-                      {selected.product?.short_description ? (
-                        <p className="mt-3 whitespace-pre-wrap text-sm font-semibold text-white/85">{selected.product.short_description}</p>
-                      ) : null}
-                      {selected.product?.description ? (
-                        <p className="mt-3 whitespace-pre-wrap text-sm font-semibold text-white/80">{selected.product.description}</p>
-                      ) : null}
+                      {selected.product?.short_description ? <p className="mt-3 whitespace-pre-wrap text-sm font-semibold text-white/85">{selected.product.short_description}</p> : null}
+                      {selected.product?.description ? <p className="mt-3 whitespace-pre-wrap text-sm font-semibold text-white/80">{selected.product.description}</p> : null}
                     </div>
                   ) : null}
                 </div>
@@ -2008,5 +1971,13 @@ export default function CatalogPage() {
         ) : null}
       </div>
     </div>
+  );
+}
+
+export default function CatalogPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <CatalogPageInner />
+    </React.Suspense>
   );
 }

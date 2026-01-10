@@ -1,3 +1,4 @@
+//app/(admin)/admin/finance/payments/page.js
 import { getPrisma } from "@/lib/_dynamic_prisma";
 import { M } from "@/lib/_mapping";
 
@@ -7,7 +8,7 @@ export default async function PaymentsPage() {
 
   const rows = await prisma[PAY.model].findMany({
     take: 100,
-    orderBy: { [PAY.createdAt]: "desc" }
+    orderBy: { [(PAY.createdAt || "createdAt")]: "desc" }
   });
 
   return (

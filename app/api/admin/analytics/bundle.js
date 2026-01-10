@@ -32,16 +32,67 @@ function toUrl(reqOrUrl) {
   return new URL(reqOrUrl.url);
 }
 
+/**
+ * IMPORTANT:
+ * Next/Webpack warns on `import(expr)` where expr is variable.
+ * To keep behavior identical but eliminate the warning, we pre-register
+ * all possible import paths as static importers (literal strings).
+ */
+const IMPORTERS = {
+  "@/src/lib/analytics/timeseries": () => import("@/src/lib/analytics/timeseries"),
+  "@/lib/analytics/timeseries": () => import("@/lib/analytics/timeseries"),
+
+  "@/src/lib/analytics/overview": () => import("@/src/lib/analytics/overview"),
+  "@/lib/analytics/overview": () => import("@/lib/analytics/overview"),
+
+  "@/src/lib/analytics/orders": () => import("@/src/lib/analytics/orders"),
+  "@/lib/analytics/orders": () => import("@/lib/analytics/orders"),
+
+  "@/lib/analytics/products": () => import("@/lib/analytics/products"),
+  "@/src/lib/analytics/products": () => import("@/src/lib/analytics/products"),
+
+  "@/lib/analytics/customers": () => import("@/lib/analytics/customers"),
+  "@/src/lib/analytics/customers": () => import("@/src/lib/analytics/customers"),
+
+  "@/src/lib/analytics/otp": () => import("@/src/lib/analytics/otp"),
+  "@/lib/analytics/otp": () => import("@/lib/analytics/otp"),
+
+  "@/src/lib/analytics/returns": () => import("@/src/lib/analytics/returns"),
+  "@/lib/analytics/returns": () => import("@/lib/analytics/returns"),
+
+  "@/lib/analytics/staff": () => import("@/lib/analytics/staff"),
+  "@/src/lib/analytics/staff": () => import("@/src/lib/analytics/staff"),
+
+  "@/lib/analytics/inventory": () => import("@/lib/analytics/inventory"),
+  "@/src/lib/analytics/inventory": () => import("@/src/lib/analytics/inventory"),
+
+  "@/src/lib/analytics/projections": () => import("@/src/lib/analytics/projections"),
+  "@/lib/analytics/projections": () => import("@/lib/analytics/projections"),
+
+  "@/lib/analytics/profit": () => import("@/lib/analytics/profit"),
+  "@/src/lib/analytics/profit": () => import("@/src/lib/analytics/profit"),
+
+  "@/src/lib/analytics/pnl": () => import("@/src/lib/analytics/pnl"),
+  "@/lib/analytics/pnl": () => import("@/lib/analytics/pnl"),
+};
+
 async function tryImport(paths) {
   let lastErr = null;
+
   for (const p of paths) {
+    const importer = IMPORTERS[p];
+    if (!importer) {
+      lastErr = new Error(`UNKNOWN_IMPORT_PATH: ${p}`);
+      continue;
+    }
     try {
       // eslint-disable-next-line no-await-in-loop
-      return await import(p);
+      return await importer();
     } catch (e) {
       lastErr = e;
     }
   }
+
   throw lastErr || new Error("IMPORT_FAILED");
 }
 
@@ -167,8 +218,12 @@ async function detectDbCoverage(prismaClient) {
   };
 
   const tables = {
-    OrderEvent: await resolveTable(prismaClient, ["OrderEvent", "order_events"]).catch(() => null),
-    AuditLog: await resolveTable(prismaClient, ["AuditLog", "audit_logs"]).catch(() => null),
+    OrderEvent: await resolveTable(prismaClient, ["OrderEvent", "order_events"]).catch(
+      () => null
+    ),
+    AuditLog: await resolveTable(prismaClient, ["AuditLog", "audit_logs"]).catch(
+      () => null
+    ),
     Wishlist: await resolveTable(prismaClient, ["WishlistItem", "wishlist_items", "wishlist"]).catch(
       () => null
     ),
@@ -310,7 +365,12 @@ async function computeModule(modDef, ctx, { strict = false } = {}) {
   try {
     mod = await tryImport(modDef.importPaths);
   } catch (e) {
-    const out = { ok: false, error: "IMPORT_FAILED", module: modDef.key, message: String(e?.message || e) };
+    const out = {
+      ok: false,
+      error: "IMPORT_FAILED",
+      module: modDef.key,
+      message: String(e?.message || e),
+    };
     out.ms = Date.now() - t0;
     if (strict) throw Object.assign(new Error(out.message), { meta: out });
     return out;

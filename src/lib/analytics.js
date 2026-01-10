@@ -1,4 +1,4 @@
-//my-project\src\lib\analytics.js
+// FILE: my-project/src/lib/analytics.js
 import { getPrisma } from "@/lib/_dynamic_prisma";
 import { M } from "@/lib/_mapping";
 
@@ -11,27 +11,30 @@ export async function pnl({ from, to } = {}) {
 
   const whereCreated = {};
   if (from) whereCreated[ORD.createdAt] = { gte: from };
-  if (to) whereCreated[ORD.createdAt] = { ...(whereCreated[ORD.createdAt]||{}), lte: to };
+  if (to) whereCreated[ORD.createdAt] = { ...(whereCreated[ORD.createdAt] || {}), lte: to };
+
+  const itemsKey = ORD.items || "items";
 
   const orders = await prisma[ORD.model].findMany({
     where: whereCreated,
-    include: { items: true }
+    include: { [itemsKey]: true },
   });
 
-  let revenue = 0, cogs = 0;
+  let revenue = 0,
+    cogs = 0;
 
   for (const o of orders) {
     // Prefer captured/paid payments, fallback to order total
     if (prisma[PAY.model]) {
       const pays = await prisma[PAY.model].findMany({
-        where: { [PAY.orderId]: o.id, [PAY.status]: { in: ["captured", "paid", "succeeded"] } }
+        where: { [PAY.orderId]: o.id, [PAY.status]: { in: ["captured", "paid", "succeeded"] } },
       });
       revenue += pays.reduce((sum, p) => sum + Number(p[PAY.amount] || 0), 0);
     } else {
       revenue += Number(o[ORD.total] || 0);
     }
 
-    const items = Array.isArray(o.items) ? o.items : [];
+    const items = Array.isArray(o[itemsKey]) ? o[itemsKey] : [];
     for (const it of items) {
       const qty = Number(it[OI.qty] || it.quantity || 0);
       const cost = Number(it[OI.cost] ?? 0);

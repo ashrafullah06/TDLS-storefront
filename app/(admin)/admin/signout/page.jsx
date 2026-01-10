@@ -2,14 +2,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function AdminSignoutPage() {
   const router = useRouter();
-  const sp = useSearchParams();
-
-  const redirectRaw = sp?.get("redirect") || "/admin/login";
-  const redirectTo = redirectRaw.startsWith("/admin") ? redirectRaw : "/admin/login";
 
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -19,6 +15,15 @@ export default function AdminSignoutPage() {
   const doLogout = useCallback(async () => {
     setBusy(true);
     setError("");
+
+    let redirectTo = "/admin/login";
+    try {
+      const sp = new URLSearchParams(window.location.search || "");
+      const redirectRaw = sp.get("redirect") || "/admin/login";
+      redirectTo = redirectRaw.startsWith("/admin") ? redirectRaw : "/admin/login";
+    } catch {
+      redirectTo = "/admin/login";
+    }
 
     try {
       // IMPORTANT: credentials: "include" ensures admin cookies are sent.
@@ -38,10 +43,10 @@ export default function AdminSignoutPage() {
       router.replace(redirectTo);
       // In App Router, refresh helps ensure any cached admin session UI is invalidated.
       try {
-        router.refresh?.();
+        if (typeof router.refresh === "function") router.refresh();
       } catch {}
     }
-  }, [router, redirectTo]);
+  }, [router]);
 
   useEffect(() => {
     if (didRunRef.current) return;

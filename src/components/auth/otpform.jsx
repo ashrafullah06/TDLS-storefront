@@ -383,7 +383,6 @@ function takeForceNewOnce(key) {
   }
 }
 
-
 /**
  * Admin session stabilization:
  * Prevent "verified → redirect → forbidden" race by confirming /api/admin/session sees the new cookie.
@@ -431,7 +430,6 @@ function deriveTtlSecondsFromResponse(json, maxSeconds) {
   return clampTtl(j.ttlSeconds, maxSeconds);
 }
 
-
 /**
  * Some deployments send OTP from the previous step (e.g., login form) and then route to this page.
  * In that case, an auto-bootstrap request from this page may be rejected as "already issued / still active".
@@ -472,7 +470,6 @@ function isAlreadyIssuedOtpResponse(out) {
   // Other non-OK statuses with explicit "already" semantics
   return true;
 }
-
 
 /* ===========================
    ADMIN-PLANE SIGN-IN (NO /api/auth)
@@ -668,7 +665,6 @@ export default function OtpForm(props) {
     return `${String(pathname || "")}?${searchFingerprint}`;
   }, [pathname, searchFingerprint]);
 
-
   const [to, setTo] = useState(urlIdentifier);
   const [via, setVia] = useState(urlVia);
 
@@ -795,7 +791,6 @@ export default function OtpForm(props) {
         setBootstrapping(false);
       } catch {}
 
-
       // rewrite DB so no OTP remains active (best-effort, non-blocking)
       // - close/success: cancel active OTP so it can't keep an old session alive
       // - fail/expired: expire active OTP to allow new request cleanly
@@ -816,7 +811,6 @@ export default function OtpForm(props) {
     },
     [to, via, purpose, isAdminFlow]
   );
-
 
   useEffect(() => {
     // Start/stop a single interval when the timer is running.
@@ -879,7 +873,6 @@ export default function OtpForm(props) {
     }
   }, [expires]);
 
-
   /* ---------- Android Web OTP (SMS only) ---------- */
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -890,7 +883,7 @@ export default function OtpForm(props) {
       abortCtrlRef.current?.abort();
       const ac = new AbortController();
       abortCtrlRef.current = ac;
-      // @ts-ignore
+      // @ts-expect-error -- intentional: required for legacy typing / external lib mismatch
       navigator.credentials
         .get({ otp: { transport: ["sms"] }, signal: ac.signal })
         .then((cred) => {
@@ -969,7 +962,9 @@ export default function OtpForm(props) {
       identifier: to,
       via,
       purpose,
-      scope: isAdminFlow ? "admin" : "customer", sessionId });
+      scope: isAdminFlow ? "admin" : "customer",
+      sessionId,
+    });
 
     try {
       // Abort any previous in-flight send
@@ -1138,6 +1133,7 @@ export default function OtpForm(props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [to, via, purpose, isAdminFlow]);
+
   /**
    * NEW-OTP RE-ARM (critical):
    * If the user closes the OTP step and later triggers a fresh OTP for the same identifier/purpose,
@@ -1239,8 +1235,6 @@ export default function OtpForm(props) {
       bootstrapOtp(true, { forceNew: true });
     }
   }, [sentAlready, sessionId, entryFingerprint, to, via, purpose, isAdminFlow, FLOW_TTL_MAX]);
-
-
 
   /* ---------- OTP input handlers ---------- */
   const handleDigitChange = (index, value) => {
@@ -1478,7 +1472,9 @@ export default function OtpForm(props) {
               identifier: to,
               via,
               purpose,
-              scope: isAdminFlow ? "admin" : "customer", sessionId })
+              scope: isAdminFlow ? "admin" : "customer",
+              sessionId,
+            })
           );
         }
       } catch {}

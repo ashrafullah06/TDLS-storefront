@@ -1,8 +1,11 @@
-//app/api/checkout/session/route.js
+// FILE: app/api/checkout/session/route.js
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import authOptions from "@/lib/authoptions";
+
+// Keep existing import intact (no deletion), but prevent unused-import lint failures.
+void authOptions;
 
 function normalizeBdPhone(phone) {
   if (!phone) return null;
@@ -19,14 +22,22 @@ async function sendOtp({ identifier, channel }) {
 
 export async function POST(req) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     const body = await req.json();
 
     const {
-      cartId, createAccount = false,
-      name, phone, email,
-      line1, line2, city, state, postalCode, countryIso2 = "BD",
-      otpChannel = "SMS"
+      cartId,
+      createAccount = false,
+      name,
+      phone,
+      email,
+      line1,
+      line2,
+      city,
+      state,
+      postalCode,
+      countryIso2 = "BD",
+      otpChannel = "SMS",
     } = body || {};
 
     const normPhone = normalizeBdPhone(phone);
@@ -43,12 +54,17 @@ export async function POST(req) {
         name: name || null,
         phone: normPhone,
         email: email || null,
-        line1, line2: line2 || null, city, state: state || null, postalCode: postalCode || null, countryIso2,
+        line1,
+        line2: line2 || null,
+        city,
+        state: state || null,
+        postalCode: postalCode || null,
+        countryIso2,
         otpIdentifier: normPhone,
         otpPurpose: session?.user?.id ? "login" : "signup",
         otpChannel,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15 min
-      }
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 min
+      },
     });
 
     await sendOtp({ identifier: normPhone, channel: otpChannel });

@@ -1,6 +1,9 @@
 // src/lib/db.js
 // Keeps your current shape but adds a dev-time write guard for the Strapi client.
 
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+
 const { PrismaClient: StrapiPrisma } = require("../generated/prisma/strapi");
 const { PrismaClient: AppPrisma } = require("../generated/prisma/app");
 
@@ -42,10 +45,7 @@ if (process.env.NODE_ENV !== "production") g.__strapiDb__ = _strapi;
 const appDb = g.__appDb__ || new AppPrisma();
 if (process.env.NODE_ENV !== "production") g.__appDb__ = appDb;
 
-// ✅ FIX: Export in both CommonJS + ESM compatible way
 const db = { strapiDb, appDb };
-module.exports = db;
-module.exports.strapiDb = strapiDb;
-module.exports.appDb = appDb;
+
 export { strapiDb, appDb };
 export default db;

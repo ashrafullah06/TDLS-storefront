@@ -4,7 +4,7 @@
 // This module is intentionally SELF-CONTAINED and does NOT import ./prisma,
 // so it cannot be taken down by an invalid runtime/pooler DATABASE_URL.
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@/generated/prisma/app";
 
 // Reuse log settings similar to src/lib/prisma.js
 const log = ["warn", "error"];
@@ -155,41 +155,64 @@ function pickDirectDbUrl() {
     ["DATABASE_URL", process.env.DATABASE_URL], // absolute last resort
   ];
 
-  const errors = [];
-  const tried = [];
+  const tryPick = (allowPooler) => {
+    const errors = [];
+    const tried = [];
 
-  for (const [name, val] of candidates) {
-    if (val == null) continue;
-    const cleaned = cleanEnvValue(val);
-    if (!cleaned) continue;
+    for (const [name, val] of candidates) {
+      if (val == null) continue;
+      const cleaned = cleanEnvValue(val);
+      if (!cleaned) continue;
 
-    tried.push(name);
+      tried.push(name);
 
-    // Skip placeholders quietly; continue trying
-    if (looksLikePlaceholder(cleaned)) {
-      errors.push(
-        `[prisma-direct] Skipped ${name}: placeholder/unexpanded.\nPreview: ${redactDbUrl(cleaned)}`
-      );
-      continue;
+      // Skip placeholders quietly; continue trying
+      if (looksLikePlaceholder(cleaned)) {
+        errors.push(
+          `[prisma-direct] Skipped ${name}: placeholder/unexpanded.\nPreview: ${redactDbUrl(
+            cleaned
+          )}`
+        );
+        continue;
+      }
+
+      try {
+        const url = assertValidDbUrl(name, cleaned);
+
+        // First pass: enforce DIRECT (non-pooler) URLs.
+        if (!allowPooler && isPoolerHost(url)) {
+          errors.push(
+            `[prisma-direct] Skipped ${name}: appears to be a pooler URL.\nPreview: ${redactDbUrl(
+              url
+            )}`
+          );
+          continue;
+        }
+
+        return { url, tried, errors };
+      } catch (e) {
+        errors.push(String(e?.message || e));
+        continue;
+      }
     }
 
-    try {
-      const url = assertValidDbUrl(name, cleaned);
+    return { url: null, tried, errors };
+  };
 
-      // We want a DIRECT (non-pooler) url. If candidate is pooler, accept only
-      // if we have no better direct options (handled by ordering), but still allow.
-      // (No console noise here to avoid log spam; ordering is the real control.)
-      return url;
-    } catch (e) {
-      errors.push(String(e?.message || e));
-      continue;
-    }
-  }
+  // Pass 1: prefer non-pooler (direct) URLs
+  const first = tryPick(false);
+  if (first.url) return first.url;
+
+  // Pass 2: allow pooler only if nothing else works
+  const second = tryPick(true);
+  if (second.url) return second.url;
 
   throw new Error(
     `[prisma-direct] Could not select a valid DIRECT database URL.\n` +
-      `Tried: ${tried.join(", ") || "(none)"}\n\n` +
-      errors.slice(0, 6).join("\n\n")
+      `Tried: ${
+        Array.from(new Set([...first.tried, ...second.tried])).join(", ") || "(none)"
+      }\n\n` +
+      [...first.errors, ...second.errors].slice(0, 6).join("\n\n")
   );
 }
 

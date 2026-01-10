@@ -1,20 +1,20 @@
-//app/api/account/update/route.js
-export const runtime = 'nodejs';
+// FILE: app/api/account/update/route.js
+export const runtime = "nodejs";
 
-import { NextResponse } from 'next/server';
-import { auth } from "../../auth/[...nextauth]/route";
+import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 
-const STRAPI_URL = process.env.STRAPI_URL || 'http://localhost:1337';
-const STRAPI_SYNC_SECRET = process.env.STRAPI_SYNC_SECRET || '';
+const STRAPI_URL = process.env.STRAPI_URL || "http://localhost:1337";
+const STRAPI_SYNC_SECRET = process.env.STRAPI_SYNC_SECRET || "";
 
 function ok(val) {
-  return typeof val === 'string' && val.trim().length > 0;
+  return typeof val === "string" && val.trim().length > 0;
 }
 
 export async function POST(req) {
   const session = await auth();
   if (!session?.user) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   const body = await req.json().catch(() => ({}));
@@ -22,8 +22,8 @@ export async function POST(req) {
   // Allow only these fields from client
   const payload = {
     // identifiers
-    email: session.user.email || '',         // from NextAuth
-    phone_number: ok(body.phone_number) ? body.phone_number : session.user.phone || '',
+    email: session.user.email || "", // from NextAuth
+    phone_number: ok(body.phone_number) ? body.phone_number : session.user.phone || "",
 
     // updatable fields
     name: ok(body.name) ? body.name : undefined,
@@ -33,13 +33,13 @@ export async function POST(req) {
 
   try {
     const r = await fetch(`${STRAPI_URL}/api/user-update/me`, {
-      method: 'PUT',
+      method: "PUT",
       headers: {
-        'Content-Type': 'application/json',
-        'x-app-secret': STRAPI_SYNC_SECRET, // shared secret
+        "Content-Type": "application/json",
+        "x-app-secret": STRAPI_SYNC_SECRET, // shared secret
       },
       body: JSON.stringify(payload),
-      cache: 'no-store',
+      cache: "no-store",
     });
 
     const json = await r.json().catch(() => ({}));
@@ -48,6 +48,6 @@ export async function POST(req) {
     }
     return NextResponse.json(json);
   } catch (e) {
-    return NextResponse.json({ ok: false, error: 'network_error' }, { status: 502 });
+    return NextResponse.json({ ok: false, error: "network_error" }, { status: 502 });
   }
 }

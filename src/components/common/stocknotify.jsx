@@ -1,3 +1,4 @@
+// FILE: my-project/src/components/common/stocknotify.jsx
 "use client";
 import { useState } from "react";
 
@@ -21,7 +22,7 @@ export default function StockNotify({ productId }) {
   if (subscribed) {
     return (
       <div className="bg-green-100 border border-green-300 rounded-lg px-6 py-4 text-green-800 font-semibold text-center">
-        You'll be notified as soon as this item is back in stock!
+        You&apos;ll be notified as soon as this item is back in stock!
       </div>
     );
   }

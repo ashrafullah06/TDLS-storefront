@@ -126,14 +126,22 @@ export default function Promobar() {
     };
   }, []);
 
-  if (!data || hidden) return null;
+  const safeData = data && !hidden ? data : null;
 
   const {
-    bg, fg, closable, speed = 60, gapMs = 400, dwellMs = 0,
-    animation = "marquee", messages, dismissId,
-  } = data;
+    bg,
+    fg,
+    closable,
+    speed = 60,
+    gapMs = 400,
+    dwellMs = 0,
+    animation = "marquee",
+    messages,
+    dismissId,
+  } = safeData || {};
 
-  const current = messages[idx % messages.length];
+  const msgList = Array.isArray(messages) ? messages : [];
+  const current = msgList.length ? msgList[idx % msgList.length] : {};
   const tokens = tokenize(animation);
   const { base, flags } = parseAnimation(tokens, idx, current?.animation);
 
@@ -173,6 +181,7 @@ export default function Promobar() {
 
   const [typed, setTyped] = React.useState("");
   React.useEffect(() => {
+    if (!safeData || !msgList.length) { setTyped(""); return; }
     if (base !== "typewriter" || reduceMotion) { setTyped(""); return; }
     const full = current?.message || "";
     setTyped("");
@@ -188,7 +197,7 @@ export default function Promobar() {
       } else {
         if (!isManual) {
           dwellTimerRef.current = setTimeout(() => {
-            setIdx((p) => (p + 1) % messages.length);
+            setIdx((p) => (p + 1) % msgList.length);
           }, gapMs + computedDwell);
         }
       }
@@ -198,16 +207,18 @@ export default function Promobar() {
       clearTimeout(animTimerRef.current);
       clearTimeout(dwellTimerRef.current);
     };
-  }, [idx, base, reduceMotion, isManual, gapMs, computedDwell, current?.message]);
+  }, [idx, base, reduceMotion, isManual, gapMs, computedDwell, current?.message, safeData, msgList.length]);
 
   React.useEffect(() => {
+    if (!safeData) return;
     if (flags.autoDismiss && !isManual) {
       const t = setTimeout(() => setHidden(true), Math.max(1500, computedDwell));
       return () => clearTimeout(t);
     }
-  }, [flags.autoDismiss, isManual, computedDwell]);
+  }, [flags.autoDismiss, isManual, computedDwell, safeData]);
 
   React.useEffect(() => {
+    if (!safeData) return;
     if (!wrapRef.current || !textRef.current) return;
     if (base === "typewriter" && !reduceMotion) return;
 
@@ -220,7 +231,7 @@ export default function Promobar() {
     const scheduleNext = () => {
       if (isManual) return;
       dwellTimerRef.current = setTimeout(() => {
-        setIdx((p) => (p + 1) % messages.length);
+        setIdx((p) => (p + 1) % msgList.length);
       }, gapMs);
     };
 
@@ -312,10 +323,12 @@ export default function Promobar() {
       else text.style.animation = "none";
       return;
     }
-  }, [idx, base, flags.autoDismiss, isManual, messages.length, reduceMotion, paused, speed, gapMs, computedDwell]);
+  }, [idx, base, flags.autoDismiss, isManual, msgList.length, reduceMotion, paused, speed, gapMs, computedDwell, safeData]);
 
-  const onPrev = () => setIdx((p) => (p - 1 + messages.length) % messages.length);
-  const onNext = () => setIdx((p) => (p + 1) % messages.length);
+  const onPrev = () => setIdx((p) => (p - 1 + msgList.length) % msgList.length);
+  const onNext = () => setIdx((p) => (p + 1) % msgList.length);
+
+  if (!safeData) return null;
 
   const containerStyle = {
     backgroundColor: bg,

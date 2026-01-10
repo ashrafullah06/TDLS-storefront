@@ -8,5 +8,4 @@
  */
 
 export { default } from "./prisma";
-export { prisma } from "./prisma";
 export * from "./prisma";
