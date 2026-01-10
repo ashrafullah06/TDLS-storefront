@@ -2,6 +2,10 @@
 
 generator client {
   provider = "prisma-client-js"
+}
+
+generator client_app {
+  provider = "prisma-client-js"
   output   = "../../src/generated/prisma/app"
 }
 
