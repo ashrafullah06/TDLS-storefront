@@ -66,6 +66,22 @@ const nextConfig: NextConfig = {
     ],
   },
 
+  // Ensure Prisma engines / generated clients are included in Vercel output tracing
+  experimental: {
+    outputFileTracingIncludes: {
+      "app/**": [
+        "./node_modules/.prisma/client/**",
+        "./node_modules/@prisma/client/**",
+        "./src/generated/prisma/**",
+      ],
+      "pages/**": [
+        "./node_modules/.prisma/client/**",
+        "./node_modules/@prisma/client/**",
+        "./src/generated/prisma/**",
+      ],
+    },
+  },
+
   images: {
     remotePatterns: Array.from(specs.values()).map((s) => ({
       protocol: s.protocol,
