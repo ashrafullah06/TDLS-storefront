@@ -56,8 +56,11 @@ function safeDecode(v) {
  * GET /api/account/orders/:id
  * Customer-only: returns the order if it belongs to the logged-in user.
  */
-export async function GET(_req, { params }) {
+export async function GET(_req, ctx) {
   try {
+    // ✅ Build/runtime safety: ctx can be undefined in certain build-time evaluations
+    const params = ctx?.params ?? {};
+
     /**
      * CRITICAL BUILD-SAFETY:
      * During `next build` (Vercel "Collecting page data"), Next may evaluate route modules
