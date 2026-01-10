@@ -4,8 +4,6 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { auth } from "@/lib/auth";
 
 /**
  * JSON helper (always no-store)
@@ -60,6 +58,12 @@ function safeDecode(v) {
  */
 export async function GET(_req, { params }) {
   try {
+    // IMPORTANT: lazy-load these to avoid build-time module evaluation failures on Vercel
+    const [{ default: prisma }, { auth }] = await Promise.all([
+      import("@/lib/prisma"),
+      import("@/lib/auth"),
+    ]);
+
     const session = await auth();
     const userId = session?.user?.id || null;
 
