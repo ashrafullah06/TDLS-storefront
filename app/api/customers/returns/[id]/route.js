@@ -1,10 +1,8 @@
+// app/api/customers/returns/[id]/route.js
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = globalThis.__prisma__ ?? new PrismaClient();
-if (!globalThis.__prisma__) globalThis.__prisma__ = prisma;
+import prisma from "@/lib/prisma";
 
 export async function GET(_req, { params }) {
   try {

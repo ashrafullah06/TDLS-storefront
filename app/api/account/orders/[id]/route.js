@@ -67,8 +67,17 @@ export async function GET(_req, ctx) {
      * in ways that can trigger server init paths. Avoid initializing Prisma/Auth during build.
      * This does NOT affect runtime requests.
      */
-    const phase = String(process.env.NEXT_PHASE || "");
-    if (phase.includes("phase-production-build")) {
+    const nextPhase = String(process.env.NEXT_PHASE || "");
+    const npmEvent = String(process.env.npm_lifecycle_event || "");
+    const npmScript = String(process.env.npm_lifecycle_script || "");
+
+    const isBuild =
+      nextPhase === "phase-production-build" ||
+      nextPhase.includes("phase-production-build") ||
+      npmEvent === "build" ||
+      npmScript.includes("next build");
+
+    if (isBuild) {
       return json({ ok: true, build: true }, 200);
     }
 
