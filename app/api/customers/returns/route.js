@@ -1,9 +1,11 @@
+// app/api/customers/returns/route.js
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prismaClient from "@/lib/prisma";
 
-const prisma = globalThis.__prisma__ ?? new PrismaClient();
+// Keep the same singleton pattern, but use your project’s canonical prisma client
+const prisma = globalThis.__prisma__ ?? prismaClient;
 if (!globalThis.__prisma__) globalThis.__prisma__ = prisma;
 
 const CURRENCY = "BDT"; // align with your config/policy
@@ -58,14 +60,21 @@ export async function POST(req) {
 
     // pick the target order item
     let item =
-      order.items.find((it) => (sku && (it.sku === sku || it.variant?.sku === sku)) || (product_no && (it.variantId === product_no || it.id === product_no))) ||
+      order.items.find(
+        (it) =>
+          (sku && (it.sku === sku || it.variant?.sku === sku)) ||
+          (product_no && (it.variantId === product_no || it.id === product_no))
+      ) ||
       order.items.find((it) => barcode && it.variant?.barcode === barcode) ||
       order.items[0];
 
     if (!item) return new NextResponse("order item not found", { status: 404 });
 
     // compute a conservative refundable line amount
-    const refundable = Math.max(0, to_num(item.total || item.subtotal) - to_num(item.discountTotal) + to_num(item.taxTotal));
+    const refundable = Math.max(
+      0,
+      to_num(item.total || item.subtotal) - to_num(item.discountTotal) + to_num(item.taxTotal)
+    );
 
     // persist request based on action type
     let application_id = null;
@@ -91,7 +100,9 @@ export async function POST(req) {
                 lineRefund: action_type === "refund" ? refundable : 0,
                 reason,
                 conditionNotes: files?.length
-                  ? `images: ${files.map((f) => (typeof f.name === "string" ? f.name : "file")).join(", ")}`
+                  ? `images: ${files
+                      .map((f) => (typeof f.name === "string" ? f.name : "file"))
+                      .join(", ")}`
                   : null,
               },
             ],
@@ -153,7 +164,11 @@ export async function POST(req) {
                 fromOrderItemId: item.id,
                 toVariantId: item.variantId || item.variant?.id, // default same variant; admin will adjust
                 quantity: Math.max(1, item.quantity || 1),
-                notes: files?.length ? `images: ${files.map((f) => (typeof f.name === "string" ? f.name : "file")).join(", ")}` : null,
+                notes: files?.length
+                  ? `images: ${files
+                      .map((f) => (typeof f.name === "string" ? f.name : "file"))
+                      .join(", ")}`
+                  : null,
               },
             ],
           },

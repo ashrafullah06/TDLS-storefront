@@ -1,9 +1,10 @@
+// app/api/customers/returns/lookup/route.js
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prismaClient from "@/lib/prisma";
 
-const prisma = globalThis.__prisma__ ?? new PrismaClient();
+const prisma = globalThis.__prisma__ ?? prismaClient;
 if (!globalThis.__prisma__) globalThis.__prisma__ = prisma;
 
 // util: normalize decimal to number
@@ -95,7 +96,9 @@ export async function GET(req) {
         // minimal example by order_id (adjust filters as needed)
         const qs = [];
         if (order_no) qs.push(`filters[order_id][$eq]=${encodeURIComponent(order_no)}`);
-        const url = `${process.env.STRAPI_API_URL.replace(/\/+$/,"")}/api/orders?${qs.join("&")}&populate=orders_components,orders_components.component`;
+        const url = `${process.env.STRAPI_API_URL.replace(/\/+$/, "")}/api/orders?${qs.join(
+          "&"
+        )}&populate=orders_components,orders_components.component`;
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${process.env.STRAPI_API_TOKEN}` },
           cache: "no-store",
