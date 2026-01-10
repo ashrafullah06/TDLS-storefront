@@ -1,4 +1,4 @@
-// app/(auth)/signup/page.jsx
+// app/signup/page.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -58,7 +58,7 @@ function e164FromParts(cc, local) {
   const country = normalizeCountryCode(cc);
   const loc = cleanLocal(local);
   if (country !== "+880") return ""; // locked to BD
-  if (loc.length !== 10) return "";  // need full 10 digits
+  if (loc.length !== 10) return ""; // need full 10 digits
   if (!/^1\d{9}$/.test(loc)) return ""; // must start with '1'
   return `${country}${loc}`;
 }
@@ -154,7 +154,7 @@ export default function SignupPage() {
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [expiresIn, setExpiresIn] = useState(0);  // visible timer (80s)
+  const [expiresIn, setExpiresIn] = useState(0); // visible timer (80s)
   const [resendCooldown, setResendCooldown] = useState(0); // hidden cooldown (30s)
   const otpRef = useRef(null);
 
@@ -162,7 +162,16 @@ export default function SignupPage() {
   const [focusId, setFocusId] = useState("");
   const dobRef = useRef(null);
   const marriageRef = useRef(null);
-  const openPicker = (ref) => { try { ref?.current?.showPicker?.(); } catch {} };
+  const openPicker = (ref) => {
+    try {
+      ref?.current?.showPicker?.();
+    } catch {}
+  };
+
+  // Silence lint for helpers kept for compatibility / future-safe usage (no behavior change)
+  void isPhoneish;
+  void toE164BD;
+  void openPicker;
 
   const resetOtpState = () => {
     setOtp("");
@@ -172,7 +181,9 @@ export default function SignupPage() {
     setMsg(null);
   };
 
-  useEffect(() => { if (sent && step === 3) otpRef.current?.focus(); }, [sent, step]);
+  useEffect(() => {
+    if (sent && step === 3) otpRef.current?.focus();
+  }, [sent, step]);
 
   useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -203,7 +214,8 @@ export default function SignupPage() {
         if (!isEmailish(e)) return;
         identifier = e.toLowerCase();
       } else {
-        const e164 = e164FromParts(cc, local);
+        // Use debouncedLocal here to keep the debounce behavior and avoid missing-deps warning.
+        const e164 = e164FromParts(cc, debouncedLocal);
         if (!e164) return;
         identifier = e164;
       }
@@ -224,7 +236,9 @@ export default function SignupPage() {
       }
     }
     check();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [mode, emailMirror, debouncedLocal, cc]);
 
   const postRedirect = useMemo(() => {
@@ -251,7 +265,8 @@ export default function SignupPage() {
       if (!e164) {
         setMsg({
           kind: "error",
-          text: "Mobile looks incomplete. After +880 enter 10 digits (starts with 1). Example: +880 17XXXXXXXX."
+          text:
+            "Mobile looks incomplete. After +880 enter 10 digits (starts with 1). Example: +880 17XXXXXXXX.",
         });
         return false;
       }
@@ -261,7 +276,10 @@ export default function SignupPage() {
     }
 
     if (accountExists === true) {
-      setMsg({ kind: "error", text: "This email/number is already registered. Please log in or recover your password." });
+      setMsg({
+        kind: "error",
+        text: "This email/number is already registered. Please log in or recover your password.",
+      });
       return false;
     }
 
@@ -303,7 +321,10 @@ export default function SignupPage() {
     setMsg(null);
 
     if (accountExists === true) {
-      setMsg({ kind: "error", text: "This email/number is already registered. Please log in or recover your password." });
+      setMsg({
+        kind: "error",
+        text: "This email/number is already registered. Please log in or recover your password.",
+      });
       return;
     }
 
@@ -322,7 +343,8 @@ export default function SignupPage() {
     if (!e164) {
       setMsg({
         kind: "error",
-        text: "Mobile looks incomplete. After +880 enter 10 digits (starts with 1). Example: +880 17XXXXXXXX."
+        text:
+          "Mobile looks incomplete. After +880 enter 10 digits (starts with 1). Example: +880 17XXXXXXXX.",
       });
       return;
     }
@@ -341,8 +363,7 @@ export default function SignupPage() {
     if (needsPwd) {
       if (!password || password.length < 8)
         return setMsg({ kind: "error", text: "Please set a password (min 8 characters)." });
-      if (password !== confirm)
-        return setMsg({ kind: "error", text: "Passwords do not match." });
+      if (password !== confirm) return setMsg({ kind: "error", text: "Passwords do not match." });
     }
 
     const ok = await sendOtpForSignup();
@@ -366,9 +387,10 @@ export default function SignupPage() {
 
     // Build identifier again
     const via = mode === "email" ? "email" : channel;
-    const ident = mode === "email"
-      ? (emailRef.current?.value || emailMirror || "").trim().toLowerCase()
-      : e164FromParts(cc, local);
+    const ident =
+      mode === "email"
+        ? (emailRef.current?.value || emailMirror || "").trim().toLowerCase()
+        : e164FromParts(cc, local);
 
     try {
       setVerifying(true);
@@ -472,6 +494,7 @@ export default function SignupPage() {
   };
   const containerStyle = { maxWidth: TDLC.CONTAINER_MAX_W, margin: "0 auto" };
   const gapY = { display: "grid", gap: TDLC.STACK_GAP_Y };
+  void gapY;
 
   /** Derived UI state for instant feedback in mobile mode */
   const countryCoerced = normalizeCountryCode(cc);
@@ -507,9 +530,14 @@ export default function SignupPage() {
             </button>
             <div
               style={{
-                borderWidth: 1, borderStyle: "solid", borderColor: "rgba(0,0,0,.1)",
-                borderRadius: 999, padding: "6px 12px", fontSize: 12,
-                color: "#4b5563", background: "rgba(255,255,255,.7)",
+                borderWidth: 1,
+                borderStyle: "solid",
+                borderColor: "rgba(0,0,0,.1)",
+                borderRadius: 999,
+                padding: "6px 12px",
+                fontSize: 12,
+                color: "#4b5563",
+                background: "rgba(255,255,255,.7)",
               }}
             >
               TDLC • MEMBERSHIP
@@ -519,9 +547,12 @@ export default function SignupPage() {
           {/* Title */}
           <div style={{ marginBottom: 6 }}>
             <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.01em", color: "#0b0b0b", margin: 0 }}>
-              {step === 1 ? "Enter your email or mobile"
-                : step === 2 ? "Create your TDLC account"
-                : step === 3 ? "Verify with OTP"
+              {step === 1
+                ? "Enter your email or mobile"
+                : step === 2
+                ? "Create your TDLC account"
+                : step === 3
+                ? "Verify with OTP"
                 : "Account created"}
             </h1>
 
@@ -532,8 +563,12 @@ export default function SignupPage() {
                   : e164FromParts(cc, local) || `${countryCoerced} ${localClean}`}
                 <button
                   type="button"
-                  onClick={() => { resetOtpState(); setStep(1); }}
-                  style={{ textDecoration: "underline", textUnderlineOffset: 3, color: "#0b0b0b", marginLeft: 8 }}>
+                  onClick={() => {
+                    resetOtpState();
+                    setStep(1);
+                  }}
+                  style={{ textDecoration: "underline", textUnderlineOffset: 3, color: "#0b0b0b", marginLeft: 8 }}
+                >
                   Change
                 </button>
               </p>
@@ -546,20 +581,10 @@ export default function SignupPage() {
               {/* Mode switch */}
               <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15 }}>
-                  <input
-                    type="radio"
-                    name="mode"
-                    checked={mode === "mobile"}
-                    onChange={() => setMode("mobile")}
-                  /> Mobile
+                  <input type="radio" name="mode" checked={mode === "mobile"} onChange={() => setMode("mobile")} /> Mobile
                 </label>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15 }}>
-                  <input
-                    type="radio"
-                    name="mode"
-                    checked={mode === "email"}
-                    onChange={() => setMode("email")}
-                  /> Email
+                  <input type="radio" name="mode" checked={mode === "email"} onChange={() => setMode("email")} /> Email
                 </label>
               </div>
 
@@ -567,9 +592,7 @@ export default function SignupPage() {
               {mode === "mobile" && (
                 <>
                   <div>
-                    <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>
-                      Mobile number*
-                    </label>
+                    <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>Mobile number*</label>
 
                     <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 12 }}>
                       {/* Country code box (locked to +880, but editable to absorb +88, etc.) */}
@@ -584,7 +607,7 @@ export default function SignupPage() {
                           ...(focusId === "cc" ? inputFocusStyle : null),
                           textAlign: "center",
                           fontWeight: 600,
-                          letterSpacing: "0.02em"
+                          letterSpacing: "0.02em",
                         }}
                       />
 
@@ -633,12 +656,28 @@ export default function SignupPage() {
                   {/* Channel selector for phone */}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 28 }}>
                     <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15 }}>
-                      <input type="radio" name="chan" checked={channel === "sms"}
-                        onChange={() => { setChannel("sms"); setUserTouchedChannel(true); }} /> SMS
+                      <input
+                        type="radio"
+                        name="chan"
+                        checked={channel === "sms"}
+                        onChange={() => {
+                          setChannel("sms");
+                          setUserTouchedChannel(true);
+                        }}
+                      />{" "}
+                      SMS
                     </label>
                     <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15 }}>
-                      <input type="radio" name="chan" checked={channel === "whatsapp"}
-                        onChange={() => { setChannel("whatsapp"); setUserTouchedChannel(true); }} /> WhatsApp
+                      <input
+                        type="radio"
+                        name="chan"
+                        checked={channel === "whatsapp"}
+                        onChange={() => {
+                          setChannel("whatsapp");
+                          setUserTouchedChannel(true);
+                        }}
+                      />{" "}
+                      WhatsApp
                     </label>
                   </div>
                 </>
@@ -673,8 +712,14 @@ export default function SignupPage() {
               {accountExists === true && !existsLoading && (
                 <div style={{ borderRadius: 16, background: "#fff7ed", padding: "14px 16px", fontSize: 14, color: "#9a3412" }}>
                   This email/number is already registered.&nbsp;
-                  <a href="/login" style={{ fontWeight: 700, textDecoration: "underline" }}>Log in</a>&nbsp;or&nbsp;
-                  <a href="/forgot-password" style={{ fontWeight: 700, textDecoration: "underline" }}>recover your password</a>.
+                  <a href="/login" style={{ fontWeight: 700, textDecoration: "underline" }}>
+                    Log in
+                  </a>
+                  &nbsp;or&nbsp;
+                  <a href="/forgot-password" style={{ fontWeight: 700, textDecoration: "underline" }}>
+                    recover your password
+                  </a>
+                  .
                 </div>
               )}
               {accountExists === false && !existsLoading && (
@@ -686,26 +731,23 @@ export default function SignupPage() {
               <div style={{ marginTop: TDLC.GAP_FIELD_TO_CTA }}>
                 <button
                   type="submit"
-                  disabled={
-                    existsLoading ||
-                    (mode === "email" ? !emailMirror.trim() : cleanLocal(local).length === 0)
-                  }
+                  disabled={existsLoading || (mode === "email" ? !emailMirror.trim() : cleanLocal(local).length === 0)}
                   style={{
                     ...ctaStyle,
-                    display: "grid", placeItems: "center", textAlign: "center", margin: "0 auto",
-                    opacity:
-                      existsLoading ||
-                      (mode === "email" ? !emailMirror.trim() : cleanLocal(local).length === 0)
-                        ? 0.6 : 1,
-                    cursor:
-                      existsLoading ||
-                      (mode === "email" ? !emailMirror.trim() : cleanLocal(local).length === 0)
-                        ? "not-allowed" : "pointer",
+                    display: "grid",
+                    placeItems: "center",
+                    textAlign: "center",
+                    margin: "0 auto",
+                    opacity: existsLoading || (mode === "email" ? !emailMirror.trim() : cleanLocal(local).length === 0) ? 0.6 : 1,
+                    cursor: existsLoading || (mode === "email" ? !emailMirror.trim() : cleanLocal(local).length === 0) ? "not-allowed" : "pointer",
                   }}
                   onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.985)")}
                   onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
                   onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.08)")}
-                  onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; e.currentTarget.style.transform = "scale(1)"; }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.filter = "none";
+                    e.currentTarget.style.transform = "scale(1)";
+                  }}
                 >
                   Continue
                 </button>
@@ -714,7 +756,9 @@ export default function SignupPage() {
               {msg && (
                 <div
                   style={{
-                    borderRadius: 16, padding: "14px 16px", fontSize: 14,
+                    borderRadius: 16,
+                    padding: "14px 16px",
+                    fontSize: 14,
                     background: msg.kind === "error" ? "#fef2f2" : msg.kind === "success" ? "#ecfdf5" : "#fafafa",
                     color: msg.kind === "error" ? "#b91c1c" : msg.kind === "success" ? "#065f46" : "#111827",
                   }}
@@ -764,34 +808,31 @@ export default function SignupPage() {
 
               <div
                 style={{
-                  borderWidth: 1, borderStyle: "solid", borderColor: "rgba(0,0,0,.08)",
-                  borderRadius: 18, padding: "18px 18px 12px",
-                  background: "#ffffff", boxShadow: "0 10px 26px rgba(15,33,71,.06)",
+                  borderWidth: 1,
+                  borderStyle: "solid",
+                  borderColor: "rgba(0,0,0,.08)",
+                  borderRadius: 18,
+                  padding: "18px 18px 12px",
+                  background: "#ffffff",
+                  boxShadow: "0 10px 26px rgba(15,33,71,.06)",
                 }}
               >
-                <div style={{ fontWeight: 800, color: "#0b0b0b", marginBottom: 10, fontSize: 16 }}>
-                  Choose how you want to log in
-                </div>
+                <div style={{ fontWeight: 800, color: "#0b0b0b", marginBottom: 10, fontSize: 16 }}>Choose how you want to log in</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 18, fontSize: 15 }}>
                   <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                    <input type="radio" name="loginPref" value="otp"
-                      checked={loginPref === "otp"} onChange={() => setLoginPref("otp")} />
+                    <input type="radio" name="loginPref" value="otp" checked={loginPref === "otp"} onChange={() => setLoginPref("otp")} />
                     Only OTP (no password)
                   </label>
                   <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                    <input type="radio" name="loginPref" value="password"
-                      checked={loginPref === "password"} onChange={() => setLoginPref("password")} />
+                    <input type="radio" name="loginPref" value="password" checked={loginPref === "password"} onChange={() => setLoginPref("password")} />
                     Only Password
                   </label>
                   <label style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-                    <input type="radio" name="loginPref" value="2fa"
-                      checked={loginPref === "2fa"} onChange={() => setLoginPref("2fa")} />
+                    <input type="radio" name="loginPref" value="2fa" checked={loginPref === "2fa"} onChange={() => setLoginPref("2fa")} />
                     OTP + Password (recommended)
                   </label>
                 </div>
-                <p style={{ marginTop: 8, fontSize: 13.5, color: "#4b5563" }}>
-                  You can change this later from Account &gt; Security.
-                </p>
+                <p style={{ marginTop: 8, fontSize: 13.5, color: "#4b5563" }}>You can change this later from Account &gt; Security.</p>
               </div>
 
               {(loginPref === "password" || loginPref === "2fa") && (
@@ -824,19 +865,32 @@ export default function SignupPage() {
               <label style={{ display: "inline-flex", alignItems: "start", gap: 14, fontSize: 14 }}>
                 <span
                   style={{
-                    width: 24, height: 24, borderRadius: 6,
-                    borderWidth: 1.5, borderStyle: "solid", borderColor: "rgba(0,0,0,.2)",
+                    width: 24,
+                    height: 24,
+                    borderRadius: 6,
+                    borderWidth: 1.5,
+                    borderStyle: "solid",
+                    borderColor: "rgba(0,0,0,.2)",
                     background: agree ? "#2563eb22" : "#fff",
                     boxShadow: agree ? "inset 0 0 0 12px #2563eb, 0 6px 14px rgba(15,33,71,.12)" : "0 6px 14px rgba(15,33,71,.08)",
-                    display: "grid", placeItems: "center", cursor: "pointer",
+                    display: "grid",
+                    placeItems: "center",
+                    cursor: "pointer",
                   }}
-                  onClick={() => setAgree((v) => !v)} role="checkbox" aria-checked={agree}
+                  onClick={() => setAgree((v) => !v)}
+                  role="checkbox"
+                  aria-checked={agree}
                 />
                 <span>
                   By creating an account, you agree to TDLC’s{" "}
-                  <a href="/terms" style={{ textDecoration: "underline", textUnderlineOffset: 3 }}>Terms & Conditions</a>{" "}
+                  <a href="/terms" style={{ textDecoration: "underline", textUnderlineOffset: 3 }}>
+                    Terms & Conditions
+                  </a>{" "}
                   and{" "}
-                  <a href="/privacy" style={{ textDecoration: "underline", textUnderlineOffset: 3 }}>Privacy Policy</a>.
+                  <a href="/privacy" style={{ textDecoration: "underline", textUnderlineOffset: 3 }}>
+                    Privacy Policy
+                  </a>
+                  .
                 </span>
               </label>
 
@@ -844,13 +898,21 @@ export default function SignupPage() {
                 type="submit"
                 disabled={sending}
                 style={{
-                  ...ctaStyle, display: "grid", placeItems: "center", textAlign: "center", margin: "0 auto",
-                  opacity: sending ? 0.6 : 1, cursor: sending ? "not-allowed" : "pointer",
+                  ...ctaStyle,
+                  display: "grid",
+                  placeItems: "center",
+                  textAlign: "center",
+                  margin: "0 auto",
+                  opacity: sending ? 0.6 : 1,
+                  cursor: sending ? "not-allowed" : "pointer",
                 }}
                 onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.985)")}
                 onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
                 onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.08)")}
-                onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; e.currentTarget.style.transform = "scale(1)"; }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.filter = "none";
+                  e.currentTarget.style.transform = "scale(1)";
+                }}
               >
                 {sending ? "Sending code…" : "Continue"}
               </button>
@@ -858,7 +920,9 @@ export default function SignupPage() {
               {msg && (
                 <div
                   style={{
-                    borderRadius: 16, padding: "14px 16px", fontSize: 14,
+                    borderRadius: 16,
+                    padding: "14px 16px",
+                    fontSize: 14,
                     background: msg.kind === "error" ? "#fef2f2" : msg.kind === "success" ? "#ecfdf5" : "#fafafa",
                     color: msg.kind === "error" ? "#b91c1c" : msg.kind === "success" ? "#065f46" : "#111827",
                   }}
@@ -873,9 +937,7 @@ export default function SignupPage() {
           {step === 3 && (
             <form onSubmit={handleVerifyAndCreate} style={{ display: "grid", gap: TDLC.STACK_GAP_Y, marginTop: 28 }}>
               <div>
-                <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>
-                  Enter 6-digit OTP*
-                </label>
+                <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>Enter 6-digit OTP*</label>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
                   <input
                     ref={otpRef}
@@ -918,13 +980,21 @@ export default function SignupPage() {
                 type="submit"
                 disabled={verifying}
                 style={{
-                  ...ctaStyle, display: "grid", placeItems: "center", textAlign: "center", margin: "0 auto",
-                  opacity: verifying ? 0.6 : 1, cursor: verifying ? "not-allowed" : "pointer",
+                  ...ctaStyle,
+                  display: "grid",
+                  placeItems: "center",
+                  textAlign: "center",
+                  margin: "0 auto",
+                  opacity: verifying ? 0.6 : 1,
+                  cursor: verifying ? "not-allowed" : "pointer",
                 }}
                 onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.985)")}
                 onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
                 onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.08)")}
-                onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; e.currentTarget.style.transform = "scale(1)"; }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.filter = "none";
+                  e.currentTarget.style.transform = "scale(1)";
+                }}
               >
                 {verifying ? "Verifying…" : "CREATE ACCOUNT"}
               </button>
@@ -932,7 +1002,9 @@ export default function SignupPage() {
               {msg && (
                 <div
                   style={{
-                    borderRadius: 16, padding: "14px 16px", fontSize: 14,
+                    borderRadius: 16,
+                    padding: "14px 16px",
+                    fontSize: 14,
                     background: msg.kind === "error" ? "#fef2f2" : msg.kind === "success" ? "#ecfdf5" : "#fafafa",
                     color: msg.kind === "error" ? "#b91c1c" : msg.kind === "success" ? "#065f46" : "#111827",
                   }}
@@ -954,20 +1026,30 @@ function Picker({ label, value, setValue, inputStyle, refObj }) {
     <div>
       <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>{label}</label>
       <div style={{ position: "relative", display: "inline-block" }}>
-        <input
-          ref={refObj}
-          type="date"
-          style={{ ...inputStyle, width: 280, paddingRight: 48 }}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-        />
+        <input ref={refObj} type="date" style={{ ...inputStyle, width: 280, paddingRight: 48 }} value={value} onChange={(e) => setValue(e.target.value)} />
         <button
-          type="button" aria-label="Open calendar" onClick={() => { try { refObj?.current?.showPicker?.(); } catch {} }}
+          type="button"
+          aria-label="Open calendar"
+          onClick={() => {
+            try {
+              refObj?.current?.showPicker?.();
+            } catch {}
+          }}
           style={{
-            position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
-            width: 32, height: 32, borderRadius: 10,
-            borderWidth: 1, borderStyle: "solid", borderColor: "rgba(0,0,0,.12)",
-            background: "#fff", boxShadow: "0 6px 12px rgba(15,33,71,.08)", display: "grid", placeItems: "center",
+            position: "absolute",
+            right: 10,
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderStyle: "solid",
+            borderColor: "rgba(0,0,0,.12)",
+            background: "#fff",
+            boxShadow: "0 6px 12px rgba(15,33,71,.08)",
+            display: "grid",
+            placeItems: "center",
           }}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -983,14 +1065,16 @@ function Picker({ label, value, setValue, inputStyle, refObj }) {
 function PasswordField({ label, value, onChange, visible, setVisible, inputStyle, focusId, setFocusId, focusKey }) {
   return (
     <div style={{ position: "relative" }}>
-      <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>
-        {label}
-      </label>
+      <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 600 }}>{label}</label>
       <input
         type={visible ? "text" : "password"}
         value={value}
         onChange={(e) => onChange(e.currentTarget.value)}
-        style={{ ...inputStyle, ...(focusId === focusKey ? { boxShadow: `0 0 0 6px #0f21471F`, borderColor: "#0f2147" } : null), paddingRight: 54 }}
+        style={{
+          ...inputStyle,
+          ...(focusId === focusKey ? { boxShadow: `0 0 0 6px #0f21471F`, borderColor: "#0f2147" } : null),
+          paddingRight: 54,
+        }}
         onFocus={() => setFocusId(focusKey)}
         onBlur={() => setFocusId("")}
         minLength={8}
@@ -1001,10 +1085,20 @@ function PasswordField({ label, value, onChange, visible, setVisible, inputStyle
         aria-label={visible ? "Hide password" : "Show password"}
         onClick={() => setVisible((v) => !v)}
         style={{
-          position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-          width: 36, height: 36, borderRadius: 10,
-          borderWidth: 1, borderStyle: "solid", borderColor: "rgba(0,0,0,.12)",
-          background: "#fff", boxShadow: "0 6px 12px rgba(15,33,71,.08)", display: "grid", placeItems: "center",
+          position: "absolute",
+          right: 12,
+          top: "50%",
+          transform: "translateY(-50%)",
+          width: 36,
+          height: 36,
+          borderRadius: 10,
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "rgba(0,0,0,.12)",
+          background: "#fff",
+          boxShadow: "0 6px 12px rgba(15,33,71,.08)",
+          display: "grid",
+          placeItems: "center",
           cursor: "pointer",
         }}
       >

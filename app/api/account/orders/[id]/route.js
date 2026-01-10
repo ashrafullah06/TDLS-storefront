@@ -1,4 +1,5 @@
-// PATH: app/api/admin/orders/[id]/route.js
+// PATH: app/api/account/orders/[id]/route.js
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -6,154 +7,187 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 
+/**
+ * JSON helper (always no-store)
+ */
 function json(body, status = 200) {
-  return new NextResponse(JSON.stringify(body), {
+  return new NextResponse(JSON.stringify(body ?? null), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
   });
 }
 
-function isAdmin(roles) {
-  const arr = Array.isArray(roles) ? roles : roles ? [roles] : [];
-  const set = new Set(arr.map((r) => String(r || "").toLowerCase()));
-  return set.has("admin") || set.has("superadmin");
+const isNumeric = (s) => /^[0-9]+$/.test(String(s || "").trim());
+
+function toNumberSafe(v) {
+  if (v == null) return 0;
+
+  // Prisma Decimal often has .toNumber()
+  if (typeof v === "object" && typeof v.toNumber === "function") {
+    try {
+      return v.toNumber();
+    } catch {
+      // fall through
+    }
+  }
+
+  if (typeof v === "bigint") {
+    // This is safe as long as you’re not storing amounts beyond Number range
+    return Number(v);
+  }
+
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
 }
 
-export async function GET(req, { params }) {
+function safeDecode(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
   try {
-    const session = await auth();
-    const roles = session?.user?.roles ?? session?.user?.role ?? null;
-    if (!isAdmin(roles)) {
-      return json({ ok: false, error: "FORBIDDEN" }, 403);
-    }
-
-    const id = String(params?.id || "").trim();
-    if (!id) return json({ ok: false, error: "ID_REQUIRED" }, 400);
-
-    const order = await prisma.order.findUnique({
-      where: { id },
-      include: {
-        items: true,
-        payments: true,
-        shippingAddress: true,
-        billingAddress: true,
-        user: { select: { id: true, name: true, email: true, phone: true } },
-        events: prisma.orderEvent ? { orderBy: { createdAt: "asc" } } : false,
-      },
-    });
-
-    if (!order) return json({ ok: false, error: "NOT_FOUND" }, 404);
-
-    // If events relation is false, Prisma ignores it, but to be extra safe:
-    if (!prisma.orderEvent) {
-      // remove potential unsupported include effect
-      delete order.events;
-    }
-
-    return json({ ok: true, order }, 200);
-  } catch (err) {
-    console.error("[api/admin/orders/[id] GET] ", err);
-    return json({ ok: false, error: "FAILED" }, 500);
+    return decodeURIComponent(s);
+  } catch {
+    // If it’s malformed, keep raw instead of crashing
+    return s;
   }
 }
 
-export async function PATCH(req, { params }) {
+/**
+ * GET /api/account/orders/:id
+ * Customer-only: returns the order if it belongs to the logged-in user.
+ */
+export async function GET(_req, { params }) {
   try {
     const session = await auth();
-    const roles = session?.user?.roles ?? session?.user?.role ?? null;
-    if (!isAdmin(roles)) {
-      return json({ ok: false, error: "FORBIDDEN" }, 403);
+    const userId = session?.user?.id || null;
+
+    if (!userId) {
+      return json({ ok: false, error: "UNAUTHORIZED" }, 401);
     }
 
-    const id = String(params?.id || "").trim();
-    if (!id) return json({ ok: false, error: "ID_REQUIRED" }, 400);
-
-    const body = await req.json().catch(() => ({}));
-    const action = String(body?.action || "").toLowerCase();
-
-    const order = await prisma.order.findUnique({
-      where: { id },
-      include: { payments: true },
-    });
-    if (!order) return json({ ok: false, error: "NOT_FOUND" }, 404);
-
-    let data = {};
-    let eventKind = "";
-    let eventMessage = "";
-
-    const current = String(order.status || "").toUpperCase();
-
-    if (action === "place") {
-      if (current !== "DRAFT") {
-        return json({ ok: false, error: "INVALID_TRANSITION" }, 400);
-      }
-      data.status = "PLACED";
-      eventKind = "ORDER_PLACED_ADMIN";
-      eventMessage = "Order moved from DRAFT to PLACED by admin.";
-    } else if (action === "confirm") {
-      if (current !== "PLACED") {
-        return json({ ok: false, error: "INVALID_TRANSITION" }, 400);
-      }
-      data.status = "CONFIRMED";
-      eventKind = "ORDER_CONFIRMED";
-      eventMessage = "Order confirmed by admin.";
-    } else if (action === "complete") {
-      if (current !== "PLACED" && current !== "CONFIRMED") {
-        return json({ ok: false, error: "INVALID_TRANSITION" }, 400);
-      }
-      data.status = "COMPLETED";
-      data.fulfillmentStatus = "FULFILLED";
-
-      // If payments show at least one PAID-like, mark as PAID
-      const PAIDLIKE = new Set([
-        "PAID",
-        "SETTLED",
-        "SUCCEEDED",
-        "CAPTURED",
-        "AUTHORIZED",
-      ]);
-      const hasPaid = (order.payments || []).some((p) =>
-        PAIDLIKE.has(String(p.status || "").toUpperCase())
-      );
-      if (hasPaid) data.paymentStatus = "PAID";
-
-      eventKind = "ORDER_COMPLETED";
-      eventMessage = "Order marked completed by admin.";
-    } else if (action === "cancel") {
-      if (current === "COMPLETED" || current === "CANCELLED" || current === "ARCHIVED") {
-        return json({ ok: false, error: "INVALID_TRANSITION" }, 400);
-      }
-      data.status = "CANCELLED";
-      data.fulfillmentStatus = "CANCELLED";
-      eventKind = "ORDER_CANCELLED";
-      eventMessage = "Order cancelled by admin.";
-    } else if (action === "archive") {
-      data.status = "ARCHIVED";
-      eventKind = "ORDER_ARCHIVED";
-      eventMessage = "Order archived by admin.";
-    } else {
-      return json({ ok: false, error: "UNKNOWN_ACTION" }, 400);
+    const rawKey = safeDecode(params?.id);
+    if (!rawKey) {
+      return json({ ok: false, error: "ORDER_ID_REQUIRED" }, 422);
     }
 
-    const updated = await prisma.order.update({
-      where: { id },
-      data,
-    });
+    // Allow lookup by cuid `id` or numeric `orderNumber`, but ALWAYS scoped to this user
+    const where = isNumeric(rawKey)
+      ? { userId, orderNumber: Number(rawKey) }
+      : { userId, id: rawKey };
 
-    if (prisma.orderEvent?.create) {
-      await prisma.orderEvent.create({
-        data: {
-          orderId: id,
-          kind: eventKind || "ADMIN_ACTION",
-          message: eventMessage || `Admin performed action: ${action}`,
-          metadata: { action },
+    const order = await prisma.order.findFirst({
+      where,
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true } },
+        shippingAddress: true,
+        billingAddress: true,
+        items: {
+          include: {
+            variant: {
+              include: {
+                product: { select: { id: true, title: true, slug: true } },
+                media: { include: { media: true } },
+                optionValues: {
+                  include: { optionValue: { include: { option: true } } },
+                },
+              },
+            },
+          },
         },
-      });
+        payments: true,
+      },
+    });
+
+    if (!order) {
+      // Do not reveal whether an order exists for other users
+      return json({ ok: false, error: "ORDER_NOT_FOUND" }, 404);
     }
 
-    return json({ ok: true, order: updated }, 200);
+    // Events are optional (and schema may differ: "at" vs "createdAt"), so fetch resiliently.
+    let events = [];
+    try {
+      events = await prisma.orderEvent.findMany({
+        where: { orderId: order.id },
+        orderBy: { at: "desc" },
+        take: 50,
+      });
+    } catch {
+      try {
+        events = await prisma.orderEvent.findMany({
+          where: { orderId: order.id },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        });
+      } catch {
+        events = [];
+      }
+    }
+
+    const items = Array.isArray(order.items) ? order.items : [];
+    const payments = Array.isArray(order.payments) ? order.payments : [];
+
+    const out = {
+      id: order.id,
+      orderNumber: order.orderNumber ?? null,
+
+      status: order.status ?? null,
+      paymentStatus: order.paymentStatus ?? null,
+      fulfillmentStatus: order.fulfillmentStatus ?? null,
+      currency: order.currency ?? null,
+
+      subtotal: toNumberSafe(order.subtotal),
+      shippingTotal: toNumberSafe(order.shippingTotal),
+      discountTotal: toNumberSafe(order.discountTotal),
+      taxTotal: toNumberSafe(order.taxTotal),
+      grandTotal: toNumberSafe(order.grandTotal),
+
+      createdAt: order.createdAt ?? null,
+      updatedAt: order.updatedAt ?? null,
+
+      customer: order.user || null,
+      shippingAddress: order.shippingAddress || null,
+      billingAddress: order.billingAddress || null,
+
+      items: items.map((it) => ({
+        id: it.id,
+        title: it.title ?? null,
+        sku: it.sku ?? null,
+        quantity: Number(it.quantity ?? 0),
+        unitPrice: toNumberSafe(it.unitPrice),
+        total: toNumberSafe(it.total),
+        variantId: it.variantId ?? null,
+        variant: it.variant
+          ? {
+              id: it.variant.id,
+              sku: it.variant.sku ?? null,
+              barcode: it.variant.barcode ?? null,
+              title: it.variant.title ?? null,
+              product: it.variant.product ?? null,
+              media: Array.isArray(it.variant.media) ? it.variant.media : [],
+              optionValues: Array.isArray(it.variant.optionValues)
+                ? it.variant.optionValues
+                : [],
+            }
+          : null,
+      })),
+
+      payments: payments.map((p) => ({
+        id: p.id,
+        provider: p.provider ?? null,
+        status: p.status ?? null,
+        currency: p.currency ?? null,
+        amount: toNumberSafe(p.amount),
+        createdAt: p.createdAt ?? null,
+      })),
+
+      events,
+    };
+
+    return json({ ok: true, order: out }, 200);
   } catch (err) {
-    console.error("[api/admin/orders/[id] PATCH] ", err);
-    return json({ ok: false, error: "FAILED" }, 500);
+    console.error("[api/account/orders/[id] GET] ", err);
+    return json({ ok: false, error: "ORDER_FETCH_FAILED" }, 500);
   }
 }

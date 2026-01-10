@@ -196,3 +196,37 @@ src/generated/prisma/**/query-engine-*.exe
 src/generated/prisma/**/runtime/binary.*
 prisma/**/*.bak*
 
+
+############################################################
+# UPGRADE (ADDITIVE ONLY — NO EXISTING LINES REMOVED)
+# Goal: stop secrets/env from being committed + handle filenames with spaces
+############################################################
+
+# --- Vercel / env files (extra safety; prevents GitHub push protection blocks) ---
+vercel*.env
+*.production.env
+*.env.production
+.env.local
+.env.development
+.env.test
+
+# --- Cover common secret exports / copies ---
+*.env.backup
+*.env.save
+*.env.secret
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.pfx
+
+# --- Fix scratch paths that contain spaces/commas (escaped forms) ---
+src/components/homepage/image\ within\ the\ container\ distorted.js
+src/components/homepage/without\ blur,\ cropped\ image.js
+
+# --- Extra: OS / tooling artifacts that commonly leak in Windows dev ---
+*.orig
+*.rej
+*.patch
+Thumbs.db:encryptable
