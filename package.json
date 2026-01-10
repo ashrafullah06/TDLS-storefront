@@ -4,11 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "npm run prisma:generate:all && next build",
+    "build": "npm run prisma:generate:vercel && next build",
     "start": "next start",
     "db:ping": "dotenv -e .env -- node scripts/db/ping.mjs",
     "dev:app": "node scripts/dev-app.mjs",
-    "build:app": "npm run prisma:generate:all && dotenv -e .env -- next build",
+    "build:app": "npm run prisma:generate:vercel && dotenv -e .env -- next build",
     "start:app": "dotenv -e .env -- next start",
     "app:studio": "dotenv -e .env -- npx prisma studio --schema=prisma/app/schema.prisma --hostname 127.0.0.1 --port 5555",
     "studio": "dotenv -e .env -- cross-env PRISMA_STUDIO_QUERY_ENGINE_TYPE=binary npx prisma studio --schema=prisma/app/schema.prisma --hostname 127.0.0.1 --port 5555",
@@ -25,6 +25,7 @@
     "strapi:gen": "prisma generate --schema prisma/strapi/schema.prisma",
     "strapi:sync": "npm run strapi:validate && npm run strapi:pull && npm run strapi:format && npm run strapi:gen",
     "strapi:studio:ro": "dotenv -e .env -- prisma studio --schema=prisma/strapi/schema.prisma",
+    "prisma:generate:vercel": "npm run app:gen",
     "prisma:generate:all": "npm run app:gen && npm run strapi:gen",
     "prisma:pull:strapi": "dotenv -e .env -- prisma db pull --schema=prisma/strapi/schema.prisma && dotenv -e .env -- prisma format --schema=prisma/strapi/schema.prisma && dotenv -e .env -- prisma generate --schema=prisma/strapi/schema.prisma",
     "prisma:gen:strapi": "dotenv -e .env -- prisma generate --schema=prisma/strapi/schema.prisma",
@@ -45,7 +46,7 @@
     "db:studio:prod": "dotenv -e .env.production -- prisma studio",
     "stock:sync:strapi": "dotenv -e .env -- node scripts/sync-prisma-stock-to-strapi.mjs",
     "preinstall": "npm config set ignore-scripts false",
-    "postinstall": "npm run prisma:generate:all"
+    "postinstall": "npm run prisma:generate:vercel"
   },
   "dependencies": {
     "@auth/prisma-adapter": "2.10.0",

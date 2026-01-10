@@ -2,10 +2,21 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import prismaClient from "@/lib/prisma";
 
-const prisma = globalThis.__prisma__ ?? prismaClient;
-if (!globalThis.__prisma__) globalThis.__prisma__ = prisma;
+let prisma = globalThis.__prisma__ || null;
+
+async function getPrisma() {
+  if (prisma) return prisma;
+
+  // IMPORTANT: dynamic import prevents build-time Prisma initialization failures
+  const prismaMod = await import("@/lib/prisma");
+  const prismaClient = prismaMod?.default ?? prismaMod?.prisma ?? prismaMod;
+
+  prisma = globalThis.__prisma__ ?? prismaClient;
+  if (!globalThis.__prisma__) globalThis.__prisma__ = prisma;
+
+  return prisma;
+}
 
 // util: normalize decimal to number
 function d(v) {
@@ -18,6 +29,8 @@ function d(v) {
 
 export async function GET(req) {
   try {
+    const prisma = await getPrisma();
+
     const { searchParams } = new URL(req.url);
     const order_no = searchParams.get("order_no") || "";
     const invoice_no = searchParams.get("invoice_no") || "";
