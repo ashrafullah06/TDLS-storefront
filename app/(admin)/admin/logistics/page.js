@@ -1,4 +1,8 @@
 // my-project/app/(admin)/admin/logistics/page.js
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+
 import prisma from "@/lib/prisma";
 import { M } from "@/lib/_mapping";
 
@@ -9,6 +13,13 @@ export default async function LogisticsPage() {
     ? await prisma[SH.model].findMany({
         take: 100,
         orderBy: { id: "desc" },
+        select: {
+          id: true,
+          [SH.orderId]: true,
+          [SH.carrier]: true,
+          [SH.tracking]: true,
+          [SH.status]: true,
+        },
       })
     : [];
 
