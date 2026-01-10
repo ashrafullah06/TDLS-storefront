@@ -67,19 +67,17 @@ const nextConfig: NextConfig = {
   },
 
   // Ensure Prisma engines / generated clients are included in Vercel output tracing
-  experimental: {
-    outputFileTracingIncludes: {
-      "app/**": [
-        "./node_modules/.prisma/client/**",
-        "./node_modules/@prisma/client/**",
-        "./src/generated/prisma/**",
-      ],
-      "pages/**": [
-        "./node_modules/.prisma/client/**",
-        "./node_modules/@prisma/client/**",
-        "./src/generated/prisma/**",
-      ],
-    },
+  outputFileTracingIncludes: {
+    "app/**": [
+      "./node_modules/.prisma/client/**",
+      "./node_modules/@prisma/client/**",
+      "./src/generated/prisma/**",
+    ],
+    "pages/**": [
+      "./node_modules/.prisma/client/**",
+      "./node_modules/@prisma/client/**",
+      "./src/generated/prisma/**",
+    ],
   },
 
   images: {
