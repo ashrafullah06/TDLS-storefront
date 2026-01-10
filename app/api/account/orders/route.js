@@ -4,8 +4,6 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { auth } from "@/lib/auth";
 
 function json(body, status = 200) {
   return new NextResponse(JSON.stringify(body), {
@@ -14,8 +12,37 @@ function json(body, status = 200) {
   });
 }
 
+function isBuildPhase() {
+  const nextPhase = String(process.env.NEXT_PHASE || "");
+  const npmEvent = String(process.env.npm_lifecycle_event || "");
+  const npmScript = String(process.env.npm_lifecycle_script || "");
+  return (
+    nextPhase === "phase-production-build" ||
+    nextPhase.includes("phase-production-build") ||
+    npmEvent === "build" ||
+    npmScript.includes("next build")
+  );
+}
+
 export async function GET() {
   try {
+    // Build-safety: during `next build`/Vercel "Collecting page data"
+    if (isBuildPhase()) {
+      return json([], 200);
+    }
+
+    // Lazy-load to avoid module evaluation failures during build
+    let prisma, auth;
+    try {
+      const modPrisma = await import("@/lib/prisma");
+      const modAuth = await import("@/lib/auth");
+      prisma = modPrisma?.default;
+      auth = modAuth?.auth;
+    } catch (e) {
+      console.error("[api/account/orders init] ", e);
+      return json([], 200); // keep behavior safe for dashboards
+    }
+
     // Auth using Auth.js v5 single config
     const session = await auth();
     const userId = session?.user?.id || null;
@@ -41,19 +68,10 @@ export async function GET() {
       const payments = Array.isArray(o.payments) ? o.payments : [];
 
       // Count items
-      const itemCount = items.reduce(
-        (sum, it) => sum + Number(it.quantity || 0),
-        0
-      );
+      const itemCount = items.reduce((sum, it) => sum + Number(it.quantity || 0), 0);
 
       // Sum paid (PAID-like statuses)
-      const PAIDLIKE = new Set([
-        "PAID",
-        "SETTLED",
-        "CAPTURED",
-        "SUCCEEDED",
-        "AUTHORIZED",
-      ]);
+      const PAIDLIKE = new Set(["PAID", "SETTLED", "CAPTURED", "SUCCEEDED", "AUTHORIZED"]);
       const paidAmount = payments.reduce((sum, p) => {
         const st = String(p?.status || "").toUpperCase();
         return PAIDLIKE.has(st) ? sum + Number(p.amount || 0) : sum;
