@@ -1,4 +1,8 @@
 //app/(admin)/admin/finance/payments/page.js
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const runtime = "nodejs";
+
 import { getPrisma } from "@/lib/_dynamic_prisma";
 import { M } from "@/lib/_mapping";
 
@@ -8,7 +12,15 @@ export default async function PaymentsPage() {
 
   const rows = await prisma[PAY.model].findMany({
     take: 100,
-    orderBy: { [(PAY.createdAt || "createdAt")]: "desc" }
+    orderBy: { [(PAY.createdAt || "createdAt")]: "desc" },
+    select: {
+      id: true,
+      [PAY.orderId]: true,
+      [PAY.provider]: true,
+      [PAY.amount]: true,
+      [PAY.status]: true,
+      [(PAY.createdAt || "createdAt")]: true,
+    },
   });
 
   return (
@@ -27,14 +39,21 @@ export default async function PaymentsPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(p => (
+            {rows.map((p) => (
               <tr key={p.id} className="border-t">
                 <td className="px-3 py-2">{p.id}</td>
                 <td className="px-3 py-2">{p[M("Payment").orderId]}</td>
                 <td className="px-3 py-2">{p[M("Payment").provider] || "-"}</td>
-                <td className="px-3 py-2">{Number(p[M("Payment").amount] || 0).toFixed(2)}</td>
+                <td className="px-3 py-2">
+                  {Number(p[M("Payment").amount] || 0).toFixed(2)}
+                </td>
                 <td className="px-3 py-2">{p[M("Payment").status]}</td>
-                <td className="px-3 py-2">{(p[M("Payment").createdAt] || "").toString().slice(0,19).replace("T"," ")}</td>
+                <td className="px-3 py-2">
+                  {(p[M("Payment").createdAt] || "")
+                    .toString()
+                    .slice(0, 19)
+                    .replace("T", " ")}
+                </td>
               </tr>
             ))}
           </tbody>
