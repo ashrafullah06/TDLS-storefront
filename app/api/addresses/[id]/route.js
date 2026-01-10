@@ -76,10 +76,8 @@ export async function GET(_req, { params }) {
   const id = String(params?.id || "");
   const addr = await prisma.address.findFirst({
     where: { id, userId, archivedAt: null },
-    include: {
-      versions: false,
-    },
   });
+
   if (!addr) return j({ error: "NOT_FOUND" }, 404);
   return j(addr, 200);
 }
