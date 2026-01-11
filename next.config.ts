@@ -101,6 +101,7 @@ const nextConfig: NextConfig = {
     })),
   },
 
+  // Deployment-confirmed: keep build strict (do not hide lint/type errors)
   eslint: { ignoreDuringBuilds: false },
   typescript: { ignoreBuildErrors: false },
 
