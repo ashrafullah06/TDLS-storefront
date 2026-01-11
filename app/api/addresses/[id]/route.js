@@ -5,8 +5,23 @@ export const runtime = "nodejs";
 export const fetchCache = "force-no-store";
 
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { auth } from "@/lib/auth";
+
+/* ---------------- lazy imports (avoid build-time crashes) ---------------- */
+let _prisma;
+async function getPrisma() {
+  if (_prisma) return _prisma;
+  const mod = await import("@/lib/prisma");
+  _prisma = mod.default || mod.prisma;
+  return _prisma;
+}
+
+let _auth;
+async function getAuth() {
+  if (_auth) return _auth;
+  const mod = await import("@/lib/auth");
+  _auth = mod.auth;
+  return _auth;
+}
 
 /* ---------------- helpers ---------------- */
 function j(body, status = 200) {
@@ -54,7 +69,7 @@ function pickAddressPayload(input = {}) {
   };
 }
 
-async function requireRecentOtp(userId, purpose, windowMinutes = 10) {
+async function requireRecentOtp(prisma, userId, purpose, windowMinutes = 10) {
   const since = new Date(Date.now() - windowMinutes * 60 * 1000);
   const ok = await prisma.otpCode.findFirst({
     where: {
@@ -69,6 +84,9 @@ async function requireRecentOtp(userId, purpose, windowMinutes = 10) {
 
 /* ---------------- GET (read single) ---------------- */
 export async function GET(_req, { params }) {
+  const auth = await getAuth();
+  const prisma = await getPrisma();
+
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) return j({ error: "UNAUTHORIZED" }, 401);
@@ -84,6 +102,9 @@ export async function GET(_req, { params }) {
 
 /* ---------------- PUT (update) ---------------- */
 export async function PUT(req, { params }) {
+  const auth = await getAuth();
+  const prisma = await getPrisma();
+
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) return j({ error: "UNAUTHORIZED" }, 401);
@@ -97,7 +118,7 @@ export async function PUT(req, { params }) {
   if (!existing) return j({ error: "NOT_FOUND" }, 404);
 
   // If any field (incl. phone) is changing, require a recent OTP for address_update
-  const otpOk = await requireRecentOtp(userId, "address_update");
+  const otpOk = await requireRecentOtp(prisma, userId, "address_update");
   if (!otpOk) return j({ error: "OTP_REQUIRED", purpose: "address_update" }, 403);
 
   // If phone changes, drop its verification marker
@@ -151,6 +172,9 @@ export async function PUT(req, { params }) {
 
 /* ---------------- DELETE (soft-delete) ---------------- */
 export async function DELETE(_req, { params }) {
+  const auth = await getAuth();
+  const prisma = await getPrisma();
+
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) return j({ error: "UNAUTHORIZED" }, 401);
@@ -160,7 +184,7 @@ export async function DELETE(_req, { params }) {
   if (!existing) return j({ error: "NOT_FOUND" }, 404);
 
   // Require OTP for deletion
-  const otpOk = await requireRecentOtp(userId, "address_delete");
+  const otpOk = await requireRecentOtp(prisma, userId, "address_delete");
   if (!otpOk) return j({ error: "OTP_REQUIRED", purpose: "address_delete" }, 403);
 
   await prisma.$transaction(async (tx) => {
