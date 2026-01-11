@@ -43,10 +43,18 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
 
+  /**
+   * Prisma on Vercel:
+   * Keep Prisma packages external (resolved via Node require) to reduce bundling/tracing issues.
+   */
+  serverExternalPackages: ["@prisma/client", "prisma"],
+
   // Output File Tracing
   outputFileTracingRoot: process.cwd(),
+
+  // Keys are route globs (matched against the route path); values are file globs from project root.
   outputFileTracingExcludes: {
-    "/**": [
+    "/*": [
       // Avoid Windows user-profile junctions / protected locations.
       // Do NOT reference "Application Data" (junction). Use AppData instead.
       "**/AppData/**",
@@ -57,8 +65,7 @@ const nextConfig: NextConfig = {
       "**/Documents and Settings/**",
       "**/System Volume Information/**",
 
-      // Add absolute-forward-slash patterns to avoid any Windows glob resolver
-      // accidentally touching the "Application Data" junction while evaluating.
+      // Absolute forward-slash patterns to avoid junction traversal
       "C:/Users/**/AppData/**",
       "C:/$Recycle.Bin/**",
       "C:/$RECYCLE.BIN/**",
@@ -67,16 +74,17 @@ const nextConfig: NextConfig = {
     ],
   },
 
-  // Ensure Prisma engines / generated clients are included in Vercel output tracing
-  // IMPORTANT: Keys must be route globs like "/api/hello" (not "app/**" or "pages/**")
   outputFileTracingIncludes: {
-    "/api/**": [
+    // Global include for all server-traced routes
+    "/*": [
       "./node_modules/.prisma/client/**",
       "./node_modules/@prisma/client/**",
       "./node_modules/@prisma/engines/**",
       "./src/generated/prisma/**",
     ],
-    "/**": [
+
+    // Extra safety for API routes
+    "/api/**": [
       "./node_modules/.prisma/client/**",
       "./node_modules/@prisma/client/**",
       "./node_modules/@prisma/engines/**",
