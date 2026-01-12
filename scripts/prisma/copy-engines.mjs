@@ -15,21 +15,40 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
-function listEngineFiles(dir) {
+/**
+ * Runtime engine files only:
+ * - libquery_engine-* (Node-API)
+ * - query-engine-* (binary engine, sometimes used depending on Prisma settings)
+ *
+ * Exclude schema-engine-* to reduce output size; schema-engine is for migrations/introspection tooling,
+ * not for runtime queries in your deployed Next.js app.
+ */
+function listRuntimeEngineFiles(dir) {
   if (!exists(dir)) return [];
   const names = fs.readdirSync(dir);
-  // Cover library + binary engine artifacts across platforms
+
   return names.filter(
     (n) =>
       n.startsWith("libquery_engine-") ||
-      n.startsWith("query-engine-") ||
-      n.startsWith("schema-engine-")
+      n.startsWith("query-engine-")
   );
 }
 
 function copyFile(src, dstDir) {
   ensureDir(dstDir);
   const dst = path.join(dstDir, path.basename(src));
+
+  // Skip copy if already present with same size (avoids extra writes)
+  try {
+    if (exists(dst)) {
+      const a = fs.statSync(src);
+      const b = fs.statSync(dst);
+      if (a.size === b.size) return dst;
+    }
+  } catch {
+    // fallthrough to copy
+  }
+
   fs.copyFileSync(src, dst);
   return dst;
 }
@@ -37,22 +56,22 @@ function copyFile(src, dstDir) {
 const repoRoot = process.cwd();
 const prismaClientDir = path.join(repoRoot, "node_modules", ".prisma", "client");
 
-const engines = listEngineFiles(prismaClientDir);
+const engines = listRuntimeEngineFiles(prismaClientDir);
 if (!engines.length) {
-  console.error(`[copy-engines] No Prisma engine files found in: ${prismaClientDir}`);
+  console.error(`[copy-engines] No runtime Prisma engine files found in: ${prismaClientDir}`);
   process.exit(1);
 }
 
+/**
+ * Copy ONLY to the two generated Prisma client folders (your real outputs).
+ * This removes duplication into extra folders that inflate Vercel packaging and cause OOM.
+ */
 const targets = [
   path.join(repoRoot, "src", "generated", "prisma", "app"),
   path.join(repoRoot, "src", "generated", "prisma", "strapi"),
-  path.join(repoRoot, "generated", "prisma"),
-
-  // Extra deterministic fallback: Prisma can resolve engines relative to @prisma/client in some serverless bundles
-  path.join(repoRoot, "node_modules", "@prisma", "client")
 ];
 
-console.log(`[copy-engines] Found engines: ${engines.join(", ")}`);
+console.log(`[copy-engines] Found runtime engines: ${engines.join(", ")}`);
 for (const e of engines) {
   const src = path.join(prismaClientDir, e);
   for (const t of targets) {

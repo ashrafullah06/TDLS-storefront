@@ -1,4 +1,3 @@
-// FILE: next.config.ts
 import type { NextConfig } from "next";
 import { URL } from "url";
 
@@ -51,6 +50,14 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
 
   /**
+   * Next build memory optimizations (does not change runtime behavior)
+   */
+  experimental: {
+    webpackMemoryOptimizations: true,
+    webpackBuildWorker: true,
+  },
+
+  /**
    * Prisma on Vercel:
    * Keep Prisma packages external (resolved via Node require) to reduce bundling/tracing issues.
    */
@@ -82,19 +89,25 @@ const nextConfig: NextConfig = {
   },
 
   outputFileTracingIncludes: {
-    // Global include for all server-traced routes
+    /**
+     * IMPORTANT CHANGE:
+     * Removed "./node_modules/@prisma/engines/**" from tracing because it bloats
+     * the server output and increases "Deploying outputs..." memory pressure.
+     *
+     * Your runtime Prisma engines are already under:
+     * - node_modules/.prisma/client
+     * and you also copy them into:
+     * - src/generated/prisma/**
+     */
     "/*": [
       "./node_modules/.prisma/client/**",
       "./node_modules/@prisma/client/**",
-      "./node_modules/@prisma/engines/**",
       "./src/generated/prisma/**",
     ],
 
-    // Extra safety for API routes
     "/api/**": [
       "./node_modules/.prisma/client/**",
       "./node_modules/@prisma/client/**",
-      "./node_modules/@prisma/engines/**",
       "./src/generated/prisma/**",
     ],
   },
