@@ -39,6 +39,13 @@ addSpec(
 addSpec(specs, { protocol: "http", hostname: "127.0.0.1", port: "1337" });
 addSpec(specs, { protocol: "http", hostname: "localhost", port: "1337" });
 
+/**
+ * Vercel build OOM mitigation:
+ * Next.js runs ESLint during `next build` by default; this can increase peak memory on Vercel.
+ * We keep lint strict locally/CI, but avoid build-time lint on Vercel only to prevent OOM SIGKILL.
+ */
+const isVercelBuild = process.env.VERCEL === "1";
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -101,8 +108,8 @@ const nextConfig: NextConfig = {
     })),
   },
 
-  // Deployment-confirmed: keep build strict (do not hide lint/type errors)
-  eslint: { ignoreDuringBuilds: false },
+  // Keep build strict locally; avoid build-time lint only on Vercel to reduce peak memory.
+  eslint: { ignoreDuringBuilds: isVercelBuild },
   typescript: { ignoreBuildErrors: false },
 
   webpack: (config) => {
