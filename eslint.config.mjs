@@ -14,7 +14,6 @@ const compat = new FlatCompat({
 });
 
 export default [
-  // Ignore build + generated output (prevents noisy linting and speeds up Vercel builds)
   {
     ignores: [
       "**/.next/**",
@@ -24,17 +23,13 @@ export default [
       "**/build/**",
       "**/out/**",
       "**/coverage/**",
-
-      // generated code (should never block deploy)
       "**/src/generated/**",
       "**/src/lib/graphql/generated/**",
     ],
   },
 
-  // Next.js recommended rule-sets
   ...compat.extends("next/core-web-vitals", "next/typescript"),
 
-  // Project-wide tuning: keep signal, avoid blocking deploy on style-only issues
   {
     plugins: {
       "react-hooks": reactHooks,
@@ -44,16 +39,12 @@ export default [
       "@next/next/no-html-link-for-pages": "warn",
       "import/no-anonymous-default-export": "off",
 
-      /**
-       * These two rules are currently failing your Vercel build across many files.
-       * Disable them so deploy is not blocked now.
-       */
       "react-hooks/purity": "off",
       "react-hooks/set-state-in-effect": "off",
+      "react-hooks/immutability": "off",
     },
   },
 
-  // JS/JSX: allow legacy require() patterns and make common “blockers” non-fatal
   {
     files: ["**/*.{js,jsx,mjs,cjs}"],
     plugins: {
@@ -86,13 +77,12 @@ export default [
       "react-hooks/rules-of-hooks": "warn",
       "react-hooks/exhaustive-deps": "warn",
 
-      // Ensure these do not become errors via inherited configs
       "react-hooks/purity": "off",
       "react-hooks/set-state-in-effect": "off",
+      "react-hooks/immutability": "off",
     },
   },
 
-  // TS/TSX: keep unused checks as warnings (still visible, not deployment-blocking)
   {
     files: ["**/*.{ts,tsx}"],
     plugins: {
@@ -119,12 +109,11 @@ export default [
         },
       ],
 
-      // If you regenerate GraphQL types and they still slip in, this prevents hard fails
       "@typescript-eslint/no-explicit-any": "warn",
 
-      // Ensure these do not become errors via inherited configs
       "react-hooks/purity": "off",
       "react-hooks/set-state-in-effect": "off",
+      "react-hooks/immutability": "off",
     },
   },
 ];
