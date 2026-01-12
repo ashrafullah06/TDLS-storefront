@@ -47,7 +47,7 @@
     "db:studio:prod": "dotenv -e .env.production -- prisma studio",
     "stock:sync:strapi": "dotenv -e .env -- node scripts/sync-prisma-stock-to-strapi.mjs",
     "preinstall": "npm config set ignore-scripts false",
-    "postinstall": "npm run prisma:generate:vercel"
+    "postinstall": "node -e \"process.exit(process.env.VERCEL ? 0 : 1)\" || npm run prisma:generate:vercel"
   },
   "dependencies": {
     "@auth/prisma-adapter": "2.10.0",
