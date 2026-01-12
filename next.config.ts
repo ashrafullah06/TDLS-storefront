@@ -1,3 +1,4 @@
+// FILE: next.config.ts
 import type { NextConfig } from "next";
 import { URL } from "url";
 
@@ -30,9 +31,21 @@ addSpec(specs, { protocol: "https", hostname: "thednalabstore.com" });
 addSpec(specs, { protocol: "https", hostname: "media.thednalabstore.com" });
 addSpec(specs, { protocol: "https", hostname: "cms.thednalabstore.com" });
 
+// Allow whatever you set in env to also be permitted for images
 addSpec(
   specs,
-  specFromUrl(process.env.NEXT_PUBLIC_STRAPI_URL) || specFromUrl(process.env.STRAPI_URL) || null
+  specFromUrl(process.env.NEXT_PUBLIC_STRAPI_URL) ||
+    specFromUrl(process.env.STRAPI_URL) ||
+    null
+);
+
+// Media domain from env (Strapi/Cloudflare R2 custom domain)
+addSpec(
+  specs,
+  specFromUrl(process.env.NEXT_PUBLIC_MEDIA_PUBLIC_URL) ||
+    specFromUrl(process.env.NEXT_PUBLIC_MEDIA_URL) ||
+    specFromUrl(process.env.MEDIA_PUBLIC_URL) ||
+    null
 );
 
 addSpec(specs, { protocol: "http", hostname: "127.0.0.1", port: "1337" });
@@ -43,7 +56,7 @@ addSpec(specs, { protocol: "http", hostname: "localhost", port: "1337" });
  * Next.js runs ESLint during `next build` by default; this can increase peak memory on Vercel.
  * We keep lint strict locally/CI, but avoid build-time lint on Vercel only to prevent OOM SIGKILL.
  */
-const isVercelBuild = process.env.VERCEL === "1";
+const isVercelBuild = process.env.VERCEL === "1" || process.env.VERCEL === "true";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
