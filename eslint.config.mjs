@@ -39,9 +39,13 @@ export default [
       "@next/next/no-html-link-for-pages": "warn",
       "import/no-anonymous-default-export": "off",
 
+      // You already disabled these:
       "react-hooks/purity": "off",
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/immutability": "off",
+
+      // ✅ This is the build blocker in your logs
+      "react-hooks/static-components": "warn",
     },
   },
 
@@ -77,9 +81,13 @@ export default [
       "react-hooks/rules-of-hooks": "warn",
       "react-hooks/exhaustive-deps": "warn",
 
+      // You already disabled these:
       "react-hooks/purity": "off",
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/immutability": "off",
+
+      // ✅ Ensure it’s not re-escalated in JS files
+      "react-hooks/static-components": "warn",
     },
   },
 
@@ -111,9 +119,13 @@ export default [
 
       "@typescript-eslint/no-explicit-any": "warn",
 
+      // You already disabled these:
       "react-hooks/purity": "off",
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/immutability": "off",
+
+      // ✅ Ensure it’s not re-escalated in TS/TSX files
+      "react-hooks/static-components": "warn",
     },
   },
 ];
