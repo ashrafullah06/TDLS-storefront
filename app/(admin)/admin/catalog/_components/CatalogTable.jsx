@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useMemo } from "react";
+import Image from "next/image";
 
 function str(v) {
   return String(v ?? "").trim();
@@ -66,7 +67,15 @@ export default function CatalogTable({
   className = "",
 }) {
   const rows = Array.isArray(items) ? items : [];
-  const selected = useMemo(() => new Set((Array.isArray(selectedIds) ? selectedIds : []).map((x) => Number(x)).filter(Number.isFinite)), [selectedIds]);
+  const selected = useMemo(
+    () =>
+      new Set(
+        (Array.isArray(selectedIds) ? selectedIds : [])
+          .map((x) => Number(x))
+          .filter(Number.isFinite)
+      ),
+    [selectedIds]
+  );
 
   const rowIds = useMemo(() => rows.map((r) => num(r?.id)).filter((x) => x != null), [rows]);
 
@@ -119,7 +128,7 @@ export default function CatalogTable({
           </thead>
 
           <tbody>
-            {rows.map((p) => {
+            {rows.map((p, idx) => {
               const id = num(p?.id);
               const isSelected = id != null ? selected.has(id) : false;
 
@@ -133,11 +142,14 @@ export default function CatalogTable({
 
               const priceLabel = formatPrice(p?.pricing);
               const updatedAt = p?.timestamps?.updatedAt ? new Date(p.timestamps.updatedAt) : null;
-              const updatedText = updatedAt && Number.isFinite(updatedAt.getTime()) ? updatedAt.toLocaleString() : "—";
+              const updatedText =
+                updatedAt && Number.isFinite(updatedAt.getTime()) ? updatedAt.toLocaleString() : "—";
+
+              const stableKey = id ?? p?.slug ?? `row-${idx}`;
 
               return (
                 <tr
-                  key={id ?? `${p?.slug}-${Math.random()}`}
+                  key={stableKey}
                   className={[
                     "border-t border-neutral-200",
                     isSelected ? "bg-[#0F2147]/[0.03]" : "bg-white",
@@ -157,13 +169,15 @@ export default function CatalogTable({
 
                   <td className="px-3 py-3 align-top">
                     <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
+                      <div className="relative h-12 w-12 overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
                         {thumb ? (
-                          <img
+                          <Image
                             src={thumb}
                             alt={safeAlt(p)}
-                            className="h-full w-full object-cover"
-                            loading="lazy"
+                            fill
+                            sizes="48px"
+                            className="object-cover"
+                            priority={false}
                           />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-neutral-500">

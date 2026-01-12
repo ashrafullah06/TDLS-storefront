@@ -2,6 +2,7 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 
 function str(v) {
   return String(v ?? "").trim();
@@ -67,7 +68,7 @@ export default function CatalogGrid({
   return (
     <div className={className}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {list.map((p) => {
+        {list.map((p, idx) => {
           const id = num(p?.id);
           const title = p?.title ?? p?.slug ?? (id != null ? `#${id}` : "Product");
           const thumb = p?.thumbnail || null;
@@ -86,9 +87,11 @@ export default function CatalogGrid({
             if (typeof onOpen === "function") onOpen(id);
           };
 
+          const stableKey = id ?? p?.slug ?? `row-${idx}`;
+
           return (
             <button
-              key={id ?? `${p?.slug}-${Math.random()}`}
+              key={stableKey}
               type="button"
               onClick={onClick}
               disabled={loading || !id}
@@ -100,13 +103,15 @@ export default function CatalogGrid({
               ].join(" ")}
             >
               <div className="flex gap-3">
-                <div className="h-20 w-20 flex-none overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
+                <div className="relative h-20 w-20 flex-none overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
                   {thumb ? (
-                    <img
+                    <Image
                       src={thumb}
                       alt={safeAlt(p)}
-                      className="h-full w-full object-cover"
-                      loading="lazy"
+                      fill
+                      sizes="80px"
+                      className="object-cover"
+                      priority={false}
                     />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-neutral-500">
