@@ -63,6 +63,13 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
 
   /**
+   * FIX: Static generation timeout
+   * Your /sitemap-products.xml route is exceeding the default 60s build worker limit.
+   * Increase it to avoid build failures for large catalogs.
+   */
+  staticPageGenerationTimeout: 180,
+
+  /**
    * Next build memory optimizations (does not change runtime behavior)
    */
   experimental: {
