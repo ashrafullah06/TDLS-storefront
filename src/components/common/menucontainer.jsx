@@ -74,14 +74,7 @@ function normalizeRelation(rel) {
 
 function pickLabel(obj) {
   if (!obj) return "";
-  const v =
-    obj.name ||
-    obj.title ||
-    obj.label ||
-    obj.displayName ||
-    obj.heading ||
-    obj.text ||
-    "";
+  const v = obj.name || obj.title || obj.label || obj.displayName || obj.heading || obj.text || "";
   return (v ?? "").toString().trim();
 }
 
@@ -99,7 +92,6 @@ function pickPriority(obj) {
 }
 
 function getRel(obj, key) {
-  // handle Strapi v4 returning { data: ... } vs already flattened objects
   if (!obj) return undefined;
   const direct = obj[key];
   if (direct !== undefined) return direct;
@@ -184,7 +176,6 @@ async function fetchViaProxy(path, ms = 12000) {
     const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      // Prefer cached but don't let the browser pin this forever if the proxy varies.
       cache: "force-cache",
       signal: controller.signal,
     });
@@ -211,7 +202,6 @@ async function fetchAudienceCategories() {
     const r = await fetchViaProxy(p, 12000);
     if (!r.ok || !r.json) continue;
 
-    // r.json is the raw Strapi response, so the collection is at r.json.data
     const raw = r.json?.data;
     const list = Array.isArray(raw) ? raw.map(normalizeEntity).filter(Boolean) : [];
     if (list.length) return { items: list, sourcePath: p };
@@ -355,8 +345,17 @@ function CategoryCard({ node, onNavigate }) {
 }
 
 /* ------------------------- Component ------------------------- */
+/**
+ * IMPORTANT SAFETY:
+ * - `open` is now controlled-safe AND cannot accidentally default to open.
+ * - If parent forgets to pass `open`, this component stays closed (prevents “white veil”).
+ * - If parent passes `open={true}` but forgets `onClose`, the component can still self-close.
+ */
+export default function MenuContainer({ open: openProp, onClose = null, options = null }) {
+  const isControlled = typeof openProp === "boolean";
+  const [selfOpen, setSelfOpen] = useState(false);
+  const open = isControlled ? openProp : selfOpen;
 
-export default function MenuContainer({ open = true, onClose = null, options = null }) {
   const usingExternal = Array.isArray(options) && options.length > 0;
 
   const [nodes, setNodes] = useState([]);
@@ -376,6 +375,15 @@ export default function MenuContainer({ open = true, onClose = null, options = n
     openRef.current = open;
   }, [open]);
 
+  // If uncontrolled and it ever becomes open via internal use, allow self-close.
+  const close = () => {
+    if (typeof onClose === "function") {
+      onClose();
+      return;
+    }
+    if (!isControlled) setSelfOpen(false);
+  };
+
   // Load nodes (external options OR proxy fetch with cache/TTL)
   useEffect(() => {
     if (!open) return;
@@ -390,6 +398,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
           })
           .filter((x) => x?.label && x?.href)
       );
+
       setNodes(sortNodes(normalized));
       setDiag({
         loading: false,
@@ -494,7 +503,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
     const onKeyDown = (e) => {
       if (e.key === "Escape") {
         try {
-          onClose?.();
+          close();
         } catch {}
       }
     };
@@ -506,7 +515,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
       html.style.overflow = prevHtmlOverflow;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [open, onClose]);
+  }, [open]); // close() is stable enough; do not rebind on every render
 
   const q = query.trim().toLowerCase();
 
@@ -521,7 +530,6 @@ export default function MenuContainer({ open = true, onClose = null, options = n
           const selfMatch = match(n.label) || match(n.slug);
           const childMatch = kids.length > 0;
           if (!selfMatch && !childMatch) return null;
-          // keep children that matched, so the UI stays accurate
           return { ...n, children: kids };
         })
         .filter(Boolean);
@@ -531,12 +539,9 @@ export default function MenuContainer({ open = true, onClose = null, options = n
 
   if (!open) return null;
 
-  const activeTier = TIERS[Math.max(0, Math.min(activeTierIdx, TIERS.length - 1))];
-  const tierHref = canonicalHref(activeTier.key) || `${CANONICAL_PREFIX}/${activeTier.key}`;
-
-  const close = () => {
-    if (typeof onClose === "function") onClose();
-  };
+  const safeTierIdx = Math.max(0, Math.min(activeTierIdx, TIERS.length - 1));
+  const activeTier = TIERS[safeTierIdx];
+  const tierHref = canonicalHref(activeTier?.key) || `${CANONICAL_PREFIX}/${activeTier?.key || "limited-edition"}`;
 
   return (
     <AnimatePresence>
@@ -632,7 +637,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
             exit={{ y: 14, scale: 0.985, opacity: 0 }}
             transition={{ duration: 0.22 }}
             onPointerDown={(e) => {
-              // prevent outside-close handler from seeing pointer inside content
+              // keep inside interactions from bubbling to the outside close layer
               e.stopPropagation();
             }}
           >
@@ -666,15 +671,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                 </div>
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  flex: "1 1 360px",
-                  justifyContent: "flex-end",
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 360px", justifyContent: "flex-end" }}>
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -716,7 +713,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
               <div className="tdls-left">
                 <div style={{ display: "grid", gap: 10 }}>
                   {TIERS.map((t, idx) => (
-                    <TierPill key={t.key} active={idx === activeTierIdx} onClick={() => setActiveTierIdx(idx)}>
+                    <TierPill key={t.key} active={idx === safeTierIdx} onClick={() => setActiveTierIdx(idx)}>
                       {t.label}
                     </TierPill>
                   ))}
@@ -732,8 +729,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                       borderRadius: 16,
                       padding: "12px 12px",
                       border: "1px solid rgba(15,33,71,0.10)",
-                      background:
-                        "linear-gradient(90deg, rgba(212,175,55,0.22) 0%, rgba(212,175,55,0.10) 100%)",
+                      background: "linear-gradient(90deg, rgba(212,175,55,0.22) 0%, rgba(212,175,55,0.10) 100%)",
                       color: "#0F2147",
                       fontWeight: 950,
                       letterSpacing: ".08em",
@@ -742,7 +738,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                       display: "block",
                     }}
                   >
-                    Explore {activeTier.label}
+                    Explore {activeTier?.label || "Collections"}
                   </Link>
 
                   <div
