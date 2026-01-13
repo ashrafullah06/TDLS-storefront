@@ -21,11 +21,17 @@ const RADIUS = 18;
 
 const SHOW_COUNTS = true;
 
-/* ===================== CLIENT-SAFE FETCHERS (VIA PROXY) ===================== */
+// Mobile presentation controls
+const MOBILE_VISIBLE_PILLS = 8;
+const MORE_KEY = "__more__";
+const MORE_LABEL = "More";
+
+/* ===================== CLIENT-SAFE FALLBACK FETCHERS (VIA PROXY) ===================== */
 /**
- * We go through /api/strapi so:
- * - Same token / secret config
- * - Same shape as product page helpers: { ok, data }
+ * IMPORTANT:
+ * - Primary path is server “catcher” via `initialData` passed from the shell.
+ * - These fetchers are ONLY a non-breaking fallback if `initialData` is missing.
+ * - We DO NOT use `cache: "no-store"` here (that causes reloading feel).
  */
 async function fetchFromStrapi(path) {
   try {
@@ -35,7 +41,8 @@ async function fetchFromStrapi(path) {
     const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      cache: "no-store",
+      // let the browser cache normally (best-effort fallback)
+      cache: "force-cache",
     });
     if (!res.ok) return null;
 
@@ -54,9 +61,6 @@ async function fetchProductsClient() {
   const payload = await fetchFromStrapi("/products?populate=*");
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
-  // Robust for both shapes:
-  // - { id, attributes: { ...flattened fields... } }
-  // - { id, slug, ...flattened fields... }
   return data.map((n) =>
     n?.attributes ? { id: n.id, ...n.attributes, attributes: n.attributes } : n
   );
@@ -96,7 +100,6 @@ async function fetchCategoriesClient() {
     .filter((x) => x.slug && x.name);
 }
 
-/** ✅ NEW: fetch audience categories so newly created ones show automatically */
 async function fetchAudienceCategoriesClient() {
   const payload = await fetchFromStrapi("/audience-categories?populate=*");
   if (!payload) return [];
@@ -218,7 +221,6 @@ const FIELD_ALIASES = {
 function extractRelSlugs(product, canonicalKey) {
   const p = product || {};
 
-  // Preferred: pre-flattened lists like audience_categories_slugs
   const pre = p[`${canonicalKey}_slugs`];
   const pre2 = p[`${canonicalKey}Slugs`];
   const fromPre = pickSlugs(pre);
@@ -226,7 +228,6 @@ function extractRelSlugs(product, canonicalKey) {
   const fromPre2 = pickSlugs(pre2);
   if (fromPre2.length) return Array.from(new Set(fromPre2));
 
-  // Try aliases (relations or arrays)
   const aliases = FIELD_ALIASES[canonicalKey] || [canonicalKey];
   const out = [];
   for (const k of aliases) {
@@ -649,16 +650,17 @@ function buildSeasonal(products, seasonSlug, labels) {
 }
 
 /* ===================== MAIN COMPONENT ===================== */
-export default function BottomFloatingBar() {
+export default function BottomFloatingBar({ initialData }) {
   const [mounted, setMounted] = useState(false);
 
   const [active, setActive] = useState(null); // { key, label }
   const [subOptions, setSubOptions] = useState([]);
 
+  // “Catcher” state populated from server props (initialData)
   const [products, setProducts] = useState([]);
   const [ageGroups, setAgeGroups] = useState([]);
   const [categoriesList, setCategoriesList] = useState([]);
-  const [audienceCategories, setAudienceCategories] = useState([]); // ✅ NEW
+  const [audienceCategories, setAudienceCategories] = useState([]);
   const [fetchError, setFetchError] = useState(false);
 
   const barRef = useRef(null);
@@ -668,29 +670,39 @@ export default function BottomFloatingBar() {
 
   useEffect(() => setMounted(true), []);
 
-  const normalizeProducts = (val) => {
-    if (Array.isArray(val)) return val;
-    if (val && Array.isArray(val.data)) {
-      return val.data.map((n) => (n?.attributes ? { id: n.id, ...n.attributes } : n));
-    }
-    return [];
-  };
-
+  // Populate from server-cached payload (primary “magnet” path)
   useEffect(() => {
+    if (!initialData) return;
+
+    setFetchError(false);
+    setProducts(Array.isArray(initialData.products) ? initialData.products : []);
+    setAgeGroups(Array.isArray(initialData.ageGroups) ? initialData.ageGroups : []);
+    setCategoriesList(Array.isArray(initialData.categories) ? initialData.categories : []);
+    setAudienceCategories(
+      Array.isArray(initialData.audienceCategories) ? initialData.audienceCategories : []
+    );
+  }, [initialData]);
+
+  // Fallback only if initialData is missing (keeps non-breaking behavior)
+  useEffect(() => {
+    if (initialData) return; // primary path already populated
+    let cancelled = false;
+
     (async () => {
       try {
         setFetchError(false);
+
         const [ps, ags, cats, auds] = await Promise.allSettled([
           fetchProductsClient(),
           fetchAgeGroupsClient(),
           fetchCategoriesClient(),
-          fetchAudienceCategoriesClient(), // ✅ NEW
+          fetchAudienceCategoriesClient(),
         ]);
 
-        if (ps.status === "fulfilled") {
-          const normalized = normalizeProducts(ps.value);
-          setProducts(Array.isArray(normalized) ? normalized : []);
-        } else {
+        if (cancelled) return;
+
+        if (ps.status === "fulfilled") setProducts(Array.isArray(ps.value) ? ps.value : []);
+        else {
           setProducts([]);
           setFetchError(true);
         }
@@ -698,19 +710,21 @@ export default function BottomFloatingBar() {
         if (ags.status === "fulfilled" && Array.isArray(ags.value)) setAgeGroups(ags.value);
         if (cats.status === "fulfilled" && Array.isArray(cats.value)) setCategoriesList(cats.value);
 
-        // ✅ NEW (non-fatal if it fails)
-        if (auds.status === "fulfilled" && Array.isArray(auds.value)) {
-          setAudienceCategories(auds.value);
-        } else {
-          setAudienceCategories([]);
-        }
+        if (auds.status === "fulfilled" && Array.isArray(auds.value)) setAudienceCategories(auds.value);
+        else setAudienceCategories([]);
       } catch {
+        if (cancelled) return;
         setProducts([]);
         setFetchError(true);
       }
     })();
-  }, []);
 
+    return () => {
+      cancelled = true;
+    };
+  }, [initialData]);
+
+  // Reserve safe click padding below body for bar height
   useEffect(() => {
     if (!mounted) return;
     const measure = () => {
@@ -731,6 +745,7 @@ export default function BottomFloatingBar() {
     };
   }, [mounted]);
 
+  // Close on outside click + ESC
   useEffect(() => {
     if (!active) return;
     const closeOnOutsidePointerDown = (e) => {
@@ -756,7 +771,7 @@ export default function BottomFloatingBar() {
       categories: categoriesList,
       subCategories: categoriesList,
       superCategories: categoriesList,
-      audienceCategories, // ✅ NEW (for name lookup when building extra tabs)
+      audienceCategories,
       genderGroups: [
         { slug: "unisex", name: "Unisex" },
         { slug: "baby-girl", name: "Baby Girl" },
@@ -772,7 +787,7 @@ export default function BottomFloatingBar() {
   );
 
   const barItems = useMemo(() => {
-    // Existing tabs (keep order/UX exactly)
+    // Keep your locked base order
     const base = [
       { key: "women", label: "Women" },
       { key: "men", label: "Men" },
@@ -787,8 +802,7 @@ export default function BottomFloatingBar() {
       { key: "winter", label: "Winter" },
     ];
 
-    // ✅ NEW: append any additional audience categories from Strapi
-    // so newly created ones appear automatically (without disrupting existing layout).
+    // Append extra audience categories from Strapi
     const baseKeys = new Set(base.map((x) => normSlug(x.key)));
     const extras = (audienceCategories || [])
       .map((a) => ({
@@ -798,7 +812,6 @@ export default function BottomFloatingBar() {
       }))
       .filter((x) => x.key && !baseKeys.has(x.key));
 
-    // preserve Strapi ordering if provided, then alpha
     extras.sort((a, b) => {
       const ai = typeof a.order === "number" ? a.order : Infinity;
       const bi = typeof b.order === "number" ? b.order : Infinity;
@@ -808,6 +821,13 @@ export default function BottomFloatingBar() {
 
     return base.concat(extras.map(({ key, label }) => ({ key, label })));
   }, [audienceCategories]);
+
+  // Mobile “rail”: show first N + a More pill (mobile-only via CSS)
+  const { visibleItems, overflowItems } = useMemo(() => {
+    const v = barItems.slice(0, MOBILE_VISIBLE_PILLS);
+    const o = barItems.slice(MOBILE_VISIBLE_PILLS);
+    return { visibleItems: v, overflowItems: o };
+  }, [barItems]);
 
   const audienceCounts = useMemo(() => {
     if (!SHOW_COUNTS || !products?.length) return {};
@@ -828,7 +848,14 @@ export default function BottomFloatingBar() {
     if (cache.has(key)) return cache.get(key);
 
     let options = [];
-    if (["women", "men", "home-decor"].includes(key)) {
+
+    if (key === MORE_KEY) {
+      // “More” panel: show all audiences as direct links (hardcoded-feel navigation)
+      options = barItems.map((x) => ({
+        label: x.label,
+        href: `/collections/${normSlug(x.key)}`,
+      }));
+    } else if (["women", "men", "home-decor"].includes(key)) {
       options = buildMWHD(products, key, labels);
     } else if (key === "accessories") {
       options = buildAccessories(products, labels);
@@ -837,7 +864,7 @@ export default function BottomFloatingBar() {
     } else if (["new-arrival", "on-sale", "monsoon", "summer", "winter"].includes(key)) {
       options = buildSeasonal(products, key, labels);
     } else {
-      // ✅ NEW: any newly-created audience behaves like a normal audience tab (MWHD-style tree)
+      // Any newly-created audience behaves like a normal audience tab
       options = buildMWHD(products, key, labels);
     }
 
@@ -865,40 +892,96 @@ export default function BottomFloatingBar() {
 
   return (
     <>
+      {/* Mobile/desktop responsive CSS for “rail” + panel */}
+      <style>{`
+        .bfbar-shell { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; background: ${PEARL_WHITE}; border-top: 1px solid ${NEUTRAL_BORDER}; }
+        .bfbar-nav { width: 100%; display: flex; align-items: center; justify-content: center; padding: 8px 10px 12px; }
+        .bfbar-rail { max-width: 100vw; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+        .bfbar-pill { 
+          color: ${NEUTRAL_TEXT};
+          font-family: 'Playfair Display', serif;
+          font-weight: 700;
+          font-size: ${FS_PILL};
+          letter-spacing: .08em;
+          background: ${PEARL_WHITE};
+          border: 1px solid ${NEUTRAL_BORDER};
+          border-radius: 22px;
+          padding: ${PAD_PILL};
+          line-height: 1.25;
+          cursor: pointer;
+          text-transform: capitalize;
+          white-space: nowrap;
+          transition: background .2s ease, color .18s ease, border-color .2s ease, transform .2s ease;
+        }
+        .bfbar-pill[data-active="true"] { color: ${ACCENT}; border-color: ${ACCENT}; }
+        .bfbar-pill:hover { background: ${HOVER_TINT}; color: ${HOVER_TEXT}; border-color: ${ACCENT}; }
+
+        /* Mobile: one-row horizontal rail, no wrap, aesthetic + screen-friendly */
+        @media (max-width: 768px) {
+          .bfbar-nav { justify-content: flex-start; padding: 8px 10px calc(10px + env(safe-area-inset-bottom)); }
+          .bfbar-rail {
+            justify-content: flex-start;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 2px;
+            scroll-snap-type: x mandatory;
+          }
+          .bfbar-rail::-webkit-scrollbar { height: 0px; }
+          .bfbar-pill {
+            font-size: 0.98rem;
+            padding: 10px 14px;
+            scroll-snap-align: start;
+          }
+
+          /* Only show the “More” pill on mobile */
+          .bfbar-more { display: inline-flex !important; }
+        }
+
+        /* Desktop: hide “More” pill */
+        .bfbar-more { display: none; }
+
+        /* Panel: desktop default */
+        .bfbar-panel {
+          pointer-events: auto;
+          position: fixed;
+          left: 10px;
+          right: 10px;
+          margin: 0 auto;
+          min-height: 300px;
+          max-height: 72vh;
+          background: ${PEARL_WHITE};
+          border-radius: ${RADIUS + 2}px ${RADIUS + 2}px 0 0;
+          display: flex;
+          flex-direction: column;
+          overflow-y: auto;
+          padding: 20px 20px;
+          border: 1px solid ${NEUTRAL_BORDER};
+          border-bottom: none;
+          box-shadow: 0 8px 40px rgba(0,0,0,0.12);
+        }
+
+        /* Panel: mobile bottom-sheet style (more organized) */
+        @media (max-width: 768px) {
+          .bfbar-panel {
+            left: 8px;
+            right: 8px;
+            padding: 16px 14px;
+            max-height: 78vh;
+            border-radius: 18px 18px 0 0;
+          }
+          .bfbar-panel-title { font-size: 1.2rem !important; letter-spacing: .10em !important; }
+          .bfbar-close { padding: 10px !important; border-radius: 14px !important; }
+        }
+      `}</style>
+
       {/* Bottom bar */}
-      <div
-        ref={barRef}
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 2147483647,
-          background: PEARL_WHITE,
-          borderTop: `1px solid ${NEUTRAL_BORDER}`,
-        }}
-        data-flyout="bar"
-      >
-        <nav
-          style={{
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "8px 10px 12px",
-          }}
-        >
-          <div
-            style={{
-              maxWidth: "100vw",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "8px",
-              flexWrap: "wrap",
-            }}
-          >
-            {barItems.map((item) => {
+      <div ref={barRef} className="bfbar-shell" data-flyout="bar">
+        <nav className="bfbar-nav">
+          <div className="bfbar-rail">
+            {/* Desktop shows all items; Mobile shows first N */}
+            {(visibleItems || []).map((item) => {
               const isActive = active?.key === item.key;
               const count = audienceCounts[item.key];
               const countSuffix = SHOW_COUNTS && count > 0 ? ` (${count})` : "";
@@ -919,32 +1002,12 @@ export default function BottomFloatingBar() {
                       toggleFlyout(item);
                     }
                   }}
+                  className="bfbar-pill"
+                  data-active={isActive ? "true" : "false"}
                   style={{
-                    color: isActive ? ACCENT : NEUTRAL_TEXT,
-                    fontFamily: "'Playfair Display', serif",
-                    fontWeight: 700,
-                    fontSize: FS_PILL,
-                    letterSpacing: ".08em",
-                    background: PEARL_WHITE,
-                    border: `1px solid ${isActive ? ACCENT : NEUTRAL_BORDER}`,
-                    borderRadius: 22,
-                    padding: PAD_PILL,
-                    lineHeight: 1.25,
-                    cursor: "pointer",
-                    textTransform: "capitalize",
-                    whiteSpace: "nowrap",
-                    transition:
-                      "background .2s ease, color .18s ease, border-color .2s ease, transform .2s ease",
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.background = HOVER_TINT;
-                    e.currentTarget.style.color = HOVER_TEXT;
-                    e.currentTarget.style.borderColor = ACCENT;
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.background = PEARL_WHITE;
-                    e.currentTarget.style.color = isActive ? ACCENT : NEUTRAL_TEXT;
-                    e.currentTarget.style.borderColor = isActive ? ACCENT : NEUTRAL_BORDER;
+                    // preserve exact active-state color on non-hover interactions
+                    color: isActive ? ACCENT : undefined,
+                    borderColor: isActive ? ACCENT : undefined,
                   }}
                 >
                   {item.label}
@@ -952,6 +1015,33 @@ export default function BottomFloatingBar() {
                 </button>
               );
             })}
+
+            {/* Mobile-only “More” pill (only if there are extras) */}
+            {overflowItems.length > 0 && (
+              <button
+                aria-label={MORE_LABEL}
+                aria-expanded={active?.key === MORE_KEY}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toggleFlyout({ key: MORE_KEY, label: MORE_LABEL });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleFlyout({ key: MORE_KEY, label: MORE_LABEL });
+                  }
+                }}
+                className="bfbar-pill bfbar-more"
+                data-active={active?.key === MORE_KEY ? "true" : "false"}
+                style={{
+                  color: active?.key === MORE_KEY ? ACCENT : undefined,
+                  borderColor: active?.key === MORE_KEY ? ACCENT : undefined,
+                }}
+              >
+                {MORE_LABEL}
+              </button>
+            )}
           </div>
         </nav>
       </div>
@@ -964,24 +1054,9 @@ export default function BottomFloatingBar() {
             role="dialog"
             aria-modal="true"
             tabIndex={-1}
+            className="bfbar-panel"
             style={{
-              pointerEvents: "auto",
-              position: "fixed",
-              left: 10,
-              right: 10,
               bottom: `calc(${barH}px + env(safe-area-inset-bottom))`,
-              margin: "0 auto",
-              minHeight: 300,
-              maxHeight: "72vh",
-              background: PEARL_WHITE,
-              borderRadius: `${RADIUS + 2}px ${RADIUS + 2}px 0 0`,
-              display: "flex",
-              flexDirection: "column",
-              overflowY: "auto",
-              padding: "20px 20px",
-              border: `1px solid ${NEUTRAL_BORDER}`,
-              borderBottom: "none",
-              boxShadow: "0 8px 40px rgba(0,0,0,12)",
             }}
             data-flyout="panel"
           >
@@ -996,6 +1071,7 @@ export default function BottomFloatingBar() {
               }}
             >
               <div
+                className="bfbar-panel-title"
                 style={{
                   fontFamily: "'Playfair Display', serif",
                   fontWeight: 800,
@@ -1015,6 +1091,7 @@ export default function BottomFloatingBar() {
                   e.stopPropagation();
                   setActive(null);
                 }}
+                className="bfbar-close"
                 style={{
                   background: "transparent",
                   border: `1px solid ${NEUTRAL_BORDER}`,
@@ -1044,10 +1121,10 @@ export default function BottomFloatingBar() {
               </button>
             </div>
 
-            {/* See all link */}
+            {/* See all link (handle More gracefully) */}
             <div style={{ marginBottom: 12 }}>
               <Link
-                href={`/collections/${active.key}`}
+                href={active.key === MORE_KEY ? "/collections" : `/collections/${active.key}`}
                 prefetch
                 style={{
                   color: "#174099",
@@ -1057,7 +1134,9 @@ export default function BottomFloatingBar() {
                   letterSpacing: ".03em",
                 }}
               >
-                See all in {active.label} &rsaquo;
+                {active.key === MORE_KEY
+                  ? "Browse all collections ›"
+                  : `See all in ${active.label} ›`}
               </Link>
             </div>
 
