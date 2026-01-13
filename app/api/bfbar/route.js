@@ -6,9 +6,12 @@ function toStr(v) {
 }
 
 function pickStrapiBaseUrl() {
+  // Prefer explicit server URL(s) first, then public fallbacks.
+  // Include STRAPI_API_ORIGIN because your env set commonly uses it.
   return (
     toStr(process.env.STRAPI_API_URL) ||
     toStr(process.env.STRAPI_URL) ||
+    toStr(process.env.STRAPI_API_ORIGIN) ||
     toStr(process.env.NEXT_PUBLIC_STRAPI_API_URL) ||
     toStr(process.env.NEXT_PUBLIC_STRAPI_URL) ||
     ""
@@ -41,34 +44,54 @@ function flattenCollection(payload) {
   );
 }
 
-async function fetchStrapiCached(path) {
+async function fetchStrapiCached(path, { timeoutMs = 12000 } = {}) {
   const base = normalizeBaseUrl(pickStrapiBaseUrl());
   if (!base) return null;
 
   const url = `${base}${normalizeStrapiPath(path)}`;
 
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      ...toAuthHeaders(),
-    },
-    // server “catcher” cache: purged by revalidateTag("bfbar")
-    next: { tags: ["bfbar"], revalidate: 60 * 60 * 24 }, // 24h safety; webhook makes it instant
-  }).catch(() => null);
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
 
-  if (!res || !res.ok) return null;
-  return res.json().catch(() => null);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        ...toAuthHeaders(),
+      },
+      // Server “catcher” cache: purged by revalidateTag("bfbar") elsewhere.
+      next: { tags: ["bfbar"], revalidate: 60 * 60 * 24 }, // 24h safety; webhook makes it instant
+      signal: controller.signal,
+    }).catch(() => null);
+
+    if (!res || !res.ok) return null;
+    return res.json().catch(() => null);
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 export async function GET() {
+  const base = normalizeBaseUrl(pickStrapiBaseUrl());
+  if (!base) {
+    return NextResponse.json(
+      { ok: false, error: "Missing STRAPI base URL (STRAPI_API_URL / STRAPI_URL / STRAPI_API_ORIGIN)." },
+      { status: 500 }
+    );
+  }
+
   try {
-    const [pRaw, agRaw, cRaw, aRaw] = await Promise.all([
+    const results = await Promise.allSettled([
       fetchStrapiCached("/products?populate=*"),
       fetchStrapiCached("/age-groups?populate=*"),
       fetchStrapiCached("/categories?populate=*"),
       fetchStrapiCached("/audience-categories?populate=*"),
     ]);
+
+    const [pRaw, agRaw, cRaw, aRaw] = results.map((r) =>
+      r.status === "fulfilled" ? r.value : null
+    );
 
     const data = {
       products: pRaw ? flattenCollection(pRaw) : [],
@@ -78,6 +101,7 @@ export async function GET() {
       _source: "api-cache",
     };
 
+    // Keep response shape stable for the client “catcher”.
     return NextResponse.json({ ok: true, data });
   } catch (e) {
     return NextResponse.json(

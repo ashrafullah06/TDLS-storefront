@@ -1,7 +1,7 @@
 // FILE: src/components/common/menucontainer.jsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -74,12 +74,21 @@ function normalizeRelation(rel) {
 
 function pickLabel(obj) {
   if (!obj) return "";
-  return obj.name || obj.title || obj.label || obj.displayName || obj.heading || obj.text || "";
+  const v =
+    obj.name ||
+    obj.title ||
+    obj.label ||
+    obj.displayName ||
+    obj.heading ||
+    obj.text ||
+    "";
+  return (v ?? "").toString().trim();
 }
 
 function pickSlug(obj) {
   if (!obj) return "";
-  return obj.slug || obj.handle || obj.key || obj.uid || "";
+  const v = obj.slug || obj.handle || obj.key || obj.uid || "";
+  return (v ?? "").toString().trim();
 }
 
 function pickPriority(obj) {
@@ -89,16 +98,25 @@ function pickPriority(obj) {
   return Number.isFinite(n) ? n : null;
 }
 
+function getRel(obj, key) {
+  // handle Strapi v4 returning { data: ... } vs already flattened objects
+  if (!obj) return undefined;
+  const direct = obj[key];
+  if (direct !== undefined) return direct;
+  if (obj.attributes && obj.attributes[key] !== undefined) return obj.attributes[key];
+  return undefined;
+}
+
 function pickChildren(obj) {
   if (!obj) return [];
   const rel =
-    obj.children ||
-    obj.branches ||
-    obj.items ||
-    obj.subcategories ||
-    obj.subCategories ||
-    obj.sub_categories ||
-    obj.nodes ||
+    getRel(obj, "children") ||
+    getRel(obj, "branches") ||
+    getRel(obj, "items") ||
+    getRel(obj, "subcategories") ||
+    getRel(obj, "subCategories") ||
+    getRel(obj, "sub_categories") ||
+    getRel(obj, "nodes") ||
     null;
   return normalizeRelation(rel);
 }
@@ -122,7 +140,7 @@ function toNode(entity, depth = 0, maxDepth = 4) {
     slug,
     href,
     priority: pickPriority(e),
-    children,
+    children: children.length ? children : [],
   };
 }
 
@@ -143,6 +161,8 @@ function sortNodes(nodes) {
     const ap = a?.priority;
     const bp = b?.priority;
     if (Number.isFinite(ap) && Number.isFinite(bp) && ap !== bp) return ap - bp;
+    if (Number.isFinite(ap) && !Number.isFinite(bp)) return -1;
+    if (!Number.isFinite(ap) && Number.isFinite(bp)) return 1;
     const al = (a?.label || "").toLowerCase();
     const bl = (b?.label || "").toLowerCase();
     return al.localeCompare(bl);
@@ -164,6 +184,7 @@ async function fetchViaProxy(path, ms = 12000) {
     const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
+      // Prefer cached but don't let the browser pin this forever if the proxy varies.
       cache: "force-cache",
       signal: controller.signal,
     });
@@ -190,6 +211,7 @@ async function fetchAudienceCategories() {
     const r = await fetchViaProxy(p, 12000);
     if (!r.ok || !r.json) continue;
 
+    // r.json is the raw Strapi response, so the collection is at r.json.data
     const raw = r.json?.data;
     const list = Array.isArray(raw) ? raw.map(normalizeEntity).filter(Boolean) : [];
     if (list.length) return { items: list, sourcePath: p };
@@ -262,6 +284,7 @@ function CategoryCard({ node, onNavigate }) {
     >
       <Link
         href={node.href}
+        prefetch
         onClick={onNavigate}
         style={{
           display: "flex",
@@ -306,6 +329,7 @@ function CategoryCard({ node, onNavigate }) {
             <Link
               key={c.href}
               href={c.href}
+              prefetch
               onClick={onNavigate}
               style={{
                 textDecoration: "none",
@@ -346,6 +370,12 @@ export default function MenuContainer({ open = true, onClose = null, options = n
     rawCount: 0,
   });
 
+  // ensure we do not update state after close/unmount
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
   // Load nodes (external options OR proxy fetch with cache/TTL)
   useEffect(() => {
     if (!open) return;
@@ -353,15 +383,20 @@ export default function MenuContainer({ open = true, onClose = null, options = n
     if (usingExternal) {
       const normalized = dedupeByHref(
         (options || [])
-          .map((x) => ({
-            ...x,
-            href: x?.href || canonicalHref(x?.slug || x?.label),
-            children: Array.isArray(x?.children) ? x.children : [],
-          }))
+          .map((x) => {
+            const href = x?.href || canonicalHref(x?.slug || x?.label);
+            const children = Array.isArray(x?.children) ? x.children : [];
+            return { ...x, href, children };
+          })
           .filter((x) => x?.label && x?.href)
       );
       setNodes(sortNodes(normalized));
-      setDiag({ loading: false, error: null, source: "external-options", rawCount: normalized.length });
+      setDiag({
+        loading: false,
+        error: null,
+        source: "external-options",
+        rawCount: normalized.length,
+      });
       return;
     }
 
@@ -390,9 +425,11 @@ export default function MenuContainer({ open = true, onClose = null, options = n
 
       fetchAudienceCategories()
         .then(({ items, sourcePath }) => {
-          if (!mounted) return;
-          const flat = items.map((it) => toNode(it, 0, 4)).filter(Boolean);
-          const deduped = dedupeByHref(flat);
+          if (!mounted || !openRef.current) return;
+
+          // Build a real tree (top level nodes keep their children)
+          const tree = items.map((it) => toNode(it, 0, 4)).filter(Boolean);
+          const deduped = dedupeByHref(tree);
           const sorted = sortNodes(deduped);
 
           setNodes(sorted);
@@ -409,7 +446,8 @@ export default function MenuContainer({ open = true, onClose = null, options = n
           } catch {}
         })
         .catch((e) => {
-          if (!mounted) return;
+          if (!mounted || !openRef.current) return;
+
           const fb = sortNodes(
             FALLBACK_AUDIENCES.map((x) => ({
               id: x.slug,
@@ -476,11 +514,19 @@ export default function MenuContainer({ open = true, onClose = null, options = n
     if (!q) return nodes;
     const match = (s) => (s || "").toLowerCase().includes(q);
 
-    return (nodes || []).filter((n) => {
-      if (match(n.label)) return true;
-      if (Array.isArray(n.children) && n.children.some((c) => match(c.label))) return true;
-      return false;
-    });
+    const filterTree = (arr) =>
+      (arr || [])
+        .map((n) => {
+          const kids = Array.isArray(n.children) ? filterTree(n.children) : [];
+          const selfMatch = match(n.label) || match(n.slug);
+          const childMatch = kids.length > 0;
+          if (!selfMatch && !childMatch) return null;
+          // keep children that matched, so the UI stays accurate
+          return { ...n, children: kids };
+        })
+        .filter(Boolean);
+
+    return filterTree(nodes);
   }, [nodes, q]);
 
   if (!open) return null;
@@ -585,6 +631,10 @@ export default function MenuContainer({ open = true, onClose = null, options = n
             animate={{ y: 0, scale: 1, opacity: 1 }}
             exit={{ y: 14, scale: 0.985, opacity: 0 }}
             transition={{ duration: 0.22 }}
+            onPointerDown={(e) => {
+              // prevent outside-close handler from seeing pointer inside content
+              e.stopPropagation();
+            }}
           >
             {/* Header */}
             <div
@@ -616,7 +666,15 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                 </div>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 360px", justifyContent: "flex-end" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  flex: "1 1 360px",
+                  justifyContent: "flex-end",
+                }}
+              >
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -667,13 +725,15 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                 <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
                   <Link
                     href={tierHref}
+                    prefetch
                     onClick={close}
                     style={{
                       textDecoration: "none",
                       borderRadius: 16,
                       padding: "12px 12px",
                       border: "1px solid rgba(15,33,71,0.10)",
-                      background: "linear-gradient(90deg, rgba(212,175,55,0.22) 0%, rgba(212,175,55,0.10) 100%)",
+                      background:
+                        "linear-gradient(90deg, rgba(212,175,55,0.22) 0%, rgba(212,175,55,0.10) 100%)",
                       color: "#0F2147",
                       fontWeight: 950,
                       letterSpacing: ".08em",
@@ -698,6 +758,11 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                     }}
                   >
                     {diag.loading ? "Loading audience categories…" : "Audience categories ready."}
+                    {diag.source ? (
+                      <div style={{ marginTop: 6, color: "rgba(15,33,71,0.55)", fontWeight: 900 }}>
+                        Source: {diag.source}
+                      </div>
+                    ) : null}
                     {diag.error ? (
                       <div style={{ marginTop: 6, color: "rgba(168, 64, 64, 0.95)", fontWeight: 950 }}>
                         Fallback active

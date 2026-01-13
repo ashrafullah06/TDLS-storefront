@@ -1,7 +1,7 @@
 // FILE: src/components/common/menuflyout.jsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -193,7 +193,9 @@ async function fetchViaProxy(path, ms = 12000) {
     const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      cache: "force-cache",
+      // NOTE: do not use "force-cache" here. In the browser it can be inconsistent across navigations.
+      // We rely on the server-side catcher; this is only a fallback.
+      cache: "default",
       signal: controller.signal,
     });
 
@@ -226,6 +228,22 @@ async function fetchAudienceTree() {
   }
 
   throw new Error("audience_categories_fetch_failed");
+}
+
+/* ====================== ACTIVE-PATH HELPERS ====================== */
+
+function isNodeActiveBranch(node, pathname) {
+  if (!node || !pathname) return false;
+
+  if (node.href && (pathname === node.href || pathname.startsWith(node.href + "/"))) {
+    return true;
+  }
+
+  if (Array.isArray(node.children)) {
+    return node.children.some((child) => isNodeActiveBranch(child, pathname));
+  }
+
+  return false;
 }
 
 /* ====================== COMPONENT ====================== */
@@ -286,6 +304,7 @@ export default function MenuFlyout({ options = [] }) {
     fetchAudienceTree()
       .then(({ items }) => {
         if (!mounted) return;
+
         const nodes = items.map((it) => toNode(it, 0, 3)).filter(Boolean);
         const deduped = dedupeTree(nodes);
         const sorted = pinAndSortTopLevel(deduped);
@@ -330,9 +349,13 @@ export default function MenuFlyout({ options = [] }) {
   useEffect(() => {
     if (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0) return;
     setActiveIndex((i) => Math.max(0, Math.min(i, effectiveOptions.length - 1)));
-  }, [effectiveOptions?.length]);
+  }, [Array.isArray(effectiveOptions) ? effectiveOptions.length : 0]);
 
-  if (!usingExternal && autoLoading && (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0)) {
+  if (
+    !usingExternal &&
+    autoLoading &&
+    (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0)
+  ) {
     return (
       <div
         style={{
@@ -469,22 +492,6 @@ export default function MenuFlyout({ options = [] }) {
   );
 }
 
-/* ====================== ACTIVE-PATH HELPERS ====================== */
-
-function isNodeActiveBranch(node, pathname) {
-  if (!node || !pathname) return false;
-
-  if (node.href && (pathname === node.href || pathname.startsWith(node.href + "/"))) {
-    return true;
-  }
-
-  if (Array.isArray(node.children)) {
-    return node.children.some((child) => isNodeActiveBranch(child, pathname));
-  }
-
-  return false;
-}
-
 /* ====================== LEFT RAIL ITEM ====================== */
 
 function RailItem({ node, isCurrent, branchActive, onSelect, isMobile }) {
@@ -587,9 +594,7 @@ function RailItem({ node, isCurrent, branchActive, onSelect, isMobile }) {
             e.preventDefault();
             e.stopPropagation();
             onSelect();
-            return;
           }
-          // otherwise normal nav
         }}
         onClick={(e) => {
           if (shouldTapSelect) {
@@ -810,7 +815,13 @@ function LabelLink({ node, depth, pathname }) {
 
   const content = (
     <>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: depth >= 2 ? 140 : "100%" }}>
+      <span
+        style={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          maxWidth: depth >= 2 ? 140 : "100%",
+        }}
+      >
         {node.label}
       </span>
       {isClickable && depth >= 2 && <ChevronRight size={12} style={{ opacity: 0.6, flexShrink: 0 }} />}
@@ -832,7 +843,11 @@ function LabelLink({ node, depth, pathname }) {
   }
 
   return (
-    <div style={baseStyle} onMouseEnter={(e) => onOver(e.currentTarget)} onMouseLeave={(e) => onOut(e.currentTarget)}>
+    <div
+      style={baseStyle}
+      onMouseEnter={(e) => onOver(e.currentTarget)}
+      onMouseLeave={(e) => onOut(e.currentTarget)}
+    >
       {content}
     </div>
   );

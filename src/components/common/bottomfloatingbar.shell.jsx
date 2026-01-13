@@ -1,54 +1,80 @@
 // FILE: src/components/common/bottomfloatingbar.shell.jsx
-"use client";
+import BottomFloatingBar from "./bottomfloatingbar";
 
-import { useEffect, useState } from "react";
-import dynamic from "next/dynamic";
+function toStr(v) {
+  return (v ?? "").toString().trim();
+}
 
-const BottomFloatingBar = dynamic(() => import("./bottomfloatingbar.client"), {
-  ssr: false,
-});
+function pickStrapiBaseUrl() {
+  return (
+    toStr(process.env.STRAPI_API_URL) ||
+    toStr(process.env.STRAPI_URL) ||
+    toStr(process.env.NEXT_PUBLIC_STRAPI_API_URL) ||
+    toStr(process.env.NEXT_PUBLIC_STRAPI_URL) ||
+    ""
+  );
+}
 
-const LS_KEY = "tdls:bfbar:data:v1";
-const LS_TS = "tdls:bfbar:ts:v1";
+function normalizeBaseUrl(u) {
+  return toStr(u).replace(/\/+$/, "");
+}
 
-// how often to “check” server (still feels hardcoded)
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000; // 6 hours
+function normalizeStrapiPath(path) {
+  const p = toStr(path);
+  const withSlash = p.startsWith("/") ? p : `/${p}`;
+  return withSlash.startsWith("/api/") ? withSlash : `/api${withSlash}`;
+}
 
-export default function BottomFloatingBarShell(props) {
-  const [initialData, setInitialData] = useState(null);
+function toAuthHeaders() {
+  const token =
+    toStr(process.env.STRAPI_API_TOKEN) ||
+    toStr(process.env.STRAPI_TOKEN) ||
+    toStr(process.env.STRAPI_READ_TOKEN) ||
+    "";
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
-  useEffect(() => {
-    // 1) Instant paint from localStorage (hardcoded feel)
-    try {
-      const cached = localStorage.getItem(LS_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed && typeof parsed === "object") setInitialData(parsed);
-      }
-    } catch {}
+function flattenCollection(payload) {
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  return data
+    .map((n) => (n?.attributes ? { id: n.id, ...n.attributes, attributes: n.attributes } : n))
+    .filter(Boolean);
+}
 
-    // 2) Best-effort refresh (admin updates). Not every visit.
-    (async () => {
-      try {
-        const last = Number(localStorage.getItem(LS_TS) || "0");
-        const now = Date.now();
-        if (now - last < CHECK_EVERY_MS) return;
+async function fetchStrapi(path) {
+  const base = normalizeBaseUrl(pickStrapiBaseUrl());
+  if (!base) return null;
 
-        const res = await fetch("/api/bfbar", { method: "GET", cache: "no-store" });
-        if (!res.ok) return;
+  const url = `${base}${normalizeStrapiPath(path)}`;
 
-        const json = await res.json().catch(() => null);
-        const data = json?.ok ? json.data : null;
-        if (!data) return;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      ...toAuthHeaders(),
+    },
+    // Cached on the server to keep it fast & stable.
+    // If you already use webhook revalidateTag("bfbar"), keep the same tag here.
+    next: { tags: ["bfbar"], revalidate: 60 * 60 * 6 }, // 6h
+  }).catch(() => null);
 
-        localStorage.setItem(LS_KEY, JSON.stringify(data));
-        localStorage.setItem(LS_TS, String(now));
-        setInitialData(data);
-      } catch {
-        // non-fatal
-      }
-    })();
-  }, []);
+  if (!res || !res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+export default async function BottomFloatingBarShell(props) {
+  // Fetch ONLY small taxonomy lists (fast). No product payload here.
+  const [catsRaw, audRaw, agRaw] = await Promise.all([
+    fetchStrapi("/categories?pagination[pageSize]=500&sort=order:asc&populate=*"),
+    fetchStrapi("/audience-categories?pagination[pageSize]=500&sort=order:asc&populate=*"),
+    fetchStrapi("/age-groups?pagination[pageSize]=200&sort=order:asc&populate=*"),
+  ]);
+
+  const initialData = {
+    categories: catsRaw ? flattenCollection(catsRaw) : [],
+    audienceCategories: audRaw ? flattenCollection(audRaw) : [],
+    ageGroups: agRaw ? flattenCollection(agRaw) : [],
+  };
 
   return <BottomFloatingBar {...props} initialData={initialData} />;
 }

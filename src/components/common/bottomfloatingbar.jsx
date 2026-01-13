@@ -124,9 +124,18 @@ function Portal({ zIndex = 2147483647, children }) {
     const el = document.createElement("div");
     el.dataset.flyoutHost = "tdls";
     el.style.position = "fixed";
-    el.style.inset = "0";
+    el.style.left = "0";
+    el.style.bottom = "0";
+
+    // Critical: do NOT cover the whole viewport (prevents click-stealing),
+    // but DO allow pointer events so the panel remains clickable.
+    el.style.width = "0";
+    el.style.height = "0";
+    el.style.overflow = "visible";
+    el.style.pointerEvents = "auto";
+
     el.style.zIndex = String(zIndex);
-    el.style.pointerEvents = "none";
+
     document.body.appendChild(el);
     setHost(el);
 
@@ -170,12 +179,7 @@ function pickSlugs(obj) {
     return one ? [normSlug(one)] : [];
   }
 
-  const one =
-    obj?.attributes?.slug ||
-    obj?.slug ||
-    obj?.attributes?.name ||
-    obj?.name ||
-    null;
+  const one = obj?.attributes?.slug || obj?.slug || obj?.attributes?.name || obj?.name || null;
   return one ? [normSlug(one)] : [];
 }
 
@@ -195,13 +199,7 @@ const FIELD_ALIASES = {
     "categories_slugs",
     "category_slugs",
   ],
-  sub_categories: [
-    "sub_categories",
-    "sub_category",
-    "subCategories",
-    "subcategory",
-    "subCategory",
-  ],
+  sub_categories: ["sub_categories", "sub_category", "subCategories", "subcategory", "subCategory"],
   super_categories: [
     "super_categories",
     "super_category",
@@ -599,15 +597,11 @@ function buildSeasonal(products, seasonSlug, labels) {
     labels,
     accessoriesPrefix
   );
-  if (accessories.length) sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
+  if (accessories.length)
+    sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
-  const men = buildMWHD(
-    seasonal.filter((p) => hasAudience(p, "men")),
-    "men",
-    labels,
-    menPrefix
-  );
+  const men = buildMWHD(seasonal.filter((p) => hasAudience(p, "men")), "men", labels, menPrefix);
   if (men.length) sections.push({ label: "Men", href: menPrefix, children: men });
 
   const womenPrefix = `/collections/${seasonalKey}/women`;
@@ -730,6 +724,17 @@ export default function BottomFloatingBar({ initialData }) {
       } catch {}
     };
   }, []);
+
+  // Focus panel when opened (prevents “dead” keyboard state)
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setTimeout(() => {
+      try {
+        panelRef.current?.focus?.();
+      } catch {}
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [active]);
 
   // Close on outside click + ESC
   useEffect(() => {
@@ -937,6 +942,25 @@ export default function BottomFloatingBar({ initialData }) {
           border: 1px solid ${NEUTRAL_BORDER};
           border-bottom: none;
           box-shadow: 0 8px 40px rgba(0,0,0,0.12);
+          outline: none;
+        }
+
+        .bfbar-close {
+          background: transparent;
+          border: 1px solid ${NEUTRAL_BORDER};
+          border-radius: 12px;
+          cursor: pointer;
+          color: ${NEUTRAL_TEXT};
+          padding: 8px;
+          transition: background .18s ease, color .18s ease, border-color .2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .bfbar-close:hover {
+          background: ${HOVER_TINT};
+          color: ${HOVER_TEXT};
+          border-color: ${ACCENT};
         }
 
         @media (max-width: 768px) {
@@ -963,8 +987,10 @@ export default function BottomFloatingBar({ initialData }) {
               return (
                 <button
                   key={item.key}
+                  type="button"
                   aria-label={item.label}
                   aria-expanded={isActive}
+                  aria-haspopup="dialog"
                   onPointerDown={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -991,8 +1017,10 @@ export default function BottomFloatingBar({ initialData }) {
 
             {overflowItems.length > 0 && (
               <button
+                type="button"
                 aria-label={MORE_LABEL}
                 aria-expanded={active?.key === MORE_KEY}
+                aria-haspopup="dialog"
                 onPointerDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1055,6 +1083,7 @@ export default function BottomFloatingBar({ initialData }) {
               </div>
 
               <button
+                type="button"
                 aria-label="Close"
                 onPointerDown={(e) => {
                   e.preventDefault();
@@ -1062,29 +1091,6 @@ export default function BottomFloatingBar({ initialData }) {
                   setActive(null);
                 }}
                 className="bfbar-close"
-                style={{
-                  background: "transparent",
-                  border: `1px solid ${NEUTRAL_BORDER}`,
-                  borderRadius: 12,
-                  fontSize: 20,
-                  cursor: "pointer",
-                  color: NEUTRAL_TEXT,
-                  padding: 8,
-                  transition: "background .18s ease, color .18s ease, border-color .2s ease",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-                onMouseOver={(e) => {
-                  e.currentTarget.style.background = HOVER_TINT;
-                  e.currentTarget.style.color = HOVER_TEXT;
-                  e.currentTarget.style.borderColor = ACCENT;
-                }}
-                onMouseOut={(e) => {
-                  e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.color = NEUTRAL_TEXT;
-                  e.currentTarget.style.borderColor = NEUTRAL_BORDER;
-                }}
               >
                 <CloseIcon size={24} stroke="currentColor" />
               </button>
