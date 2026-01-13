@@ -1,5 +1,4 @@
-//my-project/src/components/common/menuflyout.jsx
-
+// FILE: src/components/common/menuflyout.jsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -11,60 +10,23 @@ import { ChevronRight } from "lucide-react";
  * Node shape:
  * { label: string, href?: string, badges?: string[], children?: Node[] }
  *
- * FUTURISTIC MODE:
- * - If `options` prop is empty, MenuFlyout auto-fetches Audience Categories (and their branches)
- *   from Strapi and builds a 4-tier tree.
- * - Canonical routing everywhere: /collections/{slug}
+ * CATCHER PLAN:
+ * - Primary path: parent passes `options` (server-cached payload already computed).
+ * - Fallback path: if `options` is empty, MenuFlyout fetches audience tree via SAME-ORIGIN proxy (/api/strapi),
+ *   caches it in localStorage with TTL, and refreshes in background (no sluggish feel).
+ *
+ * MOBILE:
+ * - No hover dependency (tap-to-select on rail).
+ * - Stacked layout to prevent overflow (rail becomes horizontal scroller).
+ * - Viewport-bounded heights + internal scrolling only.
  */
 
-function normalizeStrapiBase(raw) {
-  const s = (raw || "").toString().trim().replace(/\/$/, "");
-  if (!s) return "";
-  // If the env points to /api, strip it so we can safely append /api/<collection>
-  return s.replace(/\/api$/i, "");
-}
-
-function getStrapiBase() {
-  const envBase =
-    normalizeStrapiBase(process.env.NEXT_PUBLIC_STRAPI_API_URL) ||
-    normalizeStrapiBase(process.env.NEXT_PUBLIC_STRAPI_URL) ||
-    normalizeStrapiBase(process.env.NEXT_PUBLIC_STRAPI_BASE_URL) ||
-    "";
-
-  if (typeof window !== "undefined") {
-    try {
-      const local = normalizeStrapiBase(window.localStorage.getItem("tdlc:strapiBase"));
-      if (local) return local;
-    } catch {}
-  }
-
-  return envBase || "http://localhost:1337";
-}
-
-async function fetchJsonWithTimeout(url, ms = 12000) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), ms);
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    const text = await res.text().catch(() => "");
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = null;
-    }
-    return { ok: res.ok, status: res.status, json, text };
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 const CANONICAL_COLLECTION_PREFIX = "/collections";
+
+/* ===== local cache for fallback tree (only when options not provided) ===== */
+const LS_TREE_KEY = "tdls:menuflyout:tree:v1";
+const LS_TREE_TS = "tdls:menuflyout:tree_ts:v1";
+const TREE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
 /* ====================== SLUG + LABEL UTIL ====================== */
 
@@ -90,7 +52,8 @@ function slugify(input) {
 }
 
 function canonicalHrefFromSlug(slug) {
-  const s = (slug || "").toString().trim().replace(/^\/+/, "");
+  const raw = (slug || "").toString().trim();
+  const s = slugify(raw.replace(/^\/+/, ""));
   if (!s) return null;
   return `${CANONICAL_COLLECTION_PREFIX}/${s}`;
 }
@@ -103,14 +66,12 @@ function getAttr(obj, key) {
 }
 
 function normalizeStrapiEntity(entity) {
-  // Accepts: {id, attributes}, {attributes}, plain object
   if (!entity) return null;
   if (entity.attributes) return entity.attributes;
   return entity;
 }
 
 function normalizeStrapiRelation(rel) {
-  // Accepts: {data: []}, {data: {}}, array, or direct
   if (!rel) return [];
   if (Array.isArray(rel)) return rel.map(normalizeStrapiEntity).filter(Boolean);
   if (rel.data) {
@@ -133,11 +94,7 @@ function pickLabel(item) {
 }
 
 function pickSlug(item) {
-  const candidates = [
-    getAttr(item, "slug"),
-    getAttr(item, "handle"),
-    getAttr(item, "key"),
-  ];
+  const candidates = [getAttr(item, "slug"), getAttr(item, "handle"), getAttr(item, "key")];
   const v = candidates.find((x) => typeof x === "string" && x.trim());
   return (v || "").toString().trim();
 }
@@ -154,20 +111,11 @@ function pickBadges(item) {
   if (isHot) badges.push("HOT");
   if (isNew) badges.push("NEW");
 
-  // Cap to keep UI clean
   return badges.slice(0, 2);
 }
 
 function pickChildren(item) {
-  // Try common branch keys (audience category tree)
-  const keys = [
-    "children",
-    "branches",
-    "subcategories",
-    "subCategories",
-    "nodes",
-    "items",
-  ];
+  const keys = ["children", "branches", "subcategories", "subCategories", "nodes", "items"];
   for (const k of keys) {
     const rel = getAttr(item, k);
     const children = normalizeStrapiRelation(rel);
@@ -187,11 +135,8 @@ function toNode(item, depth = 0, maxDepth = 3) {
   const badges = pickBadges(item);
 
   const childrenRaw = depth < maxDepth ? pickChildren(item) : [];
-  const children = childrenRaw
-    .map((c) => toNode(c, depth + 1, maxDepth))
-    .filter(Boolean);
+  const children = childrenRaw.map((c) => toNode(c, depth + 1, maxDepth)).filter(Boolean);
 
-  // If item has no label, skip (avoid broken blanks)
   if (!label) return null;
 
   return {
@@ -224,60 +169,64 @@ function pinAndSortTopLevel(nodes) {
   const pinnedSlugs = new Set(["limited-edition", "limitededition", "limited"]);
   const score = (n) => {
     const slug = (n?.href || "").split("/").pop() || "";
-    if (pinnedSlugs.has(slug)) return -100; // top
+    if (pinnedSlugs.has(slug)) return -100;
     return 0;
   };
   return [...(nodes || [])].sort((a, b) => {
     const sa = score(a);
     const sb = score(b);
     if (sa !== sb) return sa - sb;
-    // Stable alphabetical
     return a.label.localeCompare(b.label);
   });
 }
 
 /* ====================== DATA FETCH (AUTO) ====================== */
 
-async function fetchAudienceTree() {
-  // We attempt a safe multi-level populate that works in Strapi v4 without requiring deep plugin.
-  // 4-tier menu needs up to 3 nested children expansions.
-  const base = getStrapiBase();
+async function fetchViaProxy(path, ms = 12000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), ms);
 
-  const urls = [
-    `${base}/api/audience-categories?populate[children][populate][children][populate][children]=*&populate=*&pagination[pageSize]=500`,
-    `${base}/api/audience-categories?populate=*&pagination[pageSize]=500`,
-    `${base}/api/audience-categories?pagination[pageSize]=500`,
-  ];
+  try {
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const q = encodeURIComponent(normalizedPath);
 
-  const attempts = [];
-  for (const url of urls) {
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const r = await fetchJsonWithTimeout(url, 12000);
-    const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
-
-    attempts.push({
-      url,
-      ok: r.ok,
-      status: r.status,
-      ms: Math.round(t1 - t0),
-      hint: r.ok ? "OK" : (r.json?.error?.message || r.text || "").slice(0, 160),
+    const res = await fetch(`/api/strapi?path=${q}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "force-cache",
+      signal: controller.signal,
     });
 
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json) return { ok: false, status: res.status, json };
+
+    const payload = json?.ok ? json.data : json;
+    return { ok: true, status: res.status, json: payload };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function fetchAudienceTree() {
+  const paths = [
+    "/audience-categories?populate[children][populate][children][populate][children]=*&populate=*&pagination[pageSize]=500",
+    "/audience-categories?populate=*&pagination[pageSize]=500",
+    "/audience-categories?pagination[pageSize]=500",
+  ];
+
+  for (const p of paths) {
+    const r = await fetchViaProxy(p, 12000);
     if (!r.ok || !r.json) continue;
 
     const items = Array.isArray(r.json?.data)
       ? r.json.data.map(normalizeStrapiEntity).filter(Boolean)
       : [];
 
-    if (items.length) return { items, attempts, sourceUrl: url };
+    if (items.length) return { items, sourcePath: p };
   }
 
-  const last = attempts[attempts.length - 1];
-  throw new Error(
-    `audience_categories_fetch_failed (${last?.status || "?"}) ${last?.hint || ""}`.trim()
-  );
+  throw new Error("audience_categories_fetch_failed");
 }
-
 
 /* ====================== COMPONENT ====================== */
 
@@ -285,17 +234,52 @@ export default function MenuFlyout({ options = [] }) {
   const pathname = usePathname();
   const [activeIndex, setActiveIndex] = useState(0);
 
-  // Auto options (Strapi-driven)
   const [autoOptions, setAutoOptions] = useState([]);
   const [autoError, setAutoError] = useState(null);
   const [autoLoading, setAutoLoading] = useState(false);
 
+  const [isMobile, setIsMobile] = useState(false);
+
   const usingExternal = Array.isArray(options) && options.length > 0;
 
+  // Detect mobile (no hover). Uses width only (safe + stable).
+  useEffect(() => {
+    const mq = window.matchMedia?.("(max-width: 768px)");
+    const apply = () => setIsMobile(Boolean(mq?.matches));
+    apply();
+    if (!mq) return;
+    mq.addEventListener?.("change", apply);
+    return () => mq.removeEventListener?.("change", apply);
+  }, []);
+
+  // Auto tree: instant from local cache, then refresh if stale.
   useEffect(() => {
     if (usingExternal) return;
 
     let mounted = true;
+
+    // 1) Instant paint from localStorage (if any)
+    try {
+      const cached = window.localStorage.getItem(LS_TREE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length) setAutoOptions(parsed);
+      }
+    } catch {}
+
+    // 2) Background refresh if stale
+    const shouldRefresh = () => {
+      try {
+        const last = Number(window.localStorage.getItem(LS_TREE_TS) || "0");
+        const now = Date.now();
+        return now - last >= TREE_TTL_MS;
+      } catch {
+        return true;
+      }
+    };
+
+    if (!shouldRefresh()) return;
+
     setAutoLoading(true);
     setAutoError(null);
 
@@ -305,13 +289,20 @@ export default function MenuFlyout({ options = [] }) {
         const nodes = items.map((it) => toNode(it, 0, 3)).filter(Boolean);
         const deduped = dedupeTree(nodes);
         const sorted = pinAndSortTopLevel(deduped);
+
         setAutoOptions(sorted);
+
+        try {
+          window.localStorage.setItem(LS_TREE_KEY, JSON.stringify(sorted));
+          window.localStorage.setItem(LS_TREE_TS, String(Date.now()));
+        } catch {}
       })
       .catch((e) => {
         if (!mounted) return;
         console.error("[MenuFlyout] auto-fetch failed:", e);
         setAutoError(e?.message || "menu_auto_fetch_failed");
-        setAutoOptions([]);
+        // keep whatever cached we had; do not force empty unless nothing exists
+        setAutoOptions((prev) => (Array.isArray(prev) && prev.length ? prev : []));
       })
       .finally(() => {
         if (!mounted) return;
@@ -325,17 +316,23 @@ export default function MenuFlyout({ options = [] }) {
 
   const effectiveOptions = usingExternal ? options : autoOptions;
 
+  // Default selection: match current route
   useEffect(() => {
     if (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0) {
       setActiveIndex(0);
       return;
     }
-    // Try to default to the branch that matches the current URL
     const idx = effectiveOptions.findIndex((n) => isNodeActiveBranch(n, pathname));
     setActiveIndex(idx === -1 ? 0 : idx);
   }, [effectiveOptions, pathname]);
 
-  if (autoLoading && !usingExternal && effectiveOptions.length === 0) {
+  // Ensure activeIndex never exceeds length after updates
+  useEffect(() => {
+    if (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0) return;
+    setActiveIndex((i) => Math.max(0, Math.min(i, effectiveOptions.length - 1)));
+  }, [effectiveOptions?.length]);
+
+  if (!usingExternal && autoLoading && (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0)) {
     return (
       <div
         style={{
@@ -356,7 +353,6 @@ export default function MenuFlyout({ options = [] }) {
   }
 
   if (!Array.isArray(effectiveOptions) || effectiveOptions.length === 0) {
-    // If Strapi fails, keep UX clean (no crash)
     return autoError ? (
       <div
         style={{
@@ -368,6 +364,8 @@ export default function MenuFlyout({ options = [] }) {
           color: "#8A1F1F",
           fontWeight: 800,
           letterSpacing: ".04em",
+          padding: 12,
+          textAlign: "center",
         }}
       >
         Menu unavailable ({autoError})
@@ -378,55 +376,96 @@ export default function MenuFlyout({ options = [] }) {
   const activeNode = effectiveOptions[activeIndex] || effectiveOptions[0];
 
   return (
-    <div
-      style={{
-        display: "flex",
-        width: "100%",
-        minHeight: 220,
-        gap: 18,
-      }}
-    >
-      {/* LEFT: primary rail (Audience Categories / Top-level Collections) */}
-      <div
-        style={{
-          flex: "0 0 210px",
-          maxWidth: 260,
-          borderRight: "1px solid #e7e3da",
-          paddingRight: 12,
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-        }}
-      >
-        {effectiveOptions.map((node, idx) => {
-          const branchActive = isNodeActiveBranch(node, pathname);
-          const isCurrent = idx === activeIndex;
-          return (
-            <RailItem
-              key={node.href || `${node.label}-${idx}`}
-              node={node}
-              isCurrent={isCurrent}
-              branchActive={branchActive}
-              onHover={() => setActiveIndex(idx)}
-              pathname={pathname}
-            />
-          );
-        })}
-      </div>
+    <>
+      <style>{`
+        .tdls-flyout {
+          width: 100%;
+          display: flex;
+          gap: 18px;
+          min-height: 220px;
+          max-height: min(60dvh, 520px);
+          overflow: hidden;
+        }
+        .tdls-rail {
+          flex: 0 0 210px;
+          max-width: 260px;
+          border-right: 1px solid #e7e3da;
+          padding-right: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          overflow-y: auto;
+          overflow-x: hidden;
+          -webkit-overflow-scrolling: touch;
+        }
+        .tdls-detail {
+          flex: 1 1 auto;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          overflow: hidden;
+        }
+        .tdls-detail-scroll {
+          overflow: auto;
+          overflow-x: hidden;
+          max-height: 100%;
+          -webkit-overflow-scrolling: touch;
+        }
 
-      {/* RIGHT: detail area for the currently hovered/selected rail item */}
-      <div
-        style={{
-          flex: "1 1 auto",
-          minWidth: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-      >
-        <NodeDetail node={activeNode} pathname={pathname} />
+        /* Mobile: stacked, rail becomes horizontal scroller; no screen overflow */
+        @media (max-width: 768px) {
+          .tdls-flyout {
+            flex-direction: column;
+            gap: 10px;
+            max-height: min(70dvh, 560px);
+          }
+          .tdls-rail {
+            flex: none;
+            max-width: 100%;
+            border-right: none;
+            padding-right: 0;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #e7e3da;
+
+            flex-direction: row;
+            overflow-x: auto;
+            overflow-y: hidden;
+            white-space: nowrap;
+            scroll-snap-type: x mandatory;
+          }
+          .tdls-rail > * { scroll-snap-align: start; }
+        }
+      `}</style>
+
+      <div className="tdls-flyout">
+        {/* LEFT/TOP rail */}
+        <div className="tdls-rail">
+          {effectiveOptions.map((node, idx) => {
+            const branchActive = isNodeActiveBranch(node, pathname);
+            const isCurrent = idx === activeIndex;
+            return (
+              <RailItem
+                key={node.href || `${node.label}-${idx}`}
+                node={node}
+                isCurrent={isCurrent}
+                branchActive={branchActive}
+                onSelect={() => setActiveIndex(idx)}
+                pathname={pathname}
+                isMobile={isMobile}
+              />
+            );
+          })}
+        </div>
+
+        {/* RIGHT/BOTTOM detail */}
+        <div className="tdls-detail">
+          <div className="tdls-detail-scroll">
+            <NodeDetail node={activeNode} pathname={pathname} isMobile={isMobile} />
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -448,15 +487,16 @@ function isNodeActiveBranch(node, pathname) {
 
 /* ====================== LEFT RAIL ITEM ====================== */
 
-function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
+function RailItem({ node, isCurrent, branchActive, onSelect, isMobile }) {
   const isClickable = Boolean(node.href);
+  const hasChildren = Array.isArray(node.children) && node.children.length > 0;
   const isActive = branchActive;
 
   const baseBg = isCurrent || isActive ? "#163060" : "transparent";
   const baseColor = isCurrent || isActive ? "#faf9f6" : "#201D14";
 
   const style = {
-    display: "flex",
+    display: "inline-flex",
     alignItems: "center",
     gap: 8,
     padding: "6px 10px",
@@ -472,6 +512,8 @@ function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
     textTransform: "uppercase",
     transition: "background .16s ease, color .16s ease, transform .12s ease, box-shadow .16s ease",
     boxShadow: isCurrent || isActive ? "0 6px 18px rgba(22,48,96,0.45)" : "none",
+    maxWidth: "100%",
+    whiteSpace: "nowrap",
   };
 
   const onOver = (el) => {
@@ -494,27 +536,12 @@ function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
 
   const content = (
     <>
-      <span
-        style={{
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          maxWidth: "100%",
-        }}
-      >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
         {node.label}
       </span>
 
-      {/* Optional badges (NEW / LIMITED / HOT) */}
       {Array.isArray(node.badges) && node.badges.length > 0 && (
-        <span
-          style={{
-            marginLeft: 6,
-            display: "inline-flex",
-            gap: 4,
-            flexWrap: "wrap",
-          }}
-        >
+        <span style={{ marginLeft: 6, display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
           {node.badges.slice(0, 2).map((b) => (
             <span
               key={b}
@@ -535,9 +562,14 @@ function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
         </span>
       )}
 
-      {isClickable && <ChevronRight size={14} style={{ marginLeft: "auto", opacity: 0.6 }} />}
+      {(isClickable || hasChildren) && (
+        <ChevronRight size={14} style={{ marginLeft: "auto", opacity: 0.6, flexShrink: 0 }} />
+      )}
     </>
   );
+
+  // Mobile: if node has children, first tap should select (not navigate immediately).
+  const shouldTapSelect = Boolean(isMobile && hasChildren);
 
   if (isClickable) {
     return (
@@ -546,10 +578,25 @@ function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
         prefetch
         style={style}
         onMouseEnter={(e) => {
-          onHover();
+          if (!isMobile) onSelect();
           onOver(e.currentTarget);
         }}
         onMouseLeave={(e) => onOut(e.currentTarget)}
+        onPointerDown={(e) => {
+          if (shouldTapSelect) {
+            e.preventDefault();
+            e.stopPropagation();
+            onSelect();
+            return;
+          }
+          // otherwise normal nav
+        }}
+        onClick={(e) => {
+          if (shouldTapSelect) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
       >
         {content}
       </Link>
@@ -560,10 +607,15 @@ function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
     <div
       style={style}
       onMouseEnter={(e) => {
-        onHover();
+        if (!isMobile) onSelect();
         onOver(e.currentTarget);
       }}
       onMouseLeave={(e) => onOut(e.currentTarget)}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onSelect();
+      }}
     >
       {content}
     </div>
@@ -572,12 +624,11 @@ function RailItem({ node, isCurrent, branchActive, onHover, pathname }) {
 
 /* ====================== RIGHT PANE DETAIL ====================== */
 
-function NodeDetail({ node, pathname }) {
+function NodeDetail({ node, pathname, isMobile }) {
   if (!node) return null;
 
   const hasChildren = Array.isArray(node.children) && node.children.length > 0;
 
-  // If no children, just show one big link card
   if (!hasChildren) {
     return (
       <div
@@ -590,6 +641,7 @@ function NodeDetail({ node, pathname }) {
           alignItems: "center",
           justifyContent: "space-between",
           boxShadow: "0 10px 26px rgba(0,0,0,0.05)",
+          overflow: "hidden",
         }}
       >
         <LabelLink node={node} depth={0} pathname={pathname} />
@@ -599,18 +651,17 @@ function NodeDetail({ node, pathname }) {
 
   return (
     <>
-      {/* Main branch header (Tier-1) */}
       <div style={{ marginBottom: 6 }}>
         <LabelLink node={node} depth={0} pathname={pathname} />
       </div>
 
-      {/* Tier-2 columns; Tier-3 rows; Tier-4 pills */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+          gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(230px, 1fr))",
           gap: 10,
           width: "100%",
+          overflow: "hidden",
         }}
       >
         {node.children.map((child, idx) => (
@@ -638,12 +689,11 @@ function DetailColumn({ node, pathname }) {
         flexDirection: "column",
         gap: 4,
         boxShadow: "0 8px 24px rgba(0,0,0,0.04)",
+        overflow: "hidden",
       }}
     >
-      {/* Tier-2 header */}
       <LabelLink node={node} depth={1} pathname={pathname} />
 
-      {/* Tier-3 rows + Tier-4 pills */}
       {hasChildren && (
         <div
           style={{
@@ -651,8 +701,10 @@ function DetailColumn({ node, pathname }) {
             display: "flex",
             flexDirection: "column",
             gap: 4,
-            maxHeight: 260,
+            maxHeight: "min(34dvh, 320px)",
             overflowY: "auto",
+            overflowX: "hidden",
+            WebkitOverflowScrolling: "touch",
           }}
         >
           {node.children.map((child, idx) => {
@@ -663,21 +715,13 @@ function DetailColumn({ node, pathname }) {
                 style={{
                   paddingTop: idx === 0 ? 0 : 4,
                   borderTop: idx === 0 ? "none" : "1px dashed #efe0c7",
+                  overflow: "hidden",
                 }}
               >
-                {/* Tier-3 */}
                 <LabelLink node={child} depth={2} pathname={pathname} />
 
-                {/* Tier-4 pills */}
                 {hasGrand && (
-                  <div
-                    style={{
-                      marginTop: 3,
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 4,
-                    }}
-                  >
+                  <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 4 }}>
                     {child.children.map((grand, gidx) => (
                       <LabelLink
                         key={grand.href || `${grand.label}-${gidx}`}
@@ -707,9 +751,7 @@ function LabelLink({ node, depth, pathname }) {
   const bgActive = "#163060";
   const fgActive = "#faf9f6";
 
-  const bgBase =
-    depth === 0 ? "#faf7ee" : depth === 1 ? "#f7f3e7" : "transparent";
-
+  const bgBase = depth === 0 ? "#faf7ee" : depth === 1 ? "#f7f3e7" : "transparent";
   const fgBase = depth <= 1 ? "#201D14" : "#163060";
 
   const background = isSelfActive ? bgActive : bgBase;
@@ -719,7 +761,14 @@ function LabelLink({ node, depth, pathname }) {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    padding: depth === 0 ? "6px 12px" : depth === 1 ? "4px 10px" : depth === 2 ? "3px 8px" : "3px 7px",
+    padding:
+      depth === 0
+        ? "6px 12px"
+        : depth === 1
+        ? "4px 10px"
+        : depth === 2
+        ? "3px 8px"
+        : "3px 7px",
     borderRadius: depth >= 2 ? 999 : 10,
     background,
     color,
@@ -728,7 +777,8 @@ function LabelLink({ node, depth, pathname }) {
         ? "'Playfair Display', serif"
         : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     fontWeight: depth === 0 ? 800 : depth === 1 ? 700 : 600,
-    fontSize: depth === 0 ? "1.0rem" : depth === 1 ? "0.95rem" : depth === 2 ? "0.9rem" : "0.82rem",
+    fontSize:
+      depth === 0 ? "1.0rem" : depth === 1 ? "0.95rem" : depth === 2 ? "0.9rem" : "0.82rem",
     letterSpacing: depth === 0 ? ".06em" : ".02em",
     textTransform: depth === 0 ? "uppercase" : "none",
     textDecoration: "none",
@@ -737,6 +787,7 @@ function LabelLink({ node, depth, pathname }) {
     transition: "background .16s ease, color .16s ease, transform .12s ease, box-shadow .16s ease",
     boxShadow: isSelfActive ? "0 6px 18px rgba(22,48,96,0.35)" : "none",
     whiteSpace: depth >= 2 ? "nowrap" : "normal",
+    overflow: "hidden",
   };
 
   const onOver = (el) => {
@@ -759,7 +810,7 @@ function LabelLink({ node, depth, pathname }) {
 
   const content = (
     <>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: depth >= 2 ? 120 : "100%" }}>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: depth >= 2 ? 140 : "100%" }}>
         {node.label}
       </span>
       {isClickable && depth >= 2 && <ChevronRight size={12} style={{ opacity: 0.6, flexShrink: 0 }} />}

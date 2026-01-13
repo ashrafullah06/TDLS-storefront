@@ -41,7 +41,6 @@ async function fetchFromStrapi(path) {
     const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      // let the browser cache normally (best-effort fallback)
       cache: "force-cache",
     });
     if (!res.ok) return null;
@@ -120,17 +119,24 @@ async function fetchAudienceCategoriesClient() {
 /* ===================== PORTAL ===================== */
 function Portal({ zIndex = 2147483647, children }) {
   const [host, setHost] = useState(null);
+
   useEffect(() => {
     const el = document.createElement("div");
-    el.dataset.flyoutHost = "tdlc";
+    el.dataset.flyoutHost = "tdls";
     el.style.position = "fixed";
     el.style.inset = "0";
     el.style.zIndex = String(zIndex);
     el.style.pointerEvents = "none";
     document.body.appendChild(el);
     setHost(el);
-    return () => document.body.removeChild(el);
+
+    return () => {
+      try {
+        document.body.removeChild(el);
+      } catch {}
+    };
   }, [zIndex]);
+
   if (!host) return null;
   return createPortal(children, host);
 }
@@ -156,22 +162,11 @@ function pickSlugs(obj) {
     const d = obj.data;
     if (Array.isArray(d)) {
       return d
-        .map(
-          (x) =>
-            x?.attributes?.slug ||
-            x?.slug ||
-            x?.attributes?.name ||
-            x?.name
-        )
+        .map((x) => x?.attributes?.slug || x?.slug || x?.attributes?.name || x?.name)
         .filter(Boolean)
         .map(normSlug);
     }
-    const one =
-      d?.attributes?.slug ||
-      d?.slug ||
-      d?.attributes?.name ||
-      d?.name ||
-      null;
+    const one = d?.attributes?.slug || d?.slug || d?.attributes?.name || d?.name || null;
     return one ? [normSlug(one)] : [];
   }
 
@@ -235,7 +230,6 @@ function extractRelSlugs(product, canonicalKey) {
     const slugs = pickSlugs(v);
     for (const s of slugs) out.push(s);
   }
-
   return Array.from(new Set(out.map(normSlug).filter(Boolean)));
 }
 
@@ -293,12 +287,7 @@ function badgesFromAudiences(product) {
 }
 
 /* ===================== MENU BUILDERS ===================== */
-function buildMWHD(
-  products,
-  audSlug,
-  labels,
-  prefix = `/collections/${normSlug(audSlug)}`
-) {
+function buildMWHD(products, audSlug, labels, prefix = `/collections/${normSlug(audSlug)}`) {
   const buckets = new Map(); // cat => sub => node
   products
     .filter((p) => hasAudience(p, audSlug))
@@ -441,18 +430,12 @@ function buildAccessories(products, labels, prefix = "/collections/accessories")
       }
     }
 
-    if (children.length)
-      options.push({ label: supLabel, href: `${prefix}${supSegment}`, children });
+    if (children.length) options.push({ label: supLabel, href: `${prefix}${supSegment}`, children });
   }
   return options.sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function buildKidsYoung(
-  products,
-  audSlug,
-  labels,
-  prefix = `/collections/${normSlug(audSlug)}`
-) {
+function buildKidsYoung(products, audSlug, labels, prefix = `/collections/${normSlug(audSlug)}`) {
   const tree = new Map(); // gender -> age -> cat -> sub
   products
     .filter((p) => hasAudience(p, audSlug))
@@ -616,8 +599,7 @@ function buildSeasonal(products, seasonSlug, labels) {
     labels,
     accessoriesPrefix
   );
-  if (accessories.length)
-    sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
+  if (accessories.length) sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
   const men = buildMWHD(
@@ -651,8 +633,6 @@ function buildSeasonal(products, seasonSlug, labels) {
 
 /* ===================== MAIN COMPONENT ===================== */
 export default function BottomFloatingBar({ initialData }) {
-  const [mounted, setMounted] = useState(false);
-
   const [active, setActive] = useState(null); // { key, label }
   const [subOptions, setSubOptions] = useState([]);
 
@@ -667,8 +647,6 @@ export default function BottomFloatingBar({ initialData }) {
   const panelRef = useRef(null);
   const [barH, setBarH] = useState(60);
   const optionsCacheRef = useRef(new Map());
-
-  useEffect(() => setMounted(true), []);
 
   // Populate from server-cached payload (primary “magnet” path)
   useEffect(() => {
@@ -685,7 +663,7 @@ export default function BottomFloatingBar({ initialData }) {
 
   // Fallback only if initialData is missing (keeps non-breaking behavior)
   useEffect(() => {
-    if (initialData) return; // primary path already populated
+    if (initialData) return;
     let cancelled = false;
 
     (async () => {
@@ -726,39 +704,51 @@ export default function BottomFloatingBar({ initialData }) {
 
   // Reserve safe click padding below body for bar height
   useEffect(() => {
-    if (!mounted) return;
+    const prev = typeof document !== "undefined" ? document.body.style.paddingBottom : "";
+
     const measure = () => {
       if (!barRef.current) return;
       const h = barRef.current.offsetHeight || 60;
       setBarH(h);
       document.body.style.paddingBottom = `calc(${h}px + env(safe-area-inset-bottom))`;
     };
-    const obs = new ResizeObserver(() => Promise.resolve().then(measure));
-    if (barRef.current) obs.observe(barRef.current);
+
+    const hasRO = typeof ResizeObserver !== "undefined";
+    const obs = hasRO ? new ResizeObserver(() => Promise.resolve().then(measure)) : null;
+
+    if (barRef.current && obs) obs.observe(barRef.current);
     window.addEventListener("resize", measure);
     measure();
+
     return () => {
       try {
-        obs.disconnect();
+        if (obs) obs.disconnect();
       } catch {}
       window.removeEventListener("resize", measure);
+      try {
+        document.body.style.paddingBottom = prev;
+      } catch {}
     };
-  }, [mounted]);
+  }, []);
 
   // Close on outside click + ESC
   useEffect(() => {
     if (!active) return;
+
     const closeOnOutsidePointerDown = (e) => {
       const path = e.composedPath ? e.composedPath() : [];
       if (barRef.current && path.includes(barRef.current)) return;
       if (panelRef.current && path.includes(panelRef.current)) return;
       setActive(null);
     };
+
     const closeOnEsc = (e) => {
       if (e.key === "Escape") setActive(null);
     };
+
     document.addEventListener("pointerdown", closeOnOutsidePointerDown, true);
     document.addEventListener("keydown", closeOnEsc);
+
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePointerDown, true);
       document.removeEventListener("keydown", closeOnEsc);
@@ -787,7 +777,6 @@ export default function BottomFloatingBar({ initialData }) {
   );
 
   const barItems = useMemo(() => {
-    // Keep your locked base order
     const base = [
       { key: "women", label: "Women" },
       { key: "men", label: "Men" },
@@ -802,7 +791,6 @@ export default function BottomFloatingBar({ initialData }) {
       { key: "winter", label: "Winter" },
     ];
 
-    // Append extra audience categories from Strapi
     const baseKeys = new Set(base.map((x) => normSlug(x.key)));
     const extras = (audienceCategories || [])
       .map((a) => ({
@@ -822,7 +810,6 @@ export default function BottomFloatingBar({ initialData }) {
     return base.concat(extras.map(({ key, label }) => ({ key, label })));
   }, [audienceCategories]);
 
-  // Mobile “rail”: show first N + a More pill (mobile-only via CSS)
   const { visibleItems, overflowItems } = useMemo(() => {
     const v = barItems.slice(0, MOBILE_VISIBLE_PILLS);
     const o = barItems.slice(MOBILE_VISIBLE_PILLS);
@@ -850,7 +837,6 @@ export default function BottomFloatingBar({ initialData }) {
     let options = [];
 
     if (key === MORE_KEY) {
-      // “More” panel: show all audiences as direct links (hardcoded-feel navigation)
       options = barItems.map((x) => ({
         label: x.label,
         href: `/collections/${normSlug(x.key)}`,
@@ -864,7 +850,6 @@ export default function BottomFloatingBar({ initialData }) {
     } else if (["new-arrival", "on-sale", "monsoon", "summer", "winter"].includes(key)) {
       options = buildSeasonal(products, key, labels);
     } else {
-      // Any newly-created audience behaves like a normal audience tab
       options = buildMWHD(products, key, labels);
     }
 
@@ -888,11 +873,8 @@ export default function BottomFloatingBar({ initialData }) {
     setActive(item);
   };
 
-  if (!mounted) return null;
-
   return (
     <>
-      {/* Mobile/desktop responsive CSS for “rail” + panel */}
       <style>{`
         .bfbar-shell { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483647; background: ${PEARL_WHITE}; border-top: 1px solid ${NEUTRAL_BORDER}; }
         .bfbar-nav { width: 100%; display: flex; align-items: center; justify-content: center; padding: 8px 10px 12px; }
@@ -916,7 +898,6 @@ export default function BottomFloatingBar({ initialData }) {
         .bfbar-pill[data-active="true"] { color: ${ACCENT}; border-color: ${ACCENT}; }
         .bfbar-pill:hover { background: ${HOVER_TINT}; color: ${HOVER_TEXT}; border-color: ${ACCENT}; }
 
-        /* Mobile: one-row horizontal rail, no wrap, aesthetic + screen-friendly */
         @media (max-width: 768px) {
           .bfbar-nav { justify-content: flex-start; padding: 8px 10px calc(10px + env(safe-area-inset-bottom)); }
           .bfbar-rail {
@@ -934,15 +915,11 @@ export default function BottomFloatingBar({ initialData }) {
             padding: 10px 14px;
             scroll-snap-align: start;
           }
-
-          /* Only show the “More” pill on mobile */
           .bfbar-more { display: inline-flex !important; }
         }
 
-        /* Desktop: hide “More” pill */
         .bfbar-more { display: none; }
 
-        /* Panel: desktop default */
         .bfbar-panel {
           pointer-events: auto;
           position: fixed;
@@ -962,7 +939,6 @@ export default function BottomFloatingBar({ initialData }) {
           box-shadow: 0 8px 40px rgba(0,0,0,0.12);
         }
 
-        /* Panel: mobile bottom-sheet style (more organized) */
         @media (max-width: 768px) {
           .bfbar-panel {
             left: 8px;
@@ -976,11 +952,9 @@ export default function BottomFloatingBar({ initialData }) {
         }
       `}</style>
 
-      {/* Bottom bar */}
       <div ref={barRef} className="bfbar-shell" data-flyout="bar">
         <nav className="bfbar-nav">
           <div className="bfbar-rail">
-            {/* Desktop shows all items; Mobile shows first N */}
             {(visibleItems || []).map((item) => {
               const isActive = active?.key === item.key;
               const count = audienceCounts[item.key];
@@ -1005,7 +979,6 @@ export default function BottomFloatingBar({ initialData }) {
                   className="bfbar-pill"
                   data-active={isActive ? "true" : "false"}
                   style={{
-                    // preserve exact active-state color on non-hover interactions
                     color: isActive ? ACCENT : undefined,
                     borderColor: isActive ? ACCENT : undefined,
                   }}
@@ -1016,7 +989,6 @@ export default function BottomFloatingBar({ initialData }) {
               );
             })}
 
-            {/* Mobile-only “More” pill (only if there are extras) */}
             {overflowItems.length > 0 && (
               <button
                 aria-label={MORE_LABEL}
@@ -1046,7 +1018,6 @@ export default function BottomFloatingBar({ initialData }) {
         </nav>
       </div>
 
-      {/* Flyout panel */}
       <Portal zIndex={2147483647}>
         {active && (
           <div
@@ -1060,7 +1031,6 @@ export default function BottomFloatingBar({ initialData }) {
             }}
             data-flyout="panel"
           >
-            {/* Header */}
             <div
               style={{
                 display: "flex",
@@ -1100,8 +1070,7 @@ export default function BottomFloatingBar({ initialData }) {
                   cursor: "pointer",
                   color: NEUTRAL_TEXT,
                   padding: 8,
-                  transition:
-                    "background .18s ease, color .18s ease, border-color .2s ease",
+                  transition: "background .18s ease, color .18s ease, border-color .2s ease",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -1121,10 +1090,9 @@ export default function BottomFloatingBar({ initialData }) {
               </button>
             </div>
 
-            {/* See all link (handle More gracefully) */}
             <div style={{ marginBottom: 12 }}>
               <Link
-                href={active.key === MORE_KEY ? "/collections" : `/collections/${active.key}`}
+                href={active.key === MORE_KEY ? "/collections" : `/collections/${normSlug(active.key)}`}
                 prefetch
                 style={{
                   color: "#174099",
@@ -1134,13 +1102,10 @@ export default function BottomFloatingBar({ initialData }) {
                   letterSpacing: ".03em",
                 }}
               >
-                {active.key === MORE_KEY
-                  ? "Browse all collections ›"
-                  : `See all in ${active.label} ›`}
+                {active.key === MORE_KEY ? "Browse all collections ›" : `See all in ${active.label} ›`}
               </Link>
             </div>
 
-            {/* Content */}
             {fetchError ? (
               <div
                 style={{

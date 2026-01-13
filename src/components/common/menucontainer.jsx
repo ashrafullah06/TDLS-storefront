@@ -1,4 +1,4 @@
-// src/components/common/menucontainer.jsx
+// FILE: src/components/common/menucontainer.jsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -6,43 +6,25 @@ import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 
 /**
- * MenuContainer (single-file, no flyout)
- * - Canonical routing: /collections/{audienceSlug}
- * - Fetches Strapi audience categories (supports your JSON: { data:[{id, attributes:{name,slug,priority}}] })
- * - Auto-supports branches if Strapi later adds children relations
- * - Premium overlay UI with your fixed 4-tier system:
- *    1) Limited Edition
- *    2) Premium Collection
- *    3) Signature Series
- *    4) Heritage Collection
- * - Strong fallback if Strapi is unreachable (never blank)
+ * MenuContainer (full-screen overlay)
+ *
+ * RELATED TO: BottomFloatingBar / Navbar menu trigger (not MenuFlyout itself).
+ *
+ * ALIGNMENT:
+ * - Canonical routing: /collections/{slug}
+ * - CATCHER PLAN: uses SAME-ORIGIN proxy (/api/strapi) to avoid CORS and keep it fast.
+ * - Instant open: localStorage cache + TTL, then refresh in background.
+ * - Mobile safe: never overflow screen (vertical/horizontal); internal scroll only.
  */
 
 const CANONICAL_PREFIX = "/collections";
 
-function normalizeStrapiBase(raw) {
-  const s = (raw || "").toString().trim().replace(/\/$/, "");
-  if (!s) return "";
-  return s.replace(/\/api$/i, "");
-}
+/* ------------------------- local cache ------------------------- */
+const LS_KEY = "tdls:menucontainer:audiences:v1";
+const LS_TS = "tdls:menucontainer:audiences_ts:v1";
+const TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
-function getStrapiBase() {
-  const envBase =
-    normalizeStrapiBase(process.env.NEXT_PUBLIC_STRAPI_API_URL) ||
-    normalizeStrapiBase(process.env.NEXT_PUBLIC_STRAPI_URL) ||
-    normalizeStrapiBase(process.env.NEXT_PUBLIC_STRAPI_BASE_URL) ||
-    "";
-
-  if (typeof window !== "undefined") {
-    try {
-      const local = normalizeStrapiBase(window.localStorage.getItem("tdlc:strapiBase"));
-      if (local) return local;
-    } catch {}
-  }
-
-  return envBase || "http://localhost:1337";
-}
-
+/* ------------------------- slug utils ------------------------- */
 function deburr(input) {
   try {
     return input.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
@@ -67,14 +49,12 @@ function slugify(input) {
 function canonicalHref(slugOrLabel) {
   const s = (slugOrLabel || "").toString().trim();
   if (!s) return null;
-  const slug = s.includes(" ") ? slugify(s) : s;
-  const cleaned = slug.replace(/^\/+/, "");
-  if (!cleaned) return null;
-  return `${CANONICAL_PREFIX}/${cleaned}`;
+  const slug = slugify(s.replace(/^\/+/, ""));
+  if (!slug) return null;
+  return `${CANONICAL_PREFIX}/${slug}`;
 }
 
 /* ------------------------- Strapi normalizers ------------------------- */
-
 function normalizeEntity(e) {
   if (!e) return null;
   if (e.attributes && typeof e.id !== "undefined") return { id: e.id, ...e.attributes };
@@ -94,15 +74,7 @@ function normalizeRelation(rel) {
 
 function pickLabel(obj) {
   if (!obj) return "";
-  return (
-    obj.name ||
-    obj.title ||
-    obj.label ||
-    obj.displayName ||
-    obj.heading ||
-    obj.text ||
-    ""
-  );
+  return obj.name || obj.title || obj.label || obj.displayName || obj.heading || obj.text || "";
 }
 
 function pickSlug(obj) {
@@ -119,7 +91,6 @@ function pickPriority(obj) {
 
 function pickChildren(obj) {
   if (!obj) return [];
-  // common relation names you might use later:
   const rel =
     obj.children ||
     obj.branches ||
@@ -143,9 +114,7 @@ function toNode(entity, depth = 0, maxDepth = 4) {
   if (!label || !href) return null;
 
   const kidsRaw = depth < maxDepth ? pickChildren(e) : [];
-  const children = kidsRaw
-    .map((c) => toNode(c, depth + 1, maxDepth))
-    .filter(Boolean);
+  const children = kidsRaw.map((c) => toNode(c, depth + 1, maxDepth)).filter(Boolean);
 
   return {
     id: e.id ?? `${slug}:${depth}`,
@@ -180,68 +149,56 @@ function sortNodes(nodes) {
   });
 }
 
-async function fetchJsonWithTimeout(url, ms = 12000) {
+/* ====================== DATA FETCH (CATCHER / PROXY) ====================== */
+/**
+ * Your proxy returns: { ok: true, data: <rawStrapiJson> }
+ */
+async function fetchViaProxy(path, ms = 12000) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), ms);
+
   try {
-    const res = await fetch(url, {
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const q = encodeURIComponent(normalizedPath);
+
+    const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      cache: "no-store",
+      cache: "force-cache",
       signal: controller.signal,
     });
-    const text = await res.text().catch(() => "");
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = null;
-    }
-    return { ok: res.ok, status: res.status, json, text };
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json) return { ok: false, status: res.status, json };
+
+    const payload = json?.ok ? json.data : json;
+    return { ok: true, status: res.status, json: payload };
   } finally {
     clearTimeout(t);
   }
 }
 
 async function fetchAudienceCategories() {
-  const base = getStrapiBase();
-
-  // Deep populate first (for future branches), then simple populate
-  const urls = [
-    `${base}/api/audience-categories?pagination[pageSize]=500&sort=priority:asc&populate[children][populate][children][populate][children]=*&populate=*`,
-    `${base}/api/audience-categories?pagination[pageSize]=500&sort=priority:asc&populate=*`,
-    `${base}/api/audience-categories?pagination[pageSize]=500&sort=priority:asc`,
-    `${base}/api/audience-categories?pagination[pageSize]=500`,
+  const paths = [
+    "/audience-categories?pagination[pageSize]=500&sort=priority:asc&populate[children][populate][children][populate][children]=*&populate=*",
+    "/audience-categories?pagination[pageSize]=500&sort=priority:asc&populate=*",
+    "/audience-categories?pagination[pageSize]=500&sort=priority:asc",
+    "/audience-categories?pagination[pageSize]=500",
   ];
 
-  const attempts = [];
-  for (const url of urls) {
-    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const r = await fetchJsonWithTimeout(url);
-    const t1 = typeof performance !== "undefined" ? performance.now() : Date.now();
-    attempts.push({
-      url,
-      ok: r.ok,
-      status: r.status,
-      ms: Math.round(t1 - t0),
-      hint: r.ok ? "OK" : (r.json?.error?.message || r.text || "").slice(0, 160),
-    });
-
+  for (const p of paths) {
+    const r = await fetchViaProxy(p, 12000);
     if (!r.ok || !r.json) continue;
 
     const raw = r.json?.data;
     const list = Array.isArray(raw) ? raw.map(normalizeEntity).filter(Boolean) : [];
-    if (list.length) return { items: list, attempts, sourceUrl: url };
+    if (list.length) return { items: list, sourcePath: p };
   }
 
-  const last = attempts[attempts.length - 1];
-  throw new Error(
-    `audience_categories_fetch_failed (${last?.status || "?"}) ${last?.hint || ""}`.trim()
-  );
+  throw new Error("audience_categories_fetch_failed");
 }
 
 /* ------------------------- Fallback (never blank) ------------------------- */
-
 const FALLBACK_AUDIENCES = [
   { name: "Women", slug: "women", priority: 1 },
   { name: "Men", slug: "men", priority: 2 },
@@ -256,7 +213,6 @@ const FALLBACK_AUDIENCES = [
 ];
 
 /* ------------------------- 4-tier shell (fixed labels) ------------------------- */
-
 const TIERS = [
   { key: "limited-edition", label: "Limited Edition" },
   { key: "premium-collection", label: "Premium Collection" },
@@ -301,6 +257,7 @@ function CategoryCard({ node, onNavigate }) {
         boxShadow: "0 14px 44px rgba(0,0,0,0.08)",
         padding: 14,
         overflow: "hidden",
+        minWidth: 0,
       }}
     >
       <Link
@@ -313,9 +270,20 @@ function CategoryCard({ node, onNavigate }) {
           gap: 10,
           textDecoration: "none",
           color: "#0F2147",
+          minWidth: 0,
         }}
       >
-        <div style={{ fontWeight: 950, fontSize: 15, letterSpacing: ".02em" }}>
+        <div
+          style={{
+            fontWeight: 950,
+            fontSize: 15,
+            letterSpacing: ".02em",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
+          }}
+        >
           {node.label}
         </div>
         <div
@@ -325,6 +293,7 @@ function CategoryCard({ node, onNavigate }) {
             color: "rgba(15,33,71,0.55)",
             letterSpacing: ".12em",
             textTransform: "uppercase",
+            flexShrink: 0,
           }}
         >
           View
@@ -347,6 +316,9 @@ function CategoryCard({ node, onNavigate }) {
                 borderRadius: 12,
                 border: "1px solid rgba(15,33,71,0.08)",
                 background: "rgba(233,241,251,0.55)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
               }}
             >
               {c.label}
@@ -370,14 +342,14 @@ export default function MenuContainer({ open = true, onClose = null, options = n
   const [diag, setDiag] = useState({
     loading: false,
     error: null,
-    sourceUrl: null,
+    source: null,
     rawCount: 0,
   });
 
+  // Load nodes (external options OR proxy fetch with cache/TTL)
   useEffect(() => {
     if (!open) return;
 
-    // If parent provides options, we use them (still canonical href expected)
     if (usingExternal) {
       const normalized = dedupeByHref(
         (options || [])
@@ -389,54 +361,86 @@ export default function MenuContainer({ open = true, onClose = null, options = n
           .filter((x) => x?.label && x?.href)
       );
       setNodes(sortNodes(normalized));
-      setDiag({ loading: false, error: null, sourceUrl: "external-options", rawCount: normalized.length });
+      setDiag({ loading: false, error: null, source: "external-options", rawCount: normalized.length });
       return;
     }
 
     let mounted = true;
-    setDiag((d) => ({ ...d, loading: true, error: null }));
 
-    fetchAudienceCategories()
-      .then(({ items, sourceUrl }) => {
-        if (!mounted) return;
-        const flat = items.map((it) => toNode(it, 0, 4)).filter(Boolean);
-        const deduped = dedupeByHref(flat);
-        const sorted = sortNodes(deduped);
-        setNodes(sorted);
-        setDiag({
-          loading: false,
-          error: null,
-          sourceUrl,
-          rawCount: items.length,
+    // 1) instant from localStorage
+    try {
+      const cached = window.localStorage.getItem(LS_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length) setNodes(parsed);
+      }
+    } catch {}
+
+    const shouldRefresh = () => {
+      try {
+        const last = Number(window.localStorage.getItem(LS_TS) || "0");
+        return Date.now() - last >= TTL_MS;
+      } catch {
+        return true;
+      }
+    };
+
+    const refresh = () => {
+      setDiag((d) => ({ ...d, loading: true, error: null }));
+
+      fetchAudienceCategories()
+        .then(({ items, sourcePath }) => {
+          if (!mounted) return;
+          const flat = items.map((it) => toNode(it, 0, 4)).filter(Boolean);
+          const deduped = dedupeByHref(flat);
+          const sorted = sortNodes(deduped);
+
+          setNodes(sorted);
+          setDiag({
+            loading: false,
+            error: null,
+            source: sourcePath,
+            rawCount: items.length,
+          });
+
+          try {
+            window.localStorage.setItem(LS_KEY, JSON.stringify(sorted));
+            window.localStorage.setItem(LS_TS, String(Date.now()));
+          } catch {}
+        })
+        .catch((e) => {
+          if (!mounted) return;
+          const fb = sortNodes(
+            FALLBACK_AUDIENCES.map((x) => ({
+              id: x.slug,
+              label: x.name,
+              slug: x.slug,
+              href: canonicalHref(x.slug),
+              priority: x.priority,
+              children: [],
+            }))
+          );
+
+          // If we already had cached nodes, keep them; otherwise use fallback.
+          setNodes((prev) => (Array.isArray(prev) && prev.length ? prev : fb));
+          setDiag({
+            loading: false,
+            error: e?.message || "menu_fetch_failed",
+            source: null,
+            rawCount: 0,
+          });
         });
-      })
-      .catch((e) => {
-        if (!mounted) return;
-        const fb = sortNodes(
-          FALLBACK_AUDIENCES.map((x) => ({
-            id: x.slug,
-            label: x.name,
-            slug: x.slug,
-            href: canonicalHref(x.slug),
-            priority: x.priority,
-            children: [],
-          }))
-        );
-        setNodes(fb);
-        setDiag({
-          loading: false,
-          error: e?.message || "menu_fetch_failed",
-          sourceUrl: null,
-          rawCount: 0,
-        });
-      });
+    };
+
+    if (shouldRefresh()) refresh();
+    else setDiag((d) => ({ ...d, loading: false, error: null, source: "local-cache" }));
 
     return () => {
       mounted = false;
     };
   }, [open, usingExternal, options]);
 
-  // Lock scroll + ESC-to-close while menu is open (prevents “blank page” feeling and keeps UX snappy)
+  // Lock scroll + ESC-to-close while open
   useEffect(() => {
     if (!open) return;
 
@@ -472,7 +476,6 @@ export default function MenuContainer({ open = true, onClose = null, options = n
     if (!q) return nodes;
     const match = (s) => (s || "").toLowerCase().includes(q);
 
-    // match category label OR any branch label
     return (nodes || []).filter((n) => {
       if (match(n.label)) return true;
       if (Array.isArray(n.children) && n.children.some((c) => match(c.label))) return true;
@@ -506,28 +509,82 @@ export default function MenuContainer({ open = true, onClose = null, options = n
             display: "flex",
             alignItems: "flex-start",
             justifyContent: "center",
-            padding: "24px 12px",
+            padding: "max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom))",
+            overflow: "hidden",
           }}
-          onMouseDown={(e) => {
-            // click outside closes
+          onPointerDown={(e) => {
+            // outside click closes (touch-safe)
             if (e.target === e.currentTarget) close();
           }}
           role="dialog"
           aria-modal="true"
         >
+          <style>{`
+            .tdls-menu-shell{
+              width: min(1180px, 94vw);
+              max-height: min(92dvh, 860px);
+              border-radius: 26px;
+              border: 1px solid rgba(255,255,255,0.14);
+              background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(252,252,255,0.96) 100%);
+              box-shadow: 0 40px 120px rgba(0,0,0,0.25);
+              overflow: hidden;
+              display: flex;
+              flex-direction: column;
+              min-width: 0;
+            }
+            .tdls-menu-body{
+              display: grid;
+              grid-template-columns: 280px 1fr;
+              gap: 0;
+              min-height: 0;
+              flex: 1 1 auto;
+              overflow: hidden;
+            }
+            .tdls-left{
+              padding: 14px;
+              border-right: 1px solid rgba(15,33,71,0.08);
+              background: linear-gradient(180deg, rgba(233,241,251,0.65) 0%, rgba(255,255,255,0.88) 100%);
+              overflow: auto;
+              -webkit-overflow-scrolling: touch;
+              min-width: 0;
+            }
+            .tdls-right{
+              padding: 16px;
+              overflow: auto;
+              -webkit-overflow-scrolling: touch;
+              min-width: 0;
+            }
+            .tdls-grid{
+              display: grid;
+              grid-template-columns: repeat(3, minmax(0, 1fr));
+              gap: 12px;
+            }
+            @media (max-width: 1024px){
+              .tdls-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            }
+            @media (max-width: 768px){
+              .tdls-menu-shell{
+                width: min(980px, 96vw);
+                max-height: min(94dvh, 900px);
+                border-radius: 22px;
+              }
+              .tdls-menu-body{
+                grid-template-columns: 1fr;
+              }
+              .tdls-left{
+                border-right: none;
+                border-bottom: 1px solid rgba(15,33,71,0.08);
+              }
+              .tdls-grid{ grid-template-columns: 1fr; }
+            }
+          `}</style>
+
           <motion.div
+            className="tdls-menu-shell"
             initial={{ y: 14, scale: 0.985, opacity: 0 }}
             animate={{ y: 0, scale: 1, opacity: 1 }}
             exit={{ y: 14, scale: 0.985, opacity: 0 }}
             transition={{ duration: 0.22 }}
-            style={{
-              width: "min(1180px, 94vw)",
-              borderRadius: 26,
-              border: "1px solid rgba(255,255,255,0.14)",
-              background: "linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(252,252,255,0.96) 100%)",
-              boxShadow: "0 40px 120px rgba(0,0,0,0.25)",
-              overflow: "hidden",
-            }}
           >
             {/* Header */}
             <div
@@ -538,9 +595,10 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 12,
+                flexWrap: "wrap",
               }}
             >
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
                 <div
                   style={{
                     fontFamily: "'Playfair Display', serif",
@@ -558,14 +616,15 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                 </div>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 360px", justifyContent: "flex-end" }}>
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search audience…"
                   style={{
                     width: 320,
-                    maxWidth: "52vw",
+                    maxWidth: "100%",
+                    flex: "1 1 260px",
                     borderRadius: 999,
                     border: "1px solid rgba(15,33,71,0.12)",
                     padding: "10px 14px",
@@ -585,6 +644,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                     color: "#0F2147",
                     background: "#fff",
                     cursor: "pointer",
+                    flexShrink: 0,
                   }}
                 >
                   Close
@@ -593,21 +653,9 @@ export default function MenuContainer({ open = true, onClose = null, options = n
             </div>
 
             {/* Content */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "280px 1fr",
-                gap: 0,
-              }}
-            >
+            <div className="tdls-menu-body">
               {/* Left rail: 4 tiers */}
-              <div
-                style={{
-                  padding: 14,
-                  borderRight: "1px solid rgba(15,33,71,0.08)",
-                  background: "linear-gradient(180deg, rgba(233,241,251,0.65) 0%, rgba(255,255,255,0.88) 100%)",
-                }}
-              >
+              <div className="tdls-left">
                 <div style={{ display: "grid", gap: 10 }}>
                   {TIERS.map((t, idx) => (
                     <TierPill key={t.key} active={idx === activeTierIdx} onClick={() => setActiveTierIdx(idx)}>
@@ -631,6 +679,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                       letterSpacing: ".08em",
                       textTransform: "uppercase",
                       boxShadow: "0 18px 50px rgba(0,0,0,0.10)",
+                      display: "block",
                     }}
                   >
                     Explore {activeTier.label}
@@ -648,7 +697,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                       lineHeight: 1.35,
                     }}
                   >
-                    {diag.loading ? "Loading audience categories…" : "Audience categories loaded."}
+                    {diag.loading ? "Loading audience categories…" : "Audience categories ready."}
                     {diag.error ? (
                       <div style={{ marginTop: 6, color: "rgba(168, 64, 64, 0.95)", fontWeight: 950 }}>
                         Fallback active
@@ -659,7 +708,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
               </div>
 
               {/* Right: Audience categories grid */}
-              <div style={{ padding: 16 }}>
+              <div className="tdls-right">
                 <div
                   style={{
                     display: "flex",
@@ -667,14 +716,15 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                     justifyContent: "space-between",
                     gap: 12,
                     marginBottom: 12,
+                    flexWrap: "wrap",
                   }}
                 >
-                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 240 }}>
                     <div style={{ fontWeight: 950, color: "#0F2147", fontSize: 16 }}>
                       Audience Categories
                     </div>
                     <div style={{ fontWeight: 850, color: "rgba(15,33,71,0.62)", fontSize: 12 }}>
-                      Click anywhere (homepage, bottom bar, menu) → same slug → same page
+                      Same slug everywhere → same filtered page
                     </div>
                   </div>
 
@@ -683,13 +733,7 @@ export default function MenuContainer({ open = true, onClose = null, options = n
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                    gap: 12,
-                  }}
-                >
+                <div className="tdls-grid">
                   {filteredNodes.map((n) => (
                     <CategoryCard key={n.href} node={n} onNavigate={close} />
                   ))}
