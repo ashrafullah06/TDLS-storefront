@@ -1,12 +1,7 @@
 // FILE: src/components/common/quickview.js
 "use client";
 
-import React, {
-  useEffect,
-  useMemo,
-  useState,
-  useCallback,
-} from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useCart as use_cart } from "@/components/common/cart_context";
@@ -49,9 +44,7 @@ const slugToLabel = (slug) => {
   return slug
     .toString()
     .split(/[-_]+/g)
-    .map((part) =>
-      part ? part.charAt(0).toUpperCase() + part.slice(1) : ""
-    )
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : ""))
     .join(" ")
     .trim();
 };
@@ -91,10 +84,7 @@ const getTierPillStyles = (slugOrLabel) => {
 
   if (key.includes("premium")) {
     return {
-      base: {
-        ...base,
-        borderColor: "rgba(202,138,4,.55)",
-      },
+      base: { ...base, borderColor: "rgba(202,138,4,.55)" },
       hover: {
         background: "linear-gradient(135deg,#020617,#0b1220)",
         color: "#f9fafb",
@@ -106,10 +96,7 @@ const getTierPillStyles = (slugOrLabel) => {
 
   if (key.includes("limited")) {
     return {
-      base: {
-        ...base,
-        borderColor: "rgba(129,140,248,.60)",
-      },
+      base: { ...base, borderColor: "rgba(129,140,248,.60)" },
       hover: {
         background: "linear-gradient(135deg,#312e81,#4c1d95)",
         color: "#f9fafb",
@@ -121,10 +108,7 @@ const getTierPillStyles = (slugOrLabel) => {
 
   if (key.includes("signature")) {
     return {
-      base: {
-        ...base,
-        borderColor: "rgba(55,65,81,.55)",
-      },
+      base: { ...base, borderColor: "rgba(55,65,81,.55)" },
       hover: {
         background: "linear-gradient(135deg,#020617,#111827)",
         color: "#e5e7eb",
@@ -136,10 +120,7 @@ const getTierPillStyles = (slugOrLabel) => {
 
   if (key.includes("heritage")) {
     return {
-      base: {
-        ...base,
-        borderColor: "rgba(185,28,28,.65)",
-      },
+      base: { ...base, borderColor: "rgba(185,28,28,.65)" },
       hover: {
         background: "linear-gradient(135deg,#7f1d1d,#111827)",
         color: "#fef2f2",
@@ -166,17 +147,14 @@ const getTierPillStyles = (slugOrLabel) => {
  * - Only add "TDLS" at the front if it's not already there
  */
 const formatTierText = (tierLabel, brandTierSlug) => {
-  const core =
-    (tierLabel ||
-      (brandTierSlug ? slugToLabel(brandTierSlug) : "") ||
-      "").trim();
-
+  const core = (
+    tierLabel ||
+    (brandTierSlug ? slugToLabel(brandTierSlug) : "") ||
+    ""
+  ).trim();
   if (!core) return null;
-
   const alreadyPrefixed = /^tdls\b/i.test(core);
-  const finalText = alreadyPrefixed ? core : `TDLS ${core}`;
-
-  return finalText;
+  return alreadyPrefixed ? core : `TDLS ${core}`;
 };
 
 /* -------- color utils for premium swatches -------- */
@@ -184,7 +162,6 @@ const isLightColor = (codeRaw) => {
   if (!codeRaw) return false;
   const code = String(codeRaw).trim().toLowerCase();
 
-  // Named light colors
   if (
     [
       "white",
@@ -201,23 +178,18 @@ const isLightColor = (codeRaw) => {
     return true;
   }
 
-  // Hex colors
   const hexMatch = code.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
   if (!hexMatch) return false;
 
   let hex = hexMatch[1];
-  if (hex.length === 3) {
-    hex = hex
-      .split("")
-      .map((ch) => ch + ch)
-      .join("");
-  }
+  if (hex.length === 3) hex = hex.split("").map((ch) => ch + ch).join("");
+
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
   const b = parseInt(hex.slice(4, 6), 16);
 
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.8; // very light tones
+  return luminance > 0.8;
 };
 
 /* ---- read variants (updated for product_variants) ---- */
@@ -326,8 +298,7 @@ const collectImages = (p, variants, selectedColor) => {
   if (Array.isArray(A?.gallery)) A.gallery.forEach((u) => add(u));
 
   variants.forEach((v) => {
-    if (v.image && (!selectedColor || v.color_name === selectedColor))
-      add(v.image);
+    if (v.image && (!selectedColor || v.color_name === selectedColor)) add(v.image);
   });
 
   return [...s];
@@ -358,16 +329,10 @@ const normalizeVariants = (p) => {
         v?.color ||
         null;
       const color_code =
-        v?.color_code ||
-        v?.color?.hex ||
-        v?.color?.data?.attributes?.hex ||
-        null;
+        v?.color_code || v?.color?.hex || v?.color?.data?.attributes?.hex || null;
 
       const variantImg =
-        get(v, "image.data.attributes.url") ||
-        v?.image?.url ||
-        v?.image ||
-        null;
+        get(v, "image.data.attributes.url") || v?.image?.url || v?.image || null;
 
       const variantMinPrice =
         typeof v?.price === "number"
@@ -390,15 +355,13 @@ const normalizeVariants = (p) => {
           : null;
 
       const pv_id = v?.id || v?.variantId || v?.variant_id || null;
-      const pv_prisma_id =
-        v?.prisma_id || v?.pid || v?.variant_pid || null;
+      const pv_prisma_id = v?.prisma_id || v?.pid || v?.variant_pid || null;
 
       if (sizes && sizes.length) {
         sizes.forEach((sz) => {
           if (!sz) return;
 
-          const size_name =
-            sz?.size_name || sz?.name || sz?.label || null;
+          const size_name = sz?.size_name || sz?.name || sz?.label || null;
 
           const price =
             typeof sz?.effective_price === "number"
@@ -432,11 +395,7 @@ const normalizeVariants = (p) => {
           const barcode = sz?.barcode || v?.barcode || null;
 
           const sz_prisma_id =
-            sz?.prisma_id ||
-            sz?.pid ||
-            sz?.variant_pid ||
-            pv_prisma_id ||
-            null;
+            sz?.prisma_id || sz?.pid || sz?.variant_pid || pv_prisma_id || null;
 
           flattened.push({
             color_name,
@@ -471,7 +430,6 @@ const normalizeVariants = (p) => {
 
         const sku = v?.sku || null;
         const barcode = v?.barcode || null;
-        const pv_prisma = pv_prisma_id;
 
         flattened.push({
           color_name,
@@ -487,8 +445,9 @@ const normalizeVariants = (p) => {
           size_stock_id: null,
           sku,
           barcode,
-          pid: pv_prisma,
-          prisma_id: pv_prisma,
+          pid: pv_prisma_id,
+          prisma_id: pv_prisma_id,
+
           product_code,
           base_sku,
           product_barcode,
@@ -544,6 +503,7 @@ const normalizeVariants = (p) => {
             image: imgs[0] || null,
             price: basePrice,
             stock: null,
+
             id: null,
             pv_id: null,
             size_id: null,
@@ -552,6 +512,7 @@ const normalizeVariants = (p) => {
             barcode: null,
             pid: null,
             prisma_id: null,
+
             product_code,
             base_sku,
             product_barcode,
@@ -567,6 +528,7 @@ const normalizeVariants = (p) => {
           image: imgs[0] || null,
           price: basePrice,
           stock: null,
+
           id: null,
           pv_id: null,
           size_id: null,
@@ -575,6 +537,7 @@ const normalizeVariants = (p) => {
           barcode: null,
           pid: null,
           prisma_id: null,
+
           product_code,
           base_sku,
           product_barcode,
@@ -589,6 +552,7 @@ const normalizeVariants = (p) => {
           image: imgs[0] || null,
           price: basePrice,
           stock: null,
+
           id: null,
           pv_id: null,
           size_id: null,
@@ -597,6 +561,7 @@ const normalizeVariants = (p) => {
           barcode: null,
           pid: null,
           prisma_id: null,
+
           product_code,
           base_sku,
           product_barcode,
@@ -649,9 +614,7 @@ const derivePrice = (product, variants, sel) => {
 
   let price = current?.price ?? null;
   if (price == null) {
-    const nums = variants
-      .map((v) => v.price)
-      .filter((n) => typeof n === "number");
+    const nums = variants.map((v) => v.price).filter((n) => typeof n === "number");
     if (nums.length) price = Math.min(...nums);
   }
   if (price == null && basePrice != null) price = basePrice;
@@ -700,10 +663,7 @@ const deriveStock = (product, variants, sel) => {
     )
     .filter((n) => typeof n === "number");
 
-  if (stocks.length) {
-    return stocks.reduce((sum, n) => sum + n, 0);
-  }
-
+  if (stocks.length) return stocks.reduce((sum, n) => sum + n, 0);
   return pStock;
 };
 
@@ -725,24 +685,20 @@ const pickVariantForSelection = (variants, selection) => {
 export default function QuickView({ open = true, product, onClose }) {
   const [portalEl, setPortalEl] = useState(null);
   const [idx, setIdx] = useState(0);
-  const [selection, setSelection] = useState({
-    color: null,
-    size: null,
-  });
+  const [selection, setSelection] = useState({ color: null, size: null });
   const [isMobile, setIsMobile] = useState(false);
+  const [vw, setVw] = useState(1024); // used to keep mobile sizing proportional (prevents “too big” UI)
   const [qty, setQty] = useState(1);
   const [hoveredCTA, setHoveredCTA] = useState(null);
-  const [validationError, setValidationError] = useState(null); // NEW: inline notification
+  const [validationError, setValidationError] = useState(null);
+  const [vhUnit, setVhUnit] = useState("100vh");
 
   const router = useRouter();
   const cartCtx = use_cart();
 
   const A = product?.attributes || {};
 
-  const variants = useMemo(
-    () => (product ? normalizeVariants(product) : []),
-    [product]
-  );
+  const variants = useMemo(() => (product ? normalizeVariants(product) : []), [product]);
 
   const colors = useMemo(() => {
     const keys = variants.map((v) =>
@@ -768,8 +724,8 @@ export default function QuickView({ open = true, product, onClose }) {
     variants.forEach((v) => {
       const sizeName = v.size_name;
       if (!sizeName) return;
-      if (selection.color && v.color_name && v.color_name !== selection.color)
-        return;
+      if (selection.color && v.color_name && v.color_name !== selection.color) return;
+
       const val =
         typeof v.stockAvailable === "number"
           ? v.stockAvailable
@@ -780,6 +736,7 @@ export default function QuickView({ open = true, product, onClose }) {
           : typeof v.inventory === "number"
           ? v.inventory
           : null;
+
       if (val == null) return;
       const prev = m.get(sizeName) ?? 0;
       m.set(sizeName, prev + val);
@@ -788,8 +745,7 @@ export default function QuickView({ open = true, product, onClose }) {
   }, [variants, selection.color]);
 
   const images = useMemo(
-    () =>
-      product ? collectImages(product, variants, selection.color) : [],
+    () => (product ? collectImages(product, variants, selection.color) : []),
     [product, variants, selection.color]
   );
 
@@ -801,21 +757,19 @@ export default function QuickView({ open = true, product, onClose }) {
     "BDT"
   ).toUpperCase();
 
-  const price = useMemo(
-    () => (product ? derivePrice(product, variants, selection) : null),
-    [product, variants, selection]
-  );
-  const stock = useMemo(
-    () => (product ? deriveStock(product, variants, selection) : null),
-    [product, variants, selection]
-  );
+  const price = useMemo(() => (product ? derivePrice(product, variants, selection) : null), [
+    product,
+    variants,
+    selection,
+  ]);
 
-  const name =
-    product?.name ||
-    A?.name ||
-    product?.title ||
-    A?.title ||
-    "Product";
+  const stock = useMemo(() => (product ? deriveStock(product, variants, selection) : null), [
+    product,
+    variants,
+    selection,
+  ]);
+
+  const name = product?.name || A?.name || product?.title || A?.title || "Product";
   const slug = product?.slug || A?.slug || "";
 
   const requiresColor = colors.length > 0;
@@ -827,10 +781,8 @@ export default function QuickView({ open = true, product, onClose }) {
   const productBarcode = productCodes?.barcode || null;
 
   const brandTierSlug =
-    (Array.isArray(product?.brand_tiers_slugs) &&
-      product.brand_tiers_slugs[0]) ||
-    (Array.isArray(A?.brand_tiers_slugs) &&
-      A.brand_tiers_slugs[0]) ||
+    (Array.isArray(product?.brand_tiers_slugs) && product.brand_tiers_slugs[0]) ||
+    (Array.isArray(A?.brand_tiers_slugs) && A.brand_tiers_slugs[0]) ||
     null;
 
   const tierLabelRaw =
@@ -840,36 +792,24 @@ export default function QuickView({ open = true, product, onClose }) {
     A?.tierLabel ||
     A?.pricing_tier ||
     A?.pricingTier ||
-    (brandTierSlug
-      ? brandTierSlug.replace(/[-_]+/g, " ")
-      : null) ||
+    (brandTierSlug ? brandTierSlug.replace(/[-_]+/g, " ") : null) ||
     null;
 
-  const tierLabel = tierLabelRaw
-    ? String(tierLabelRaw).trim()
-    : null;
-
+  const tierLabel = tierLabelRaw ? String(tierLabelRaw).trim() : null;
   const tierText = formatTierText(tierLabel, brandTierSlug);
 
   const primaryCategorySlug =
-    (Array.isArray(product?.categories_slugs) &&
-      product.categories_slugs[0]) ||
-    (Array.isArray(A?.categories_slugs) &&
-      A.categories_slugs[0]) ||
+    (Array.isArray(product?.categories_slugs) && product.categories_slugs[0]) ||
+    (Array.isArray(A?.categories_slugs) && A.categories_slugs[0]) ||
     null;
-  const primaryCategoryLabel = primaryCategorySlug
-    ? slugToLabel(primaryCategorySlug)
-    : null;
+  const primaryCategoryLabel = primaryCategorySlug ? slugToLabel(primaryCategorySlug) : null;
 
   const primaryAudienceSlug =
     (Array.isArray(product?.audience_categories_slugs) &&
       product.audience_categories_slugs[0]) ||
-    (Array.isArray(A?.audience_categories_slugs) &&
-      A.audience_categories_slugs[0]) ||
+    (Array.isArray(A?.audience_categories_slugs) && A.audience_categories_slugs[0]) ||
     null;
-  const primaryAudienceLabel = primaryAudienceSlug
-    ? slugToLabel(primaryAudienceSlug)
-    : null;
+  const primaryAudienceLabel = primaryAudienceSlug ? slugToLabel(primaryAudienceSlug) : null;
 
   const selectedVariant = useMemo(
     () => pickVariantForSelection(variants, selection),
@@ -877,8 +817,7 @@ export default function QuickView({ open = true, product, onClose }) {
   );
 
   const displaySku = selectedVariant?.sku || baseSku || null;
-  const displayBarcode =
-    selectedVariant?.barcode || productBarcode || null;
+  const displayBarcode = selectedVariant?.barcode || productBarcode || null;
 
   const displayVariantId =
     selectedVariant?.size_stock_id ??
@@ -900,6 +839,7 @@ export default function QuickView({ open = true, product, onClose }) {
     A?.fit ||
     A?.fit_type ||
     null;
+
   const headerGsm =
     selectedVariant?.gsm ||
     selectedVariant?.GSM ||
@@ -907,6 +847,7 @@ export default function QuickView({ open = true, product, onClose }) {
     A?.gsm ||
     A?.GSM ||
     null;
+
   const headerSizeSystem =
     selectedVariant?.size_system ||
     selectedVariant?.sizeSystem ||
@@ -926,9 +867,22 @@ export default function QuickView({ open = true, product, onClose }) {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
-    const onResize = () => setIsMobile(window.innerWidth < 768);
+    const onResize = () => {
+      const w = window.innerWidth || 1024;
+      setVw(w);
+      setIsMobile(w < 768);
+    };
     onResize();
     window.addEventListener("resize", onResize);
+
+    // Prefer dvh if supported (better on mobile browser UI)
+    try {
+      if (typeof window !== "undefined" && window.CSS?.supports?.("height", "100dvh")) {
+        setVhUnit("100dvh");
+      }
+    } catch {
+      // ignore
+    }
 
     return () => {
       window.removeEventListener("resize", onResize);
@@ -961,9 +915,7 @@ export default function QuickView({ open = true, product, onClose }) {
       let color = prev.color;
       let size = prev.size;
 
-      if (!color && colors.length === 1) {
-        color = colors[0].name;
-      }
+      if (!color && colors.length === 1) color = colors[0].name;
 
       const sizePool = variants
         .filter((v) => !color || v.color_name === color)
@@ -971,9 +923,7 @@ export default function QuickView({ open = true, product, onClose }) {
         .filter(Boolean);
       const uniqueSizes = uniq(sizePool);
 
-      if (!size && uniqueSizes.length === 1) {
-        size = uniqueSizes[0];
-      }
+      if (!size && uniqueSizes.length === 1) size = uniqueSizes[0];
 
       if (color === prev.color && size === prev.size) return prev;
       return { color, size };
@@ -1003,7 +953,6 @@ export default function QuickView({ open = true, product, onClose }) {
   );
 
   /* ---------------- selection + stock guards ---------------- */
-
   const ensureSelection = () => {
     if (requiresColor && !selection.color && requiresSize && !selection.size) {
       setValidationError("Please select both color and size to continue.");
@@ -1055,36 +1004,16 @@ export default function QuickView({ open = true, product, onClose }) {
       chosen?.material ||
       null;
 
-    const gsm =
-      product?.gsm ||
-      A?.gsm ||
-      A?.GSM ||
-      chosen?.gsm ||
-      chosen?.GSM ||
-      null;
+    const gsm = product?.gsm || A?.gsm || A?.GSM || chosen?.gsm || chosen?.GSM || null;
 
-    const fit =
-      product?.fit ||
-      A?.fit ||
-      A?.fit_type ||
-      chosen?.fit ||
-      null;
+    const fit = product?.fit || A?.fit || A?.fit_type || chosen?.fit || null;
 
-    const sizeStockId =
-      chosen?.size_stock_id ||
-      chosen?.size_id ||
-      chosen?.id ||
-      null;
+    const sizeStockId = chosen?.size_stock_id || chosen?.size_id || chosen?.id || null;
 
-    const variantPrismaId =
-      chosen?.prisma_id ||
-      chosen?.pid ||
-      chosen?.variant_pid ||
-      null;
+    const variantPrismaId = chosen?.prisma_id || chosen?.pid || chosen?.variant_pid || null;
 
     const sku = chosen?.sku || baseSku || null;
-    const barcode =
-      chosen?.barcode || productBarcode || null;
+    const barcode = chosen?.barcode || productBarcode || null;
 
     const pidExternal =
       productCode ||
@@ -1094,14 +1023,9 @@ export default function QuickView({ open = true, product, onClose }) {
       (product?.id != null ? String(product.id) : null);
 
     const vidExternal =
-      variantPrismaId ||
-      sku ||
-      (sizeStockId != null ? String(sizeStockId) : null);
+      variantPrismaId || sku || (sizeStockId != null ? String(sizeStockId) : null);
 
-    const maxAvailable =
-      typeof stock === "number" && stock > 0
-        ? stock
-        : null;
+    const maxAvailable = typeof stock === "number" && stock > 0 ? stock : null;
 
     const metadata = {
       productCode,
@@ -1117,14 +1041,8 @@ export default function QuickView({ open = true, product, onClose }) {
       gsm,
       fit,
 
-      size:
-        selection.size ||
-        chosen.size_name ||
-        null,
-      color:
-        selection.color ||
-        chosen.color_name ||
-        null,
+      size: selection.size || chosen.size_name || null,
+      color: selection.color || chosen.color_name || null,
       selectedSize: selection.size || null,
       selectedColor: selection.color || null,
 
@@ -1140,11 +1058,7 @@ export default function QuickView({ open = true, product, onClose }) {
     };
 
     const line = {
-      productId:
-        product.id ||
-        A?.id ||
-        slug ||
-        name,
+      productId: product.id || A?.id || slug || name,
       slug,
       name,
       image: images[0],
@@ -1177,13 +1091,9 @@ export default function QuickView({ open = true, product, onClose }) {
       metadata,
     };
 
-    if (cartCtx?.add) {
-      cartCtx.add(line);
-    } else if (cartCtx?.addItem) {
-      cartCtx.addItem(line);
-    } else if (cartCtx?.dispatch) {
-      cartCtx.dispatch({ type: "ADD", payload: line });
-    }
+    if (cartCtx?.add) cartCtx.add(line);
+    else if (cartCtx?.addItem) cartCtx.addItem(line);
+    else if (cartCtx?.dispatch) cartCtx.dispatch({ type: "ADD", payload: line });
 
     setValidationError(null);
     return line;
@@ -1219,32 +1129,13 @@ export default function QuickView({ open = true, product, onClose }) {
       chosen?.material ||
       null;
 
-    const gsm =
-      product?.gsm ||
-      A?.gsm ||
-      A?.GSM ||
-      chosen?.gsm ||
-      chosen?.GSM ||
-      null;
+    const gsm = product?.gsm || A?.gsm || A?.GSM || chosen?.gsm || chosen?.GSM || null;
 
-    const fit =
-      product?.fit ||
-      A?.fit ||
-      A?.fit_type ||
-      chosen?.fit ||
-      null;
+    const fit = product?.fit || A?.fit || A?.fit_type || chosen?.fit || null;
 
-    const sizeStockId =
-      chosen?.size_stock_id ||
-      chosen?.size_id ||
-      chosen?.id ||
-      null;
+    const sizeStockId = chosen?.size_stock_id || chosen?.size_id || chosen?.id || null;
 
-    const variantPrismaId =
-      chosen?.prisma_id ||
-      chosen?.pid ||
-      chosen?.variant_pid ||
-      null;
+    const variantPrismaId = chosen?.prisma_id || chosen?.pid || chosen?.variant_pid || null;
 
     if (!sizeStockId && !variantPrismaId) {
       setValidationError(
@@ -1254,8 +1145,7 @@ export default function QuickView({ open = true, product, onClose }) {
     }
 
     const sku = chosen?.sku || baseSku || null;
-    const barcode =
-      chosen?.barcode || productBarcode || null;
+    const barcode = chosen?.barcode || productBarcode || null;
 
     const pidExternal =
       productCode ||
@@ -1265,14 +1155,9 @@ export default function QuickView({ open = true, product, onClose }) {
       (product?.id != null ? String(product.id) : null);
 
     const vidExternal =
-      variantPrismaId ||
-      sku ||
-      (sizeStockId != null ? String(sizeStockId) : null);
+      variantPrismaId || sku || (sizeStockId != null ? String(sizeStockId) : null);
 
-    const maxAvailable =
-      typeof stock === "number" && stock > 0
-        ? stock
-        : null;
+    const maxAvailable = typeof stock === "number" && stock > 0 ? stock : null;
 
     const metadata = {
       productCode,
@@ -1284,14 +1169,8 @@ export default function QuickView({ open = true, product, onClose }) {
       variantId: vidExternal,
       variantPrismaId: variantPrismaId || null,
       sizeStockId,
-      size:
-        selection.size ||
-        chosen.size_name ||
-        null,
-      color:
-        selection.color ||
-        chosen.color_name ||
-        null,
+      size: selection.size || chosen.size_name || null,
+      color: selection.color || chosen.color_name || null,
       selectedSize: selection.size || null,
       selectedColor: selection.color || null,
       fabric,
@@ -1303,11 +1182,7 @@ export default function QuickView({ open = true, product, onClose }) {
     };
 
     const payload = {
-      productId:
-        product.id ||
-        A?.id ||
-        slug ||
-        name,
+      productId: product.id || A?.id || slug || name,
       slug,
       name,
       currency: currencyCode,
@@ -1327,13 +1202,9 @@ export default function QuickView({ open = true, product, onClose }) {
       rawVariantId: sizeStockId,
       strapiSizeId: sizeStockId ? String(sizeStockId) : null,
 
-      variantPrismaId: variantPrismaId
-        ? String(variantPrismaId)
-        : null,
+      variantPrismaId: variantPrismaId ? String(variantPrismaId) : null,
 
-      productVariantStrapiId: chosen?.pv_id
-        ? String(chosen.pv_id)
-        : null,
+      productVariantStrapiId: chosen?.pv_id ? String(chosen.pv_id) : null,
 
       sku,
       barcode,
@@ -1348,25 +1219,21 @@ export default function QuickView({ open = true, product, onClose }) {
     try {
       const r = await fetch("/api/buy-now", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
         cache: "no-store",
       });
+
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j?.ok) {
         console.error("Buy Now failed:", j);
         setValidationError(
-          j?.error ||
-            "Buy Now is temporarily unavailable. Please try Add to Cart."
+          j?.error || "Buy Now is temporarily unavailable. Please try Add to Cart."
         );
         return;
       }
 
-      // IMPORTANT: Buy Now must NOT open the cart drawer.
-      // Your CartProvider opens it via window.dispatchEvent("cart:open-panel") on add().
-      // We capture and cancel that event ONLY for this Buy Now action.
+      // Block cart drawer open for Buy Now only
       let removeBlocker = null;
       if (typeof window !== "undefined") {
         const block = (ev) => {
@@ -1391,7 +1258,6 @@ export default function QuickView({ open = true, product, onClose }) {
       try {
         const line = addToCartLine();
         if (!line) {
-          // addToCartLine already sets the correct validation message.
           if (removeBlocker) removeBlocker();
           return;
         }
@@ -1404,9 +1270,7 @@ export default function QuickView({ open = true, product, onClose }) {
       router.push("/cart");
     } catch (e) {
       console.error(e);
-      setValidationError(
-        "Network error while adding this item to cart. Please try again."
-      );
+      setValidationError("Network error while adding this item to cart. Please try again.");
     }
   }, [
     selection,
@@ -1430,12 +1294,17 @@ export default function QuickView({ open = true, product, onClose }) {
     requiresSize,
   ]);
 
-  if (!open || !product || !portalEl) {
-    return null;
-  }
+  if (!open || !product || !portalEl) return null;
 
-  /* ---------- styles ---------- */
+  /* ---------- styles (mobile-safe; desktop unchanged) ---------- */
   const sidePad = isMobile ? 8 : 18;
+  const maxH = `calc(${vhUnit} - ${sidePad * 2}px)`;
+
+  // Mobile “too big” fix: keep typography/controls proportional to actual viewport width.
+  // Desktop stays EXACT as before.
+  const mScale = isMobile ? Math.max(0.84, Math.min(0.98, vw / 420)) : 1;
+  const m = (px) => (isMobile ? Math.round(px * mScale) : px);
+
   const S = {
     overlay: {
       position: "fixed",
@@ -1443,52 +1312,76 @@ export default function QuickView({ open = true, product, onClose }) {
       zIndex: 2147483647,
       background: "rgba(8,14,34,.55)",
       backdropFilter: "blur(6px)",
-      padding: sidePad,
       boxSizing: "border-box",
       display: "flex",
       justifyContent: "center",
-      alignItems: "center",
+
+      // Mobile: allow scroll if height is tight (landscape / small devices)
+      alignItems: isMobile ? "flex-start" : "center",
       overflowY: "auto",
+      overscrollBehavior: "contain",
+
+      // Safe-area + padding (never overflow screen edges)
+      paddingTop: `calc(${sidePad}px + env(safe-area-inset-top))`,
+      paddingRight: `calc(${sidePad}px + env(safe-area-inset-right))`,
+      paddingBottom: `calc(${sidePad}px + env(safe-area-inset-bottom))`,
+      paddingLeft: `calc(${sidePad}px + env(safe-area-inset-left))`,
     },
+
     modal: {
       width: "100%",
-      maxWidth: 1100,
-      maxHeight: `calc(100vh - ${sidePad * 2}px)`,
+      maxWidth: 1100, // desktop unchanged
+      maxHeight: maxH,
       background: "#fff",
       borderRadius: 18,
-      overflow: "hidden",
+      overflow: "hidden", // hard stop: nothing escapes
       boxShadow: "0 28px 90px rgba(8,21,64,.40)",
       display: "flex",
       flexDirection: isMobile ? "column" : "row",
     },
+
     left: {
       flex: isMobile ? "0 0 auto" : "0 0 58%",
-      background:
-        "radial-gradient(circle at top left,#eef2ff,#f9fafb)",
+      background: "radial-gradient(circle at top left,#eef2ff,#f9fafb)",
       borderBottom: isMobile ? "1px solid #e6eaf6" : "none",
+
+      display: "flex",
+      flexDirection: "column",
+      minWidth: 0,
     },
+
     right: {
       flex: "1 1 auto",
       display: "flex",
       flexDirection: "column",
       minWidth: 0,
-      padding: isMobile ? 14 : 24,
-      gap: 14,
-      maxHeight: isMobile ? "auto" : `calc(100vh - ${sidePad * 2}px)`,
-      overflowY: isMobile ? "visible" : "auto",
+      padding: isMobile ? m(14) : 24,
+      gap: isMobile ? m(12) : 14,
+
+      minHeight: 0,
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
     },
+
     heroWrap: {
       position: "relative",
       width: "100%",
-      aspectRatio: isMobile ? "1 / 1" : "4 / 5",
       overflow: "hidden",
+      ...(isMobile
+        ? {
+            height: `clamp(${m(220)}px, 44vh, ${m(380)}px)`,
+          }
+        : {
+            aspectRatio: "4 / 5",
+          }),
     },
+
     navBtn: {
       position: "absolute",
       top: "50%",
       transform: "translateY(-50%)",
-      height: 40,
-      width: 40,
+      height: isMobile ? m(34) : 40,
+      width: isMobile ? m(34) : 40,
       borderRadius: "50%",
       background: "rgba(255,255,255,.96)",
       border: "1px solid #d8deef",
@@ -1496,19 +1389,28 @@ export default function QuickView({ open = true, product, onClose }) {
       display: "grid",
       placeItems: "center",
       cursor: "pointer",
-      fontSize: 24,
+      fontSize: isMobile ? m(20) : 24,
       lineHeight: 1,
+      zIndex: 2,
+      userSelect: "none",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     },
+
     thumbBar: {
       display: "flex",
-      gap: 10,
-      padding: isMobile ? 8 : 12,
+      gap: isMobile ? m(8) : 10,
+      padding: isMobile ? m(8) : 12,
       overflowX: "auto",
+      overflowY: "hidden",
       WebkitOverflowScrolling: "touch",
+      maxWidth: "100%",
+      boxSizing: "border-box",
     },
+
     thumb: (active) => ({
-      height: 58,
-      width: 58,
+      height: isMobile ? m(50) : 58,
+      width: isMobile ? m(50) : 58,
       borderRadius: 12,
       overflow: "hidden",
       background: "#fff",
@@ -1516,82 +1418,104 @@ export default function QuickView({ open = true, product, onClose }) {
       cursor: "pointer",
       border: active ? "2px solid #0f2147" : "1px solid #d9def2",
       flex: "0 0 auto",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     }),
+
     headerRow: {
       display: "flex",
       justifyContent: "space-between",
       alignItems: "flex-start",
       gap: 12,
     },
+
     titleColumn: {
       display: "flex",
       flexDirection: "column",
-      gap: 6,
+      gap: isMobile ? m(4) : 6,
       flex: 1,
       minWidth: 0,
     },
+
     title: {
       margin: 0,
-      fontSize: 22,
+      fontSize: isMobile ? `clamp(${m(16)}px, 4.6vw, ${m(19)}px)` : 22,
       lineHeight: 1.25,
       color: "#0f2147",
       fontWeight: 900,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
     },
+
     headerMetaRow: {
       display: "flex",
       flexWrap: "wrap",
-      gap: 10,
+      gap: isMobile ? m(8) : 10,
       alignItems: "center",
+      minWidth: 0,
     },
-    // Elegant tier text
+
     tierText: {
-      fontSize: 14,
+      fontSize: isMobile ? m(12) : 14,
       fontWeight: 700,
       letterSpacing: ".16em",
       textTransform: "uppercase",
       color: "#111827",
-      fontFamily:
-        '"Cormorant Garamond","Playfair Display","Times New Roman",serif',
+      fontFamily: '"Cormorant Garamond","Playfair Display","Times New Roman",serif',
       padding: "2px 0",
       whiteSpace: "nowrap",
+      maxWidth: "100%",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
     },
+
     subtleMeta: {
-      fontSize: 11,
+      fontSize: isMobile ? m(10) : 11,
       textTransform: "uppercase",
       letterSpacing: ".14em",
       color: "#6b7280",
       fontWeight: 600,
+      whiteSpace: "nowrap",
     },
+
     xBtn: {
-      height: 36,
-      width: 36,
+      height: isMobile ? m(36) : 40,
+      width: isMobile ? m(36) : 40,
       borderRadius: "50%",
       background: "#f9fafb",
       borderWidth: 1,
       borderStyle: "solid",
       borderColor: "#d7dcef",
       cursor: "pointer",
-      fontSize: 22,
+      fontSize: isMobile ? m(18) : 22,
       lineHeight: 1,
       display: "grid",
       placeItems: "center",
       transition:
         "background .18s ease-out, transform .18s ease-out, box-shadow .18s ease-out, border-color .18s ease-out",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
+      flex: "0 0 auto",
     },
+
     priceRow: {
       display: "flex",
       alignItems: "center",
-      gap: 10,
+      gap: isMobile ? m(8) : 10,
+      flexWrap: "wrap",
     },
+
     price: {
       color: "#0f2147",
       fontWeight: 900,
-      fontSize: 18,
+      fontSize: isMobile ? m(16) : 18,
+      whiteSpace: "nowrap",
     },
+
     badge: (ok) => ({
-      fontSize: 12,
+      fontSize: isMobile ? m(10) : 12,
       fontWeight: 800,
-      padding: "4px 9px",
+      padding: isMobile ? `${m(3)}px ${m(8)}px` : "4px 9px",
       borderRadius: 999,
       color: ok ? "#065f46" : "#b91c1c",
       background: ok ? "#ecfdf5" : "#fee2e2",
@@ -1600,20 +1524,22 @@ export default function QuickView({ open = true, product, onClose }) {
       borderColor: ok ? "#a7f3d0" : "#fecaca",
       textTransform: "uppercase",
       letterSpacing: ".08em",
+      whiteSpace: "nowrap",
     }),
+
     sectionLabel: {
-      fontSize: 12,
+      fontSize: isMobile ? m(11) : 12,
       fontWeight: 700,
       color: "#6b7280",
-      marginBottom: 6,
+      marginBottom: isMobile ? m(5) : 6,
       textTransform: "uppercase",
       letterSpacing: ".12em",
     },
-    // NEW: louder swatch styles
+
     swatchButton: (active) => ({
       position: "relative",
-      height: 34,
-      width: 34,
+      height: isMobile ? m(30) : 34,
+      width: isMobile ? m(30) : 34,
       borderRadius: "999px",
       padding: 0,
       border: "none",
@@ -1624,73 +1550,72 @@ export default function QuickView({ open = true, product, onClose }) {
       justifyContent: "center",
       transition:
         "transform .16s ease-out, box-shadow .16s ease-out, background .16s ease-out",
-      transform: active
-        ? "translateY(-2px) scale(1.05)"
-        : "translateY(0) scale(1)",
+      transform: active ? "translateY(-2px) scale(1.05)" : "translateY(0) scale(1)",
       boxShadow: active
         ? "0 6px 14px rgba(15,33,71,0.25)"
         : "0 1px 3px rgba(15,33,71,0.12)",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     }),
+
     swatchFrame: (active) => ({
-      height: 24,
-      width: 24,
+      height: isMobile ? m(22) : 24,
+      width: isMobile ? m(22) : 24,
       borderRadius: "999px",
       border: active ? "2px solid #0f2147" : "1px solid #9ca3af",
       background: "#ffffff",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      boxShadow: active
-        ? "0 0 0 2px rgba(15,33,71,0.3)"
-        : "none",
+      boxShadow: active ? "0 0 0 2px rgba(15,33,71,0.3)" : "none",
     }),
+
     swatchDot: (code, isLight) => ({
-      height: 16,
-      width: 16,
+      height: isMobile ? m(14) : 16,
+      width: isMobile ? m(14) : 16,
       borderRadius: "999px",
       background: code || "#e5e7eb",
       border: isLight
         ? "1px solid rgba(15,23,42,0.4)"
         : "1px solid rgba(15,23,42,0.18)",
     }),
+
     chip: (active, danger = false) => ({
-      height: 36,
-      minWidth: 44,
-      padding: "0 12px",
+      height: isMobile ? m(32) : 36,
+      minWidth: isMobile ? m(40) : 44,
+      padding: isMobile ? `0 ${m(10)}px` : "0 12px",
       borderRadius: 10,
       fontWeight: 800,
+      fontSize: isMobile ? m(12) : 14,
       cursor: danger ? "not-allowed" : "pointer",
       border: danger
         ? "2px solid #b91c1c"
         : active
         ? "2px solid #0f2147"
         : "1px solid #cfd6e9",
-      color: danger
-        ? "#b91c1c"
-        : active
-        ? "#fff"
-        : "#1f2a59",
-      background: danger
-        ? "rgba(248,113,113,.08)"
-        : active
-        ? "#0f2147"
-        : "#fff",
+      color: danger ? "#b91c1c" : active ? "#fff" : "#1f2a59",
+      background: danger ? "rgba(248,113,113,.08)" : active ? "#0f2147" : "#fff",
       opacity: danger ? 0.7 : 1,
       transition:
         "transform .18s ease-out, box-shadow .18s ease-out, background .18s ease-out, border-color .18s ease-out, color .18s ease-out",
       transform: "translateY(0)",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     }),
+
     ctas: {
       marginTop: "auto",
       display: "flex",
-      gap: 12,
+      gap: isMobile ? m(10) : 12,
       flexWrap: "wrap",
+      ...(isMobile ? { alignItems: "stretch" } : null),
     },
+
     primary: {
-      padding: "12px 16px",
+      padding: isMobile ? `${m(10)}px ${m(12)}px` : "12px 16px",
       borderRadius: 12,
       fontWeight: 900,
-      fontSize: 15,
+      fontSize: isMobile ? m(13) : 15,
       lineHeight: 1.1,
       background: "#0f2147",
       color: "#fff",
@@ -1699,23 +1624,30 @@ export default function QuickView({ open = true, product, onClose }) {
       borderColor: "#0f2147",
       textDecoration: "none",
       cursor: "pointer",
-      minWidth: 170,
+      minWidth: isMobile ? 0 : 170,
       textAlign: "center",
       transition:
         "transform .18s ease-out, box-shadow .18s ease-out, background .18s ease-out, border-color .18s ease-out, color .18s ease-out",
       transform: "translateY(0)",
+      flex: isMobile ? "1 1 calc(50% - 6px)" : "0 0 auto",
+      maxWidth: "100%",
+      boxSizing: "border-box",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     },
+
     primaryHover: {
       transform: "translateY(-1px)",
       boxShadow: "0 14px 32px rgba(15,23,42,.25)",
       background: "linear-gradient(135deg,#0f2147,#111827)",
       borderColor: "#020617",
     },
+
     ghost: {
-      padding: "12px 16px",
+      padding: isMobile ? `${m(10)}px ${m(12)}px` : "12px 16px",
       borderRadius: 12,
       fontWeight: 900,
-      fontSize: 15,
+      fontSize: isMobile ? m(13) : 15,
       lineHeight: 1.1,
       background: "#fff",
       color: "#0f2147",
@@ -1723,12 +1655,18 @@ export default function QuickView({ open = true, product, onClose }) {
       borderStyle: "solid",
       borderColor: "#cfd6ef",
       cursor: "pointer",
-      minWidth: 170,
+      minWidth: isMobile ? 0 : 170,
       textAlign: "center",
       transition:
         "transform .18s ease-out, box-shadow .18s ease-out, background .18s ease-out, border-color .18s ease-out, color .18s ease-out",
       transform: "translateY(0)",
+      flex: isMobile ? "1 1 calc(50% - 6px)" : "0 0 auto",
+      maxWidth: "100%",
+      boxSizing: "border-box",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     },
+
     ghostHover: {
       transform: "translateY(-1px)",
       boxShadow: "0 10px 24px rgba(15,23,42,.18)",
@@ -1736,47 +1674,54 @@ export default function QuickView({ open = true, product, onClose }) {
       borderColor: "#0f2147",
       color: "#0f2147",
     },
+
     metaBox: {
       marginTop: 4,
-      padding: "8px 10px",
+      padding: isMobile ? `${m(7)}px ${m(9)}px` : "8px 10px",
       background: "#f9fafb",
       borderRadius: 10,
       border: "1px dashed #e5e7eb",
-      fontSize: 11,
+      fontSize: isMobile ? m(10) : 11,
       color: "#4b5563",
       display: "grid",
       gridTemplateColumns: "auto 1fr",
       rowGap: 2,
       columnGap: 8,
+      minWidth: 0,
     },
+
     metaLabel: {
       fontWeight: 600,
       whiteSpace: "nowrap",
     },
+
     metaValue: {
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
+      minWidth: 0,
     },
+
     validationBox: {
-      marginTop: 10,
+      marginTop: isMobile ? m(8) : 10,
       marginBottom: 4,
-      padding: "10px 12px",
+      padding: isMobile ? `${m(9)}px ${m(10)}px` : "10px 12px",
       borderRadius: 12,
       border: "1px solid #fecaca",
       background: "#fef2f2",
       color: "#b91c1c",
-      fontSize: 12,
+      fontSize: isMobile ? m(11) : 12,
       fontWeight: 600,
       textAlign: "center",
       display: "flex",
       flexDirection: "column",
       gap: 4,
     },
+
     validationTitle: {
-      fontSize: 11,
+      fontSize: isMobile ? m(10) : 11,
       textTransform: "uppercase",
       letterSpacing: ".14em",
       color: "#b91c1c",
@@ -1792,11 +1737,14 @@ export default function QuickView({ open = true, product, onClose }) {
       aria-modal="true"
       aria-label="Quick view"
     >
+      {/* WebKit scrollbar hide for thumbbar (inline styles can't do pseudo-elements) */}
+      <style>{`
+        #qv-root .qvThumbBar { scrollbar-width: none; -ms-overflow-style: none; }
+        #qv-root .qvThumbBar::-webkit-scrollbar { width: 0; height: 0; }
+      `}</style>
+
       {/* MAIN QUICK VIEW CARD */}
-      <div
-        style={S.modal}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div style={S.modal} onClick={(e) => e.stopPropagation()}>
         {/* LEFT: gallery */}
         <div style={S.left}>
           <div
@@ -1813,40 +1761,27 @@ export default function QuickView({ open = true, product, onClose }) {
               <img
                 src={images[idx]}
                 alt={name}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                }}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
             ) : (
-              <div
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  background: "#eef2ff",
-                }}
-              />
+              <div style={{ width: "100%", height: "100%", background: "#eef2ff" }} />
             )}
+
             {images.length > 1 && (
               <>
                 <button
                   type="button"
                   aria-label="Previous image"
-                  onClick={() =>
-                    setIdx((i) => (i - 1 + images.length) % images.length)
-                  }
-                  style={{ ...S.navBtn, left: 12 }}
+                  onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)}
+                  style={{ ...S.navBtn, left: isMobile ? 10 : 12 }}
                 >
                   ‹
                 </button>
                 <button
                   type="button"
                   aria-label="Next image"
-                  onClick={() =>
-                    setIdx((i) => (i + 1) % images.length)
-                  }
-                  style={{ ...S.navBtn, right: 12 }}
+                  onClick={() => setIdx((i) => (i + 1) % images.length)}
+                  style={{ ...S.navBtn, right: isMobile ? 10 : 12 }}
                 >
                   ›
                 </button>
@@ -1855,7 +1790,7 @@ export default function QuickView({ open = true, product, onClose }) {
           </div>
 
           {images.length > 1 && (
-            <div style={S.thumbBar}>
+            <div className="qvThumbBar" style={S.thumbBar}>
               {images.map((t, ti) => (
                 <button
                   key={t + ti}
@@ -1867,11 +1802,7 @@ export default function QuickView({ open = true, product, onClose }) {
                   <img
                     src={t}
                     alt=""
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                    }}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
                 </button>
               ))}
@@ -1885,45 +1816,29 @@ export default function QuickView({ open = true, product, onClose }) {
             <div style={S.titleColumn}>
               <h3 style={S.title}>{name}</h3>
               <div style={S.headerMetaRow}>
-                {tierLabel && tierText && (
-                  <span style={S.tierText}>{tierText}</span>
-                )}
-                {headerFit && (
-                  <span style={S.subtleMeta}>{headerFit}</span>
-                )}
-                {headerGsm && (
-                  <span style={S.subtleMeta}>{headerGsm} GSM</span>
-                )}
-                {headerSizeSystem && (
-                  <span style={S.subtleMeta}>
-                    {headerSizeSystem}
-                  </span>
-                )}
-                {primaryCategoryLabel && (
-                  <span style={S.subtleMeta}>
-                    {primaryCategoryLabel}
-                  </span>
-                )}
-                {primaryAudienceLabel && (
-                  <span style={S.subtleMeta}>
-                    {primaryAudienceLabel}
-                  </span>
-                )}
+                {tierLabel && tierText && <span style={S.tierText}>{tierText}</span>}
+                {headerFit && <span style={S.subtleMeta}>{headerFit}</span>}
+                {headerGsm && <span style={S.subtleMeta}>{headerGsm} GSM</span>}
+                {headerSizeSystem && <span style={S.subtleMeta}>{headerSizeSystem}</span>}
+                {primaryCategoryLabel && <span style={S.subtleMeta}>{primaryCategoryLabel}</span>}
+                {primaryAudienceLabel && <span style={S.subtleMeta}>{primaryAudienceLabel}</span>}
               </div>
             </div>
+
             <button
               type="button"
               aria-label="Close"
               onClick={onClose}
               style={S.xBtn}
               onMouseEnter={(e) => {
+                if (isMobile) return; // no hover inflation on mobile
                 e.currentTarget.style.transform = "translateY(-1px)";
-                e.currentTarget.style.boxShadow =
-                  "0 10px 26px rgba(15,23,42,.18)";
+                e.currentTarget.style.boxShadow = "0 10px 26px rgba(15,23,42,.18)";
                 e.currentTarget.style.background = "#ffffff";
                 e.currentTarget.style.borderColor = "#0f2147";
               }}
               onMouseLeave={(e) => {
+                if (isMobile) return;
                 e.currentTarget.style.transform = "translateY(0)";
                 e.currentTarget.style.boxShadow = "none";
                 e.currentTarget.style.background = "#f9fafb";
@@ -1935,9 +1850,7 @@ export default function QuickView({ open = true, product, onClose }) {
           </div>
 
           <div style={S.priceRow}>
-            <span style={S.price}>
-              {money(currencyCode, price)}
-            </span>
+            <span style={S.price}>{money(currencyCode, price)}</span>
             {stock != null && (
               <span style={S.badge(stock > 0)}>
                 {stock > 0 ? `In stock (${stock})` : "Out of stock"}
@@ -2004,13 +1917,7 @@ export default function QuickView({ open = true, product, onClose }) {
           {!!colors.length && (
             <div>
               <div style={S.sectionLabel}>Color</div>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  flexWrap: "wrap",
-                }}
-              >
+              <div style={{ display: "flex", gap: isMobile ? m(8) : 10, flexWrap: "wrap" }}>
                 {colors.map((c) => {
                   const active = selection.color === c.name;
                   const code = c.code || c.name;
@@ -2021,10 +1928,7 @@ export default function QuickView({ open = true, product, onClose }) {
                       type="button"
                       title={c.name}
                       onClick={() => {
-                        setSelection({
-                          color: c.name,
-                          size: null,
-                        });
+                        setSelection({ color: c.name, size: null });
                         setIdx(0);
                         setValidationError(null);
                       }}
@@ -2040,12 +1944,12 @@ export default function QuickView({ open = true, product, onClose }) {
                             position: "absolute",
                             bottom: -2,
                             right: -2,
-                            height: 16,
-                            width: 16,
+                            height: isMobile ? m(14) : 16,
+                            width: isMobile ? m(14) : 16,
                             borderRadius: "999px",
                             background: "#0f2147",
                             color: "#ffffff",
-                            fontSize: 10,
+                            fontSize: isMobile ? m(9) : 10,
                             fontWeight: 800,
                             display: "flex",
                             alignItems: "center",
@@ -2063,8 +1967,8 @@ export default function QuickView({ open = true, product, onClose }) {
               {selection.color && (
                 <div
                   style={{
-                    marginTop: 6,
-                    fontSize: 12,
+                    marginTop: isMobile ? m(6) : 6,
+                    fontSize: isMobile ? m(11) : 12,
                     fontWeight: 600,
                     color: "#0f2147",
                   }}
@@ -2079,36 +1983,23 @@ export default function QuickView({ open = true, product, onClose }) {
           {!!sizes.length && (
             <div>
               <div style={S.sectionLabel}>Size</div>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  flexWrap: "wrap",
-                }}
-              >
+              <div style={{ display: "flex", gap: isMobile ? m(8) : 10, flexWrap: "wrap" }}>
                 {sizes.map((s) => {
                   const active = selection.size === s;
                   const sizeStock = sizeStockMap.get(s);
-                  const isOOS =
-                    sizeStock != null && sizeStock <= 0;
+                  const isOOS = sizeStock != null && sizeStock <= 0;
+
                   return (
                     <button
                       key={s}
                       type="button"
                       onClick={() => {
                         if (isOOS) return;
-                        setSelection((sel) => ({
-                          ...sel,
-                          size: s,
-                        }));
+                        setSelection((sel) => ({ ...sel, size: s }));
                         setValidationError(null);
                       }}
                       style={S.chip(active, isOOS)}
-                      title={
-                        isOOS
-                          ? `${s} - Out of stock`
-                          : s
-                      }
+                      title={isOOS ? `${s} - Out of stock` : s}
                       disabled={isOOS}
                     >
                       {s}
@@ -2123,18 +2014,9 @@ export default function QuickView({ open = true, product, onClose }) {
           {/* Qty */}
           <div>
             <div style={S.sectionLabel}>
-              Quantity{" "}
-              {stock != null && stock > 0
-                ? `(Available: ${stock})`
-                : ""}
+              Quantity {stock != null && stock > 0 ? `(Available: ${stock})` : ""}
             </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? m(8) : 10 }}>
               <button
                 type="button"
                 onClick={() => {
@@ -2143,42 +2025,42 @@ export default function QuickView({ open = true, product, onClose }) {
                 }}
                 style={{
                   ...S.chip(false, false),
-                  width: 38,
-                  minWidth: 38,
-                  height: 38,
+                  width: isMobile ? m(34) : 38,
+                  minWidth: isMobile ? m(34) : 38,
+                  height: isMobile ? m(34) : 38,
+                  padding: 0,
                 }}
               >
                 −
               </button>
+
               <div
                 style={{
-                  minWidth: 44,
+                  minWidth: isMobile ? m(40) : 44,
                   textAlign: "center",
                   fontWeight: 900,
+                  fontSize: isMobile ? m(13) : 14,
                 }}
               >
                 {qty}
               </div>
+
               <button
                 type="button"
                 onClick={() => {
                   setQty((q) => {
                     const next = q + 1;
-                    if (stock != null) {
-                      return Math.min(
-                        next,
-                        Math.max(1, stock)
-                      );
-                    }
+                    if (stock != null) return Math.min(next, Math.max(1, stock));
                     return next;
                   });
                   setValidationError(null);
                 }}
                 style={{
                   ...S.chip(false, false),
-                  width: 38,
-                  minWidth: 38,
-                  height: 38,
+                  width: isMobile ? m(34) : 38,
+                  minWidth: isMobile ? m(34) : 38,
+                  height: isMobile ? m(34) : 38,
+                  padding: 0,
                 }}
               >
                 +
@@ -2186,12 +2068,10 @@ export default function QuickView({ open = true, product, onClose }) {
             </div>
           </div>
 
-          {/* Inline validation notification (centered in modal body) */}
+          {/* Inline validation notification */}
           {validationError && (
             <div style={S.validationBox}>
-              <div style={S.validationTitle}>
-                Selection Needed
-              </div>
+              <div style={S.validationTitle}>Selection Needed</div>
               <div>{validationError}</div>
             </div>
           )}
@@ -2205,12 +2085,10 @@ export default function QuickView({ open = true, product, onClose }) {
                 ...S.primary,
                 background: "#111827",
                 borderColor: "#111827",
-                ...(hoveredCTA === "add"
-                  ? S.primaryHover
-                  : null),
+                ...(hoveredCTA === "add" ? S.primaryHover : null),
               }}
               disabled={stock != null && stock <= 0}
-              onMouseEnter={() => setHoveredCTA("add")}
+              onMouseEnter={() => !isMobile && setHoveredCTA("add")}
               onMouseLeave={() => setHoveredCTA(null)}
             >
               Add to Cart
@@ -2219,14 +2097,9 @@ export default function QuickView({ open = true, product, onClose }) {
             <button
               type="button"
               onClick={buyNowServer}
-              style={{
-                ...S.primary,
-                ...(hoveredCTA === "buy"
-                  ? S.primaryHover
-                  : null),
-              }}
+              style={{ ...S.primary, ...(hoveredCTA === "buy" ? S.primaryHover : null) }}
               disabled={stock != null && stock <= 0}
-              onMouseEnter={() => setHoveredCTA("buy")}
+              onMouseEnter={() => !isMobile && setHoveredCTA("buy")}
               onMouseLeave={() => setHoveredCTA(null)}
             >
               Buy Now
@@ -2238,13 +2111,8 @@ export default function QuickView({ open = true, product, onClose }) {
                 onClose?.();
                 router.push("/cart");
               }}
-              style={{
-                ...S.ghost,
-                ...(hoveredCTA === "gocart"
-                  ? S.ghostHover
-                  : null),
-              }}
-              onMouseEnter={() => setHoveredCTA("gocart")}
+              style={{ ...S.ghost, ...(hoveredCTA === "gocart" ? S.ghostHover : null) }}
+              onMouseEnter={() => !isMobile && setHoveredCTA("gocart")}
               onMouseLeave={() => setHoveredCTA(null)}
             >
               Go to Cart
@@ -2253,29 +2121,23 @@ export default function QuickView({ open = true, product, onClose }) {
             <a
               href={slug ? `/product/${slug}` : "#"}
               style={{
-                ...S.primary,
-                ...(hoveredCTA === "view"
-                  ? S.primaryHover
-                  : null),
+                ...(isMobile ? S.ghost : S.primary), // mobile: keep it lighter (prevents “CTA overload” + big look)
+                ...(hoveredCTA === "view" ? (isMobile ? S.ghostHover : S.primaryHover) : null),
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
               }}
-              onMouseEnter={() => setHoveredCTA("view")}
+              onMouseEnter={() => !isMobile && setHoveredCTA("view")}
               onMouseLeave={() => setHoveredCTA(null)}
             >
               View Details
             </a>
+
             <button
               type="button"
               onClick={onClose}
-              style={{
-                ...S.ghost,
-                ...(hoveredCTA === "close"
-                  ? S.ghostHover
-                  : null),
-              }}
-              onMouseEnter={() => setHoveredCTA("close")}
+              style={{ ...S.ghost, ...(hoveredCTA === "close" ? S.ghostHover : null) }}
+              onMouseEnter={() => !isMobile && setHoveredCTA("close")}
               onMouseLeave={() => setHoveredCTA(null)}
             >
               Close

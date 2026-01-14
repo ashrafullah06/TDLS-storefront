@@ -1,4 +1,3 @@
-// FILE: app/layout.js
 import "@/styles/globals.css";
 import OptionsProvider from "@/providers/optionsprovider";
 import Providers from "./providers";
@@ -12,6 +11,9 @@ import Promobar from "@/components/common/promobar";
 import CartPanel from "@/components/cart/cart_panel";
 
 import AdminRouteGate from "@/components/admin/admin_route_gate"; // ✅ new tiny client gate
+
+// ✅ Preload Sliding Menu Bar (no UI, runs on site load)
+import SlidingMenuBarPreloader from "@/components/common/slidingmenubar.preloader";
 
 const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
@@ -49,6 +51,9 @@ export default function RootLayout({ children }) {
                   <OptionsProvider>
                     <SwrProvider>
                       <Promobar />
+
+                      {/* ✅ Preload Slidingmenubar data at website load (no click loading) */}
+                      <SlidingMenuBarPreloader />
 
                       {/* Global mirror slider, reading from real cart */}
                       <CartPanel />

@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 
@@ -26,24 +27,35 @@ function n(v, d = 0) {
 function formatBDT(amount) {
   const v = n(amount, 0);
   if (!Number.isFinite(v) || v <= 0) return null;
-  return v.toLocaleString("en-BD", {
-    style: "currency",
-    currency: "BDT",
-    maximumFractionDigits: 0,
-  });
+  try {
+    return v.toLocaleString("en-BD", {
+      style: "currency",
+      currency: "BDT",
+      maximumFractionDigits: 0,
+    });
+  } catch {
+    return `৳${Math.round(v).toLocaleString("en-US")}`;
+  }
 }
 
 function absUrl(url) {
   if (!url) return "";
-  if (/^https?:\/\//i.test(url)) return url;
+  const u = String(url || "").trim();
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+
   const base =
     process.env.NEXT_PUBLIC_STRAPI_API_URL ||
     process.env.NEXT_PUBLIC_STRAPI_ORIGIN ||
+    process.env.NEXT_PUBLIC_STRAPI_URL ||
+    process.env.NEXT_PUBLIC_MEDIA_URL ||
     process.env.STRAPI_API_URL ||
+    process.env.STRAPI_URL ||
     "";
+
   return base
-    ? `${base.replace(/\/+$/, "")}${url.startsWith("/") ? "" : "/"}${url}`
-    : url;
+    ? `${String(base).replace(/\/+$/, "")}${u.startsWith("/") ? "" : "/"}${u}`
+    : u;
 }
 
 function clampInt(v, minV, maxV) {
@@ -70,9 +82,7 @@ function getStrapiAttrs(item) {
 function pickImageUrl(item) {
   const a = getStrapiAttrs(item);
 
-  // Try many common shapes (custom API + Strapi media)
   const candidates = [
-    // Common direct props
     a.coverImageUrl,
     item?.coverImageUrl,
     a.imageUrl,
@@ -80,7 +90,6 @@ function pickImageUrl(item) {
     a.thumbnailUrl,
     item?.thumbnailUrl,
 
-    // Additional common keys seen in APIs
     a.coverImage?.url,
     item?.coverImage?.url,
     a.coverImage?.data?.attributes?.url,
@@ -91,18 +100,15 @@ function pickImageUrl(item) {
     a.thumbnail?.url,
     item?.thumbnail?.url,
 
-    // Strapi single media:
     a.cover?.data?.attributes?.url,
     a.image?.data?.attributes?.url,
     a.thumbnail?.data?.attributes?.url,
     a.heroImage?.data?.attributes?.url,
 
-    // Strapi repeatable media:
     a.images?.data?.[0]?.attributes?.url,
     a.gallery?.data?.[0]?.attributes?.url,
     a.media?.data?.[0]?.attributes?.url,
 
-    // Non-Strapi arrays:
     a.images?.[0]?.url,
     a.images?.[0],
     item?.images?.[0]?.url,
@@ -125,7 +131,7 @@ function pickTitle(item) {
     item?.name ||
     a.productName ||
     item?.productName ||
-    "TDLC piece"
+    "TDLS piece"
   );
 }
 
@@ -142,12 +148,11 @@ function pickAlt(item) {
     a.imageAlt ||
     item?.imageAlt ||
     pickTitle(item) ||
-    "TDLC product"
+    "Product"
   );
 }
 
 function safeHref(item) {
-  // ✅ Your “All Products” page is /product
   if (!item) return "/product";
   const href = String(item.href || "").trim();
   if (href.startsWith("/")) return href;
@@ -162,7 +167,6 @@ function safeHref(item) {
 }
 
 function normalizeHighlightItem(it) {
-  // Preserve original fields but ensure we always have the keys HomePanel needs
   return {
     ...it,
     title: pickTitle(it),
@@ -205,14 +209,7 @@ function toProductArrayFromStrapiPayload(payload) {
 
 function guessSoldCount(p) {
   const a = getStrapiAttrs(p);
-  const candidates = [
-    a.totalSold,
-    a.total_sold,
-    a.sold,
-    a.soldCount,
-    a.salesCount,
-    a.orderCount,
-  ];
+  const candidates = [a.totalSold, a.total_sold, a.sold, a.soldCount, a.salesCount, a.orderCount];
   for (const c of candidates) {
     const v = Number(c);
     if (Number.isFinite(v) && v >= 0) return v;
@@ -241,7 +238,6 @@ function buildHighlightsFromProducts(products) {
       href: safeHref(p),
       coverImageUrl: pickImageUrl(p),
       coverImageAlt: pickAlt(p),
-      // keep optional fields if present
       priceFrom: a.priceFrom ?? a.price_from ?? a.price ?? a.sale_price ?? a.salePrice,
       priceTo: a.priceTo ?? a.price_to ?? a.mrp ?? a.compare_at_price ?? a.compareAtPrice,
       totalSold: sold,
@@ -274,12 +270,7 @@ function Icon({ name = "spark" }) {
   if (name === "user") {
     return (
       <svg {...common}>
-        <path
-          d="M20 21a8 8 0 0 0-16 0"
-          stroke={NAVY}
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
+        <path d="M20 21a8 8 0 0 0-16 0" stroke={NAVY} strokeWidth="1.8" strokeLinecap="round" />
         <path
           d="M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"
           stroke={NAVY}
@@ -292,36 +283,16 @@ function Icon({ name = "spark" }) {
   if (name === "bag") {
     return (
       <svg {...common}>
-        <path
-          d="M7 9V7a5 5 0 0 1 10 0v2"
-          stroke={NAVY}
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
-        <path
-          d="M6 9h12l-1 12H7L6 9Z"
-          stroke={NAVY}
-          strokeWidth="1.8"
-          strokeLinejoin="round"
-        />
+        <path d="M7 9V7a5 5 0 0 1 10 0v2" stroke={NAVY} strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M6 9h12l-1 12H7L6 9Z" stroke={NAVY} strokeWidth="1.8" strokeLinejoin="round" />
       </svg>
     );
   }
   if (name === "cart") {
     return (
       <svg {...common}>
-        <path
-          d="M6 6h15l-2 9H7L6 6Z"
-          stroke={NAVY}
-          strokeWidth="1.8"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M6 6 5 3H2"
-          stroke={NAVY}
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
+        <path d="M6 6h15l-2 9H7L6 6Z" stroke={NAVY} strokeWidth="1.8" strokeLinejoin="round" />
+        <path d="M6 6 5 3H2" stroke={NAVY} strokeWidth="1.8" strokeLinecap="round" />
         <path
           d="M9 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM18 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
           stroke={NAVY}
@@ -352,14 +323,7 @@ function Icon({ name = "spark" }) {
   return <span />;
 }
 
-function PillButton({
-  title,
-  subtitle,
-  icon,
-  onClick,
-  variant = "dark",
-  disabled = false,
-}) {
+function PillButton({ title, subtitle, icon, onClick, variant = "dark", disabled = false }) {
   const bg =
     variant === "gold"
       ? "linear-gradient(135deg,#FFF7D6 0%, #F6D77B 40%, #C9B065 100%)"
@@ -374,20 +338,20 @@ function PillButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="group w-full text-left"
       style={{
+        width: "100%",
+        maxWidth: "100%",
         borderRadius: 999,
         border: `1px solid ${variant === "dark" ? "rgba(255,255,255,.10)" : BORDER}`,
         background: bg,
         color,
         padding: "12px 14px",
         boxShadow:
-          variant === "dark"
-            ? "0 18px 44px rgba(15,33,71,.34)"
-            : "0 16px 40px rgba(6,10,24,.12)",
+          variant === "dark" ? "0 18px 44px rgba(15,33,71,.34)" : "0 16px 40px rgba(6,10,24,.12)",
         opacity: disabled ? 0.6 : 1,
         cursor: disabled ? "not-allowed" : "pointer",
         transition: "transform .12s ease, box-shadow .12s ease, filter .12s ease",
+        textAlign: "left",
       }}
       onMouseEnter={(e) => {
         if (disabled) return;
@@ -399,9 +363,8 @@ function PillButton({
         e.currentTarget.style.filter = "none";
       }}
     >
-      <div className="flex items-center gap-3">
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
         <span
-          className="flex items-center justify-center"
           style={{
             width: 40,
             height: 40,
@@ -410,17 +373,18 @@ function PillButton({
               variant === "dark"
                 ? "linear-gradient(135deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,.06) 100%)"
                 : "linear-gradient(135deg,#ffffff 0%, #f3f4f6 100%)",
-            border:
-              variant === "dark"
-                ? "1px solid rgba(255,255,255,.12)"
-                : `1px solid ${BORDER}`,
+            border: variant === "dark" ? "1px solid rgba(255,255,255,.12)" : `1px solid ${BORDER}`,
             boxShadow: "0 12px 28px rgba(6,10,24,.12)",
+            flex: "0 0 auto",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          <span className="opacity-95">{icon}</span>
+          <span style={{ opacity: 0.95 }}>{icon}</span>
         </span>
 
-        <div className="min-w-0 flex-1">
+        <div style={{ minWidth: 0, flex: "1 1 auto" }}>
           <div
             style={{
               fontFamily: SYS_FONT,
@@ -460,6 +424,7 @@ function PillButton({
             fontSize: 12,
             fontWeight: 900,
             opacity: variant === "dark" ? 0.95 : 0.8,
+            flex: "0 0 auto",
           }}
         >
           ↗
@@ -469,17 +434,50 @@ function PillButton({
   );
 }
 
+/* ------------------ viewport-safe vh (iOS/Android) ------------------ */
+function setAppVhVar() {
+  if (typeof window === "undefined") return;
+  const vh = window.innerHeight * 0.01;
+  document.documentElement.style.setProperty("--app-vh", `${vh}px`);
+}
+
+/* ------------------ portal host ------------------ */
+function Portal({ children, zIndex = 2147483647 }) {
+  const [host, setHost] = useState(null);
+
+  useEffect(() => {
+    const el = document.createElement("div");
+    el.dataset.homepanelHost = "tdls";
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.zIndex = String(zIndex);
+    el.style.pointerEvents = "none"; // children opt-in with pointer-events
+    document.body.appendChild(el);
+    setHost(el);
+    return () => {
+      try {
+        document.body.removeChild(el);
+      } catch {}
+    };
+  }, [zIndex]);
+
+  if (!host) return null;
+  return createPortal(children, host);
+}
+
 export default function HomePanel({ open, onClose }) {
   const router = useRouter();
   const { data: session, status } = useSession();
 
   const panelRef = useRef(null);
   const previewRef = useRef(null);
-
-  // ✅ prevent “close then immediately re-open” when clicking Home button again
   const swallowNextOutsideClickRef = useRef(false);
 
+  const [vw, setVw] = useState(1024);
+  const [vh, setVh] = useState(768);
+
   const [isMobile, setIsMobile] = useState(false);
+  const [isCompactHeight, setIsCompactHeight] = useState(false);
 
   const [loadingHighlights, setLoadingHighlights] = useState(false);
   const [highlightsError, setHighlightsError] = useState(null);
@@ -489,28 +487,55 @@ export default function HomePanel({ open, onClose }) {
   const [hoverIndex, setHoverIndex] = useState(0);
   const [loadedOnce, setLoadedOnce] = useState(false);
 
-  // Read navbar height from CSS var set in Navbar (do NOT hardcode)
   const [navH, setNavH] = useState(89);
   const [bottomH, setBottomH] = useState(86);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const apply = () => {
+      setAppVhVar();
+      const w = window.innerWidth || 0;
+      const h = window.innerHeight || 0;
+
+      setVw(w);
+      setVh(h);
+
       setNavH(readCssPxVar("--nav-h", 89));
       setBottomH(readCssPxVar("--bottom-bar-h", 86));
-      setIsMobile(window.innerWidth < 768);
+
+      // Mobile includes small-height landscape too.
+      const mobile = w < 768 || h < 520;
+      setIsMobile(mobile);
+      setIsCompactHeight(h < 640);
     };
+
     apply();
-    window.addEventListener("resize", apply, { passive: true });
-    return () => window.removeEventListener("resize", apply);
+
+    const onResize = () => apply();
+    window.addEventListener("resize", onResize, { passive: true });
+    window.addEventListener("orientationchange", onResize, { passive: true });
+
+    // iOS Safari: visualViewport changes when address bar expands/collapses
+    const vv = window.visualViewport;
+    if (vv?.addEventListener) {
+      vv.addEventListener("resize", onResize, { passive: true });
+      vv.addEventListener("scroll", onResize, { passive: true });
+    }
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      if (vv?.removeEventListener) {
+        vv.removeEventListener("resize", onResize);
+        vv.removeEventListener("scroll", onResize);
+      }
+    };
   }, []);
 
   const isAuthed = status === "authenticated" && !!session?.user;
   const displayName =
-    session?.user?.name ||
-    session?.user?.email ||
-    session?.user?.phone ||
-    "Signed in";
+    session?.user?.name || session?.user?.email || session?.user?.phone || "Signed in";
 
   const routes = useMemo(() => {
     const customerDashboard = "/customer/dashboard";
@@ -519,14 +544,7 @@ export default function HomePanel({ open, onClose }) {
     const allProducts = "/product";
     const cart = "/cart";
     const adminLogin = "/admin/login";
-    return {
-      customerDashboard,
-      customerLogin,
-      customerForgot,
-      allProducts,
-      cart,
-      adminLogin,
-    };
+    return { customerDashboard, customerLogin, customerForgot, allProducts, cart, adminLogin };
   }, []);
 
   const handleNavigate = (path) => {
@@ -534,7 +552,6 @@ export default function HomePanel({ open, onClose }) {
     setTimeout(() => router.push(path), 0);
   };
 
-  // Prefetch (fast UX)
   useEffect(() => {
     try {
       router.prefetch(routes.allProducts);
@@ -547,13 +564,21 @@ export default function HomePanel({ open, onClose }) {
     } catch {}
   }, [router, routes]);
 
-  // Scroll lock while open
+  // Scroll lock while open (hard viewport safety)
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    const prevBody = document.body.style.overflow;
+    const prevBodyX = document.body.style.overflowX;
+
+    document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
+    document.body.style.overflowX = "hidden";
+
     return () => {
-      document.body.style.overflow = prev || "";
+      document.documentElement.style.overflow = prevHtml || "";
+      document.body.style.overflow = prevBody || "";
+      document.body.style.overflowX = prevBodyX || "";
     };
   }, [open]);
 
@@ -567,10 +592,7 @@ export default function HomePanel({ open, onClose }) {
     return () => document.removeEventListener("keydown", onEsc, true);
   }, [open, onClose]);
 
-  /**
-   * ✅ close when clicking outside panel AND outside flyout,
-   * ✅ swallow next click so Home button second click closes (no instant re-open).
-   */
+  // Close on outside click (robust swallow, no click-through)
   useEffect(() => {
     if (!open) return;
 
@@ -619,7 +641,83 @@ export default function HomePanel({ open, onClose }) {
     };
   }, [open, onClose]);
 
-  // Load highlights once per open session (NO THROW; fallback to Strapi if /api/home/highlights fails)
+  // Swipe to close (right -> left)
+  useEffect(() => {
+    if (!open) return;
+
+    const el = panelRef.current;
+    if (!el) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startT = 0;
+    let tracking = false;
+
+    const onStart = (e) => {
+      const t = e.touches?.[0];
+      const clientX = t ? t.clientX : e.clientX;
+      const clientY = t ? t.clientY : e.clientY;
+      startX = clientX;
+      startY = clientY;
+      startT = Date.now();
+      tracking = true;
+    };
+
+    const onMove = (e) => {
+      if (!tracking) return;
+      const t = e.touches?.[0];
+      const clientX = t ? t.clientX : e.clientX;
+      const clientY = t ? t.clientY : e.clientY;
+
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+
+      // Only react to a clear horizontal swipe, closing gesture is right->left (dx negative)
+      if (Math.abs(dx) < 18) return;
+      if (Math.abs(dy) > Math.abs(dx) * 0.9) return;
+
+      // Prevent accidental scroll-jank when swiping
+      if (e.cancelable) e.preventDefault();
+
+      const dt = Math.max(1, Date.now() - startT);
+      const vx = dx / dt; // px/ms
+
+      // Close threshold: either distance or velocity
+      if (dx < -70 || vx < -0.55) {
+        tracking = false;
+        onClose?.();
+      }
+    };
+
+    const onEnd = () => {
+      tracking = false;
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [open, onClose]);
+
+  // Focus panel when opened (avoid “dead” keyboard state)
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => {
+      try {
+        panelRef.current?.focus?.();
+      } catch {}
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
+  // Load highlights once per open session
   useEffect(() => {
     if (!open) return;
 
@@ -638,7 +736,6 @@ export default function HomePanel({ open, onClose }) {
       setHighlightsError(null);
 
       try {
-        // 1) Primary: your custom endpoint (may 500)
         let data = null;
         try {
           const res = await fetch("/api/home/highlights", {
@@ -648,12 +745,8 @@ export default function HomePanel({ open, onClose }) {
             signal: ac.signal,
           });
 
-          if (res.ok) {
-            data = await res.json().catch(() => null);
-          }
-        } catch {
-          // ignore primary failures; fallback below
-        }
+          if (res.ok) data = await res.json().catch(() => null);
+        } catch {}
 
         if (!cancelled && data?.ok) {
           const trending = Array.isArray(data.trendingProducts) ? data.trendingProducts : [];
@@ -666,7 +759,7 @@ export default function HomePanel({ open, onClose }) {
           return;
         }
 
-        // 2) Fallback: Strapi products via your existing proxy (shows REAL product images)
+        // Fallback: build from Strapi product list via proxy
         const json = await fetchFromStrapi("/products?populate=*", ac.signal);
         const payload = unwrapStrapiProxy(json);
         const products = toProductArrayFromStrapiPayload(payload);
@@ -680,13 +773,11 @@ export default function HomePanel({ open, onClose }) {
         setLoadedOnce(true);
         setHoverIndex(0);
 
-        // If primary failed, show a soft note only if fallback also empty
         if ((built.trendingProducts?.length || 0) === 0 && (built.bestSellerProducts?.length || 0) === 0) {
           setHighlightsError("Live highlights are temporarily unavailable.");
         }
-      } catch (err) {
+      } catch {
         if (cancelled) return;
-        console.error("Failed to load highlights", err);
         setHighlightsError("Live highlights are temporarily unavailable.");
         setTrendingProducts([]);
         setBestSellerProducts([]);
@@ -695,7 +786,6 @@ export default function HomePanel({ open, onClose }) {
       }
     }
 
-    // Ensure no unhandled promise
     loadHighlights().catch(() => {});
     return () => {
       cancelled = true;
@@ -711,8 +801,7 @@ export default function HomePanel({ open, onClose }) {
   }, [activeTab]);
 
   const activeList = activeTab === "TRENDING" ? trendingProducts : bestSellerProducts;
-  const safeIndex =
-    activeList.length === 0 ? 0 : clampInt(hoverIndex, 0, activeList.length - 1);
+  const safeIndex = activeList.length === 0 ? 0 : clampInt(hoverIndex, 0, activeList.length - 1);
   const previewItem = activeList.length > 0 ? activeList[safeIndex] : null;
 
   function TabButton({ id, label, labelSub }) {
@@ -739,8 +828,10 @@ export default function HomePanel({ open, onClose }) {
           letterSpacing: ".16em",
           textTransform: "uppercase",
           boxShadow: isActive ? "0 14px 34px rgba(6,10,24,.28)" : "none",
-          transition:
-            "background .16s ease, color .16s ease, box-shadow .16s ease, transform .12s ease",
+          transition: "background .16s ease, color .16s ease, box-shadow .16s ease, transform .12s ease",
+          maxWidth: "100%",
+          minWidth: 0,
+          whiteSpace: "nowrap",
         }}
         onMouseOver={(e) => {
           if (!isActive) e.currentTarget.style.transform = "translateY(-1px)";
@@ -751,15 +842,7 @@ export default function HomePanel({ open, onClose }) {
       >
         <span>{label}</span>
         {labelSub ? (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 800,
-              textTransform: "none",
-              opacity: 0.85,
-              letterSpacing: 0,
-            }}
-          >
+          <span style={{ fontSize: 10, fontWeight: 800, textTransform: "none", opacity: 0.85, letterSpacing: 0 }}>
             {labelSub}
           </span>
         ) : null}
@@ -785,6 +868,7 @@ export default function HomePanel({ open, onClose }) {
         onClick={() => handleNavigate(item.href || routes.allProducts)}
         style={{
           width: "100%",
+          maxWidth: "100%",
           border: "none",
           textAlign: "left",
           cursor: "pointer",
@@ -797,6 +881,8 @@ export default function HomePanel({ open, onClose }) {
           boxShadow: isActive ? "0 14px 28px rgba(7,11,27,.12)" : "none",
           transform: isActive ? "translateX(2px)" : "translateX(0)",
           transition: "background .12s ease, transform .12s ease, box-shadow .12s ease",
+          minWidth: 0,
+          outline: "none",
         }}
       >
         <div
@@ -816,6 +902,7 @@ export default function HomePanel({ open, onClose }) {
               ? "radial-gradient(circle at 30% 0%, #fffdf4 0%, #f1e6c7 100%)"
               : "linear-gradient(135deg,#f8fafc,#edf1fb)",
             boxShadow: "0 10px 22px rgba(6,10,24,.10)",
+            flex: "0 0 auto",
           }}
         >
           {index + 1}
@@ -832,686 +919,698 @@ export default function HomePanel({ open, onClose }) {
               overflow: "hidden",
               textOverflow: "ellipsis",
               letterSpacing: ".01em",
+              lineHeight: 1.2,
             }}
           >
-            {item.title || "TDLC piece"}
+            {item.title || "Product"}
           </div>
-
           <div
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "baseline",
-              gap: 6,
+              fontFamily: SYS_FONT,
+              fontSize: 12,
+              fontWeight: 800,
+              color: NAVY_SOFT,
+              opacity: 0.84,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              lineHeight: 1.2,
             }}
           >
-            <span
-              style={{
-                fontFamily: SYS_FONT,
-                fontSize: 11,
-                color: "#6B7280",
-                fontWeight: 800,
-              }}
-            >
-              {item.totalSold != null
-                ? `${n(item.totalSold).toLocaleString("en-BD")} pcs sold`
-                : "Early orders in progress"}
-            </span>
-
-            <span
-              style={{
-                fontFamily: SYS_FONT,
-                fontSize: 11,
-                color: "#4B5563",
-                fontWeight: 900,
-              }}
-            >
-              {priceText || "Price at checkout"}
-            </span>
+            {priceText ? priceText : "View details"}
           </div>
         </div>
+
+        <div
+          style={{
+            flex: "0 0 auto",
+            width: 10,
+            height: 10,
+            borderRadius: 999,
+            background: isActive ? GOLD : "rgba(15,33,71,.18)",
+            boxShadow: isActive ? "0 10px 18px rgba(201,176,101,.35)" : "none",
+          }}
+          aria-hidden="true"
+        />
       </button>
     );
   }
 
-  function PreviewCard() {
-    if (!previewItem && !loadingHighlights && !highlightsError) {
-      return (
-        <div
-          style={{
-            borderRadius: 22,
-            border: `1px dashed ${BORDER}`,
-            padding: "18px 16px",
-            fontFamily: SYS_FONT,
-            fontSize: 12.5,
-            color: "#4B5563",
-            background: "linear-gradient(135deg,#f9fafb 0%,#f3f4f6 100%)",
-          }}
-        >
-          Highlights will appear here as your order history grows.
-        </div>
-      );
+  const layout = useMemo(() => {
+    const safeTop = 8;
+    const safeBottom = 10;
+
+    // Use app-vh when available (iOS/Android address bar safe)
+    const viewportPx = `calc(var(--app-vh, 1vh) * 100)`;
+
+    const top = `calc(${navH}px + ${safeTop}px + env(safe-area-inset-top))`;
+    const bottom = `calc(${bottomH}px + ${safeBottom}px + env(safe-area-inset-bottom))`;
+    const maxH = `calc(${viewportPx} - ${navH}px - ${bottomH}px - ${safeTop}px - ${safeBottom}px - env(safe-area-inset-top) - env(safe-area-inset-bottom))`;
+
+    // Drawer width: never overflow small screens, never exceed viewport
+    const panelW = isMobile ? "min(100vw, 520px)" : "min(420px, calc(100vw - 24px))";
+
+    // Preview shown only on comfortable desktops
+    const showPreview = !isMobile && !isCompactHeight && vw >= 980;
+
+    return { top, bottom, maxH, panelW, showPreview };
+  }, [navH, bottomH, isMobile, isCompactHeight, vw]);
+
+  const handleSignOut = async () => {
+    try {
+      onClose?.();
+      // Customer-plane sign out only (this component is rendered in siteTree, not adminTree)
+      await signOut({ redirect: true, callbackUrl: "/" });
+    } catch {
+      // noop
     }
-
-    if (!previewItem) return null;
-
-    const priceFrom = formatBDT(previewItem.priceFrom);
-    const priceTo = formatBDT(previewItem.priceTo);
-
-    let priceText;
-    if (priceFrom && priceTo && priceFrom !== priceTo) priceText = `${priceFrom} – ${priceTo}`;
-    else if (priceFrom) priceText = priceFrom;
-    else priceText = "Price at checkout";
-
-    const imgUrl = absUrl(previewItem.coverImageUrl);
-
-    return (
-      <div className="hp-preview">
-        <div
-          style={{
-            borderRadius: 24,
-            overflow: "hidden",
-            position: "relative",
-            height: isMobile ? 230 : 270,
-            boxShadow:
-              "0 22px 52px rgba(7,11,27,.45), 0 0 0 1px rgba(225,228,240,.75)",
-            background:
-              "radial-gradient(circle at 30% 0%, #f2f6ff 0%, #e1e6f7 40%, #f4f5fb 100%)",
-          }}
-        >
-          {imgUrl ? (
-            <img
-              src={imgUrl}
-              alt={previewItem.coverImageAlt || previewItem.title || "TDLC product"}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                display: "block",
-                transform: "scale(1.03)",
-              }}
-              loading="eager"
-              decoding="async"
-            />
-          ) : (
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontFamily: SYS_FONT,
-                fontSize: 12,
-                letterSpacing: ".28em",
-                textTransform: "uppercase",
-                color: "#6B7280",
-              }}
-            >
-              TDLC
-            </div>
-          )}
-
-          <div
-            style={{
-              position: "absolute",
-              inset: "54% 0 0 0",
-              background:
-                "linear-gradient(180deg, rgba(6,10,24,.0) 0%, rgba(6,10,24,.74) 55%, rgba(6,10,24,.98) 100%)",
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "flex-end",
-              padding: "14px 16px 14px",
-              color: "#F9FAFB",
-            }}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontFamily: LUX_FONT,
-                    fontSize: 17,
-                    fontWeight: 900,
-                    letterSpacing: ".04em",
-                    textTransform: "uppercase",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {previewItem.title || "TDLC piece"}
-                </div>
-                <div
-                  style={{
-                    marginTop: 4,
-                    fontFamily: SYS_FONT,
-                    fontSize: 11.5,
-                    color: "#E5E7EB",
-                    fontWeight: 800,
-                  }}
-                >
-                  {activeTab === "TRENDING"
-                    ? "Trending in the last 3 months"
-                    : "All-time favourite"}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 999,
-                  border: "1px solid rgba(249,250,251,.55)",
-                  background:
-                    "linear-gradient(135deg, rgba(249,250,251,.22) 0%, rgba(249,250,251,.06) 100%)",
-                  fontFamily: SYS_FONT,
-                  fontSize: 10,
-                  fontWeight: 900,
-                  textTransform: "uppercase",
-                  letterSpacing: ".14em",
-                }}
-              >
-                #{safeIndex + 1}
-              </div>
-            </div>
-
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <div>
-                <div
-                  style={{
-                    fontFamily: SYS_FONT,
-                    fontSize: 13,
-                    fontWeight: 900,
-                    letterSpacing: ".02em",
-                  }}
-                >
-                  {priceText}
-                </div>
-                <div
-                  style={{
-                    marginTop: 2,
-                    fontFamily: SYS_FONT,
-                    fontSize: 11,
-                    color: "#D1D5DB",
-                    fontWeight: 800,
-                  }}
-                >
-                  {previewItem.totalSold != null
-                    ? `${n(previewItem.totalSold).toLocaleString("en-BD")} pcs sold`
-                    : "First units shipping out"}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => handleNavigate(previewItem.href || routes.allProducts)}
-                style={{
-                  borderRadius: 999,
-                  border: "none",
-                  padding: "9px 16px",
-                  fontFamily: SYS_FONT,
-                  fontSize: 11.5,
-                  fontWeight: 900,
-                  letterSpacing: ".16em",
-                  textTransform: "uppercase",
-                  background: "linear-gradient(135deg,#fefce8,#facc15)",
-                  color: "#111827",
-                  cursor: "pointer",
-                  boxShadow:
-                    "0 16px 40px rgba(6,10,24,.62), 0 0 0 1px rgba(248,250,252,.45)",
-                }}
-              >
-                View piece
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  };
 
   if (!open) return null;
 
-  const top = navH;
-  const bottom = bottomH;
-  const panelHeight = `calc(100vh - ${top + bottom}px)`;
-
-  const panelWidthDesktop = 372;
-  const panelLeftDesktop = 20;
-  const previewGap = 18;
-  const previewLeft = panelLeftDesktop + panelWidthDesktop + previewGap;
-
   return (
-    <div
-      className="fixed inset-x-0 z-[120] flex items-start"
-      style={{ top, bottom }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="TDLC Home panel"
-    >
-      {/* Scrim */}
-      <button
-        type="button"
-        aria-label="Close home panel overlay"
-        onClick={onClose}
-        className="absolute inset-0 w-full h-full bg-slate-950/55 backdrop-blur-sm"
-        style={{ top: 0, bottom: 0 }}
-      />
+    <Portal zIndex={2147483647}>
+      <style>{`
+        .tdls-homepanel-backdrop{
+          position: fixed;
+          inset: 0;
+          pointer-events: auto;
+          background: radial-gradient(1000px 680px at 70% 20%, rgba(201,176,101,.18) 0%, rgba(15,33,71,.52) 48%, rgba(5,11,31,.74) 100%);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+        }
+        .tdls-homepanel-stage{
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          overflow: hidden;
+        }
 
-      {/* Left rail */}
-      <div
-        ref={panelRef}
-        style={{
-          position: "fixed",
-          top,
-          left: isMobile ? 0 : panelLeftDesktop,
-          width: isMobile ? "100vw" : panelWidthDesktop,
-          height: panelHeight,
-          background:
-            "linear-gradient(170deg, rgba(255,255,255,.98) 0%, #f9fafc 55%, #fdfdfd 100%)",
-          zIndex: 10000,
-          boxShadow: "0 26px 72px rgba(6,10,24,.38), inset 0 1px 0 rgba(255,255,255,.6)",
-          borderTopRightRadius: isMobile ? 0 : 22,
-          borderBottomRightRadius: isMobile ? 0 : 22,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "stretch",
-          padding: isMobile ? "16px 14px 14px" : "16px 18px 16px",
-          maxWidth: "100vw",
-          overflow: "hidden",
-          borderRight: `1px solid ${BORDER}`,
-          backdropFilter: "blur(7px)",
-        }}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Close button */}
-        <button
-          onClick={() => onClose?.()}
-          aria-label="Close home panel"
-          style={{
-            position: "absolute",
-            top: 10,
-            right: 14,
-            background: SURFACE,
-            border: `1px solid ${BORDER}`,
-            borderRadius: 999,
-            color: NAVY,
-            cursor: "pointer",
-            padding: "6px 7px",
-            boxShadow: "0 10px 22px rgba(6,10,24,.18)",
-          }}
-        >
-          <svg width={18} height={18} viewBox="0 0 24 24" stroke={NAVY} strokeWidth="1.8" fill="none">
-            <line x1="6" y1="6" x2="18" y2="18" />
-            <line x1="6" y1="18" x2="18" y2="6" />
-          </svg>
-        </button>
+        /* Preview tile (desktop only) */
+        .tdls-homepanel-preview{
+          pointer-events: auto;
+          position: absolute;
+          top: ${layout.top};
+          bottom: ${layout.bottom};
+          right: calc(${layout.panelW} + 16px);
+          width: min(520px, calc(100vw - ${layout.panelW} - 40px));
+          max-width: 560px;
+          border-radius: 26px;
+          background: linear-gradient(180deg, rgba(255,255,255,.88) 0%, rgba(255,255,255,.72) 100%);
+          border: 1px solid rgba(255,255,255,.34);
+          box-shadow: 0 26px 70px rgba(0,0,0,.22);
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+        }
 
-        {/* Header */}
-        <div
-          style={{
-            width: "100%",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            padding: "2px 2px 12px",
-            borderBottom: `1px dashed ${BORDER}`,
-            marginBottom: 12,
-            position: "relative",
-          }}
-        >
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              top: -22,
-              left: -16,
-              width: 240,
-              height: 240,
-              borderRadius: "50%",
-              background:
-                "radial-gradient(circle, rgba(201,176,101,.18) 0%, rgba(201,176,101,0) 70%)",
-              opacity: 0.95,
-              pointerEvents: "none",
-              zIndex: -1,
-            }}
-          />
+        /* Drawer */
+        .tdls-homepanel-drawer{
+          pointer-events: auto;
+          position: absolute;
+          top: ${layout.top};
+          bottom: ${layout.bottom};
+          right: max(10px, env(safe-area-inset-right));
+          width: ${layout.panelW};
+          max-width: calc(100vw - 20px);
+          border-radius: 26px;
+          background: ${SURFACE};
+          border: 1px solid ${BORDER};
+          box-shadow: 0 26px 70px rgba(0,0,0,.22);
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          transform: translateX(0);
+          contain: layout paint style;
+        }
 
-          <div>
-            <span
-              style={{
-                display: "block",
-                fontFamily: LUX_FONT,
-                fontWeight: 900,
-                fontSize: isMobile ? "1.25rem" : "1.55rem",
-                color: NAVY,
-                letterSpacing: ".03em",
-              }}
-            >
-              TDLC Hub
-            </span>
-            <span
-              style={{
-                display: "block",
-                marginTop: 2,
-                fontFamily: SYS_FONT,
-                fontSize: 12,
-                color: "#6B7280",
-                fontWeight: 800,
-              }}
-            >
-              Customer sign-in + quick actions + live highlights.
-            </span>
-          </div>
+        .tdls-homepanel-head{
+          padding: 16px 16px 12px;
+          background: linear-gradient(180deg, #ffffff 0%, #fbfbff 100%);
+          border-bottom: 1px solid ${BORDER};
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
 
-          {/* Customer Sign-in / Account card */}
-          <div
-            className="rounded-2xl border"
-            style={{
-              borderColor: BORDER,
-              background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
-              padding: "10px 10px",
-              boxShadow: "0 14px 34px rgba(6,10,24,.08)",
-            }}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
+        .tdls-homepanel-title{
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .tdls-homepanel-title h3{
+          margin: 0;
+          font-family: ${LUX_FONT};
+          font-weight: 900;
+          color: ${NAVY};
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          font-size: 1.12rem;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .tdls-homepanel-title p{
+          margin: 0;
+          font-family: ${SYS_FONT};
+          color: ${NAVY_SOFT};
+          font-weight: 800;
+          font-size: .82rem;
+          opacity: .84;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .tdls-homepanel-close{
+          border: 1px solid ${BORDER};
+          background: #fff;
+          color: ${NAVY};
+          border-radius: 14px;
+          height: 44px;
+          width: 44px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          box-shadow: 0 10px 22px rgba(6,10,24,.10);
+          transition: transform .10s ease, box-shadow .12s ease, background .12s ease;
+          flex: 0 0 auto;
+        }
+        .tdls-homepanel-close:hover{ background: #f6f7fb; transform: translateY(-1px); }
+        .tdls-homepanel-close:active{ transform: translateY(0); }
+
+        .tdls-homepanel-body{
+          padding: 14px 16px 16px;
+          overflow: auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+          max-height: ${layout.maxH};
+        }
+        .tdls-homepanel-body::-webkit-scrollbar{ width: 0px; height: 0px; }
+
+        .tdls-homepanel-section{
+          margin-top: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .tdls-homepanel-section:first-child{ margin-top: 0; }
+
+        .tdls-homepanel-section-title{
+          font-family: ${SYS_FONT};
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: .18em;
+          text-transform: uppercase;
+          color: ${NAVY_SOFT};
+          opacity: .95;
+        }
+
+        .tdls-homepanel-grid{
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .tdls-homepanel-tabs{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          align-items: center;
+        }
+
+        .tdls-homepanel-rail{
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          border: 1px solid ${BORDER};
+          border-radius: 18px;
+          padding: 8px;
+          background: linear-gradient(180deg, #ffffff 0%, #fbfbff 100%);
+        }
+
+        /* Mobile: drawer uses full available height, no preview */
+        @media (max-width: 768px){
+          .tdls-homepanel-drawer{
+            left: max(10px, env(safe-area-inset-left));
+            right: max(10px, env(safe-area-inset-right));
+            width: auto;
+            border-radius: 22px;
+          }
+          .tdls-homepanel-body{
+            padding: 12px 14px 14px;
+          }
+        }
+
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce){
+          .tdls-homepanel-close{ transition: none; }
+        }
+      `}</style>
+
+      {/* Backdrop */}
+      <div className="tdls-homepanel-backdrop" aria-hidden="true" />
+
+      {/* Stage */}
+      <div className="tdls-homepanel-stage" role="presentation">
+        {layout.showPreview ? (
+          <div ref={previewRef} className="tdls-homepanel-preview" aria-label="Preview">
+            <div style={{ padding: 16, borderBottom: `1px solid rgba(255,255,255,.34)` }}>
+              <div
+                style={{
+                  fontFamily: SYS_FONT,
+                  fontWeight: 900,
+                  letterSpacing: ".16em",
+                  textTransform: "uppercase",
+                  color: NAVY,
+                  fontSize: 11.5,
+                }}
+              >
+                {activeTab === "TRENDING" ? "Trending Preview" : "Best Sellers Preview"}
+              </div>
+              <div
+                style={{
+                  marginTop: 6,
+                  fontFamily: LUX_FONT,
+                  fontWeight: 900,
+                  color: NAVY,
+                  fontSize: 18,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {previewItem?.title || "Explore our collections"}
+              </div>
+            </div>
+
+            <div style={{ position: "relative", flex: "1 1 auto", background: "rgba(15,33,71,.06)" }}>
+              {previewItem?.coverImageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={absUrl(previewItem.coverImageUrl)}
+                  alt={previewItem.coverImageAlt || previewItem.title || "Preview"}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                  loading="eager"
+                />
+              ) : (
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontFamily: SYS_FONT,
+                    fontWeight: 900,
+                    letterSpacing: ".16em",
+                    textTransform: "uppercase",
+                    color: NAVY_SOFT,
+                    opacity: 0.75,
+                  }}
+                >
+                  TDLS
+                </div>
+              )}
+
+              <div
+                style={{
+                  position: "absolute",
+                  left: 12,
+                  right: 12,
+                  bottom: 12,
+                  borderRadius: 20,
+                  background: "linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.78) 100%)",
+                  border: "1px solid rgba(255,255,255,.44)",
+                  boxShadow: "0 18px 44px rgba(0,0,0,.18)",
+                  padding: 14,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
                 <div
                   style={{
                     fontFamily: SYS_FONT,
                     fontSize: 11,
                     fontWeight: 900,
-                    letterSpacing: ".18em",
+                    letterSpacing: ".16em",
                     textTransform: "uppercase",
-                    color: "#6B7280",
+                    color: NAVY_SOFT,
                   }}
                 >
-                  Customer Account
+                  Quick view
                 </div>
-                <div
-                  style={{
-                    marginTop: 3,
-                    fontFamily: SYS_FONT,
-                    fontSize: 13,
-                    fontWeight: 900,
-                    color: NAVY,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {isAuthed ? displayName : "Not signed in"}
-                </div>
-              </div>
 
-              {isAuthed ? (
-                <div className="flex items-center gap-2">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontFamily: LUX_FONT,
+                        fontWeight: 900,
+                        fontSize: 15,
+                        color: NAVY,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {previewItem?.title || "Browse products"}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: SYS_FONT,
+                        fontWeight: 800,
+                        fontSize: 12,
+                        color: NAVY_SOFT,
+                        opacity: 0.85,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      Tap any item in the list to open
+                    </div>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => handleNavigate(routes.customerDashboard)}
+                    onClick={() => handleNavigate(previewItem?.href || routes.allProducts)}
                     style={{
+                      flex: "0 0 auto",
                       borderRadius: 999,
-                      border: `1px solid ${BORDER}`,
-                      padding: "8px 12px",
-                      background: "#ffffff",
-                      fontFamily: SYS_FONT,
-                      fontSize: 11.5,
-                      fontWeight: 900,
-                      letterSpacing: ".12em",
-                      textTransform: "uppercase",
+                      border: `1px solid rgba(15,33,71,.14)`,
+                      background: `linear-gradient(180deg, #ffffff 0%, #f4f6fe 100%)`,
                       color: NAVY,
-                      boxShadow: "0 12px 28px rgba(6,10,24,.10)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Dashboard
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose?.();
-                      setTimeout(() => signOut({ callbackUrl: "/" }), 0);
-                    }}
-                    style={{
-                      borderRadius: 999,
-                      border: "none",
-                      padding: "8px 12px",
-                      background: "linear-gradient(135deg,#111827 0%, #0f2147 100%)",
                       fontFamily: SYS_FONT,
-                      fontSize: 11.5,
                       fontWeight: 900,
-                      letterSpacing: ".12em",
+                      letterSpacing: ".14em",
                       textTransform: "uppercase",
-                      color: "white",
-                      boxShadow: "0 14px 34px rgba(15,33,71,.22)",
+                      fontSize: 11,
+                      padding: "10px 14px",
                       cursor: "pointer",
+                      boxShadow: "0 14px 30px rgba(6,10,24,.14)",
                     }}
                   >
-                    Sign out
+                    Open ↗
                   </button>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => handleNavigate(routes.customerLogin)}
-                  style={{
-                    borderRadius: 999,
-                    border: "none",
-                    padding: "9px 14px",
-                    background: "linear-gradient(180deg,#1b2d64 0%,#0f2147 100%)",
-                    fontFamily: SYS_FONT,
-                    fontSize: 11.5,
-                    fontWeight: 900,
-                    letterSpacing: ".14em",
-                    textTransform: "uppercase",
-                    color: "white",
-                    boxShadow: "0 14px 34px rgba(15,33,71,.22)",
-                    cursor: "pointer",
-                  }}
-                >
-                  Customer sign in
-                </button>
-              )}
-            </div>
-
-            {!isAuthed ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleNavigate(routes.customerForgot)}
-                  style={{
-                    fontFamily: SYS_FONT,
-                    fontSize: 12,
-                    fontWeight: 900,
-                    color: NAVY_SOFT,
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    padding: 0,
-                    textDecoration: "underline",
-                    textUnderlineOffset: 4,
-                    opacity: 0.85,
-                  }}
-                >
-                  Forgot password?
-                </button>
-
-                <span style={{ color: "#CBD5E1" }}>•</span>
-
-                <button
-                  type="button"
-                  onClick={() => handleNavigate(routes.adminLogin)}
-                  style={{
-                    fontFamily: SYS_FONT,
-                    fontSize: 12,
-                    fontWeight: 900,
-                    color: NAVY_SOFT,
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    padding: 0,
-                    textDecoration: "underline",
-                    textUnderlineOffset: 4,
-                    opacity: 0.85,
-                  }}
-                >
-                  Staff / Admin login
-                </button>
               </div>
-            ) : null}
-          </div>
-
-          {/* Premium quick actions */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
-            <PillButton
-              title="Shop all products"
-              subtitle="Browse the full TDLC collection"
-              icon={<Icon name="bag" />}
-              variant="gold"
-              onClick={() => handleNavigate(routes.allProducts)}
-            />
-
-            <PillButton
-              title="Cart"
-              subtitle="View items"
-              icon={<Icon name="cart" />}
-              variant="glass"
-              onClick={() => handleNavigate(routes.cart)}
-            />
-          </div>
-
-          {/* Tabs */}
-          <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <TabButton id="TRENDING" label="TRENDING" labelSub="Last 3 months" />
-            <TabButton id="BEST" label="ALL-TIME" labelSub="Best sellers" />
-          </div>
-        </div>
-
-        {/* Rail list */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            flex: 1,
-            overflowY: "auto",
-            paddingRight: 2,
-            paddingBottom: 10,
-          }}
-        >
-          {loadingHighlights && (
-            <div aria-busy="true" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div
-                  key={i}
-                  style={{
-                    height: 54,
-                    borderRadius: 16,
-                    background: "linear-gradient(90deg,#f3f4f6 0%, #e5e7eb 40%, #f3f4f6 100%)",
-                    backgroundSize: "200% 100%",
-                    animation: "tdlc-shimmer 1.2s ease-in-out infinite",
-                  }}
-                />
-              ))}
             </div>
-          )}
-
-          {!loadingHighlights && highlightsError && (
-            <div
-              style={{
-                padding: "10px 12px",
-                borderRadius: 16,
-                border: `1px solid ${BORDER}`,
-                background: "linear-gradient(135deg,#FFF7ED 0%,#FFFDF8 40%,#FFFFFF 100%)",
-                fontFamily: SYS_FONT,
-                fontSize: 12.5,
-                color: "#92400E",
-                fontWeight: 800,
-              }}
-            >
-              {highlightsError}
-            </div>
-          )}
-
-          {!loadingHighlights && !highlightsError && activeList.length === 0 && (
-            <div
-              style={{
-                padding: "12px 12px",
-                borderRadius: 16,
-                border: `1px dashed ${BORDER}`,
-                background: "#F9FAFB",
-                fontFamily: SYS_FONT,
-                fontSize: 12.5,
-                color: "#4B5563",
-                fontWeight: 800,
-              }}
-            >
-              No highlights yet. This populates automatically from completed orders.
-            </div>
-          )}
-
-          {!loadingHighlights &&
-            !highlightsError &&
-            activeList.length > 0 &&
-            activeList.slice(0, 12).map((item, idx) => (
-              <RailItem key={item.id || item.slug || `${activeTab}-${idx}`} item={item} index={idx} />
-            ))}
-        </div>
-
-        {/* Mobile inline preview */}
-        {isMobile ? (
-          <div style={{ marginTop: 12 }}>
-            <PreviewCard />
           </div>
         ) : null}
 
-        <style jsx>{`
-          @keyframes tdlc-shimmer {
-            0% {
-              background-position: 200% 0;
-            }
-            100% {
-              background-position: -200% 0;
-            }
-          }
-          .hp-preview {
-            animation: hpSlideIn 0.18s ease-out;
-          }
-          @keyframes hpSlideIn {
-            0% {
-              opacity: 0;
-              transform: translateX(8px) scale(0.98);
-            }
-            100% {
-              opacity: 1;
-              transform: translateX(0) scale(1);
-            }
-          }
-        `}</style>
-      </div>
-
-      {/* Desktop preview flyout */}
-      {!isMobile ? (
-        <div
-          ref={previewRef}
-          style={{
-            position: "fixed",
-            top: top + 8,
-            bottom: bottom + 8,
-            left: previewLeft,
-            right: 24,
-            zIndex: 10001,
-            display: "flex",
-            alignItems: "flex-start",
-          }}
-          onClick={(e) => e.stopPropagation()}
+        {/* Drawer */}
+        <aside
+          ref={panelRef}
+          className="tdls-homepanel-drawer"
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+          aria-label="Home panel"
         >
-          <div style={{ flex: 1, maxWidth: 560, minWidth: 340, display: "flex", flexDirection: "column" }}>
-            <PreviewCard />
+          <div className="tdls-homepanel-head">
+            <div className="tdls-homepanel-title">
+              <h3>Home</h3>
+              <p title={displayName}>{isAuthed ? displayName : "Guest mode"}</p>
+            </div>
+
+            <button
+              type="button"
+              className="tdls-homepanel-close"
+              aria-label="Close home panel"
+              onClick={() => onClose?.()}
+            >
+              <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
+                ×
+              </span>
+            </button>
           </div>
-        </div>
-      ) : null}
-    </div>
+
+          <div className="tdls-homepanel-body">
+            {/* Primary actions */}
+            <div className="tdls-homepanel-section">
+              <div className="tdls-homepanel-section-title">Quick actions</div>
+              <div className="tdls-homepanel-grid">
+                {isAuthed ? (
+                  <PillButton
+                    title="My Account"
+                    subtitle="Dashboard & profile"
+                    icon={<Icon name="user" />}
+                    onClick={() => handleNavigate(routes.customerDashboard)}
+                    variant="dark"
+                  />
+                ) : (
+                  <PillButton
+                    title="Customer Sign In"
+                    subtitle="Login with OTP"
+                    icon={<Icon name="user" />}
+                    onClick={() => handleNavigate(routes.customerLogin)}
+                    variant="dark"
+                  />
+                )}
+
+                <PillButton
+                  title="All Products"
+                  subtitle="Browse catalog"
+                  icon={<Icon name="spark" />}
+                  onClick={() => handleNavigate(routes.allProducts)}
+                  variant="glass"
+                />
+
+                <PillButton
+                  title="Cart"
+                  subtitle="Review & checkout"
+                  icon={<Icon name="cart" />}
+                  onClick={() => handleNavigate(routes.cart)}
+                  variant="gold"
+                />
+
+                <PillButton
+                  title="Admin"
+                  subtitle="Only for TDLS admin"
+                  icon={<Icon name="bag" />}
+                  onClick={() => handleNavigate(routes.adminLogin)}
+                  variant="glass"
+                />
+
+                {isAuthed ? (
+                  <PillButton
+                    title="Sign Out"
+                    subtitle="Logout from customer"
+                    icon={<Icon name="user" />}
+                    onClick={handleSignOut}
+                    variant="glass"
+                  />
+                ) : null}
+              </div>
+            </div>
+
+            {/* Highlights */}
+            <div className="tdls-homepanel-section">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                }}
+              >
+                <div className="tdls-homepanel-section-title">Highlights</div>
+
+                <div className="tdls-homepanel-tabs" role="tablist" aria-label="Highlights tabs">
+                  <TabButton
+                    id="TRENDING"
+                    label="Trending"
+                    labelSub={activeList.length ? `${trendingProducts.length}` : ""}
+                  />
+                  <TabButton
+                    id="BEST"
+                    label="Best Sellers"
+                    labelSub={activeList.length ? `${bestSellerProducts.length}` : ""}
+                  />
+                </div>
+              </div>
+
+              {loadingHighlights ? (
+                <div
+                  style={{
+                    border: `1px dashed ${BORDER}`,
+                    borderRadius: 18,
+                    padding: 16,
+                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                    color: NAVY_SOFT,
+                    fontFamily: SYS_FONT,
+                    fontWeight: 900,
+                    letterSpacing: ".12em",
+                    textTransform: "uppercase",
+                    fontSize: 11,
+                  }}
+                >
+                  Loading highlights…
+                </div>
+              ) : highlightsError ? (
+                <div
+                  style={{
+                    border: `1px dashed ${BORDER}`,
+                    borderRadius: 18,
+                    padding: 16,
+                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                    color: NAVY_SOFT,
+                    fontFamily: SYS_FONT,
+                    fontWeight: 800,
+                    fontSize: 13,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {highlightsError}
+                </div>
+              ) : activeList.length > 0 ? (
+                <div className="tdls-homepanel-rail" role="list">
+                  {activeList.map((it, idx) => (
+                    <div key={it.slug || it.id || idx} role="listitem">
+                      <RailItem item={it} index={idx} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    border: `1px dashed ${BORDER}`,
+                    borderRadius: 18,
+                    padding: 16,
+                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                    color: NAVY_SOFT,
+                    fontFamily: SYS_FONT,
+                    fontWeight: 800,
+                    fontSize: 13,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  No highlights yet.
+                </div>
+              )}
+
+              {/* Mobile-only inline preview (so desktop preview absence doesn’t reduce clarity) */}
+              {!layout.showPreview && previewItem ? (
+                <div
+                  style={{
+                    marginTop: 10,
+                    borderRadius: 18,
+                    border: `1px solid ${BORDER}`,
+                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                    overflow: "hidden",
+                    boxShadow: "0 16px 40px rgba(6,10,24,.10)",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 12, padding: 12, alignItems: "center", minWidth: 0 }}>
+                    <div
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: 14,
+                        background: "rgba(15,33,71,.08)",
+                        border: "1px solid rgba(15,33,71,.10)",
+                        overflow: "hidden",
+                        flex: "0 0 auto",
+                        position: "relative",
+                      }}
+                    >
+                      {previewItem.coverImageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={absUrl(previewItem.coverImageUrl)}
+                          alt={previewItem.coverImageAlt || previewItem.title || "Preview"}
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          loading="lazy"
+                        />
+                      ) : null}
+                    </div>
+
+                    <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                      <div
+                        style={{
+                          fontFamily: LUX_FONT,
+                          fontWeight: 900,
+                          color: NAVY,
+                          fontSize: 14.5,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {previewItem.title}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 3,
+                          fontFamily: SYS_FONT,
+                          fontWeight: 800,
+                          fontSize: 12,
+                          color: NAVY_SOFT,
+                          opacity: 0.85,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        Tap to open
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleNavigate(previewItem.href || routes.allProducts)}
+                      style={{
+                        flex: "0 0 auto",
+                        borderRadius: 999,
+                        border: `1px solid rgba(15,33,71,.14)`,
+                        background: `linear-gradient(180deg, #ffffff 0%, #f4f6fe 100%)`,
+                        color: NAVY,
+                        fontFamily: SYS_FONT,
+                        fontWeight: 900,
+                        letterSpacing: ".14em",
+                        textTransform: "uppercase",
+                        fontSize: 11,
+                        padding: "10px 12px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Open
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Micro hint (mobile UX) */}
+            <div
+              style={{
+                marginTop: 14,
+                textAlign: "center",
+                color: NAVY_SOFT,
+                opacity: 0.7,
+                fontFamily: SYS_FONT,
+                fontWeight: 800,
+                fontSize: 12,
+              }}
+            >
+              Swipe left to close. Tap outside to dismiss.
+            </div>
+          </div>
+        </aside>
+      </div>
+    </Portal>
   );
 }

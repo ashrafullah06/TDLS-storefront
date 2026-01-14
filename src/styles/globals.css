@@ -25,6 +25,19 @@ html {
   text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
   font-size: calc(16px * var(--ui-scale));
+  scroll-padding-top: calc(var(--nav-h, 88px) + var(--safe-top, 0px));
+}
+
+/* ✅ Central mobile scaling control (desktop stays as-is) */
+@media (max-width: 480px) {
+  :root { --ui-scale: 0.70; }
+}
+@media (min-width: 481px) and (max-width: 768px) {
+  :root { --ui-scale: 0.73; }
+}
+/* Landscape phones: prioritize “fit” over size */
+@media (max-height: 420px) and (orientation: landscape) {
+  :root { --ui-scale: 0.68; }
 }
 
 /* ✅ Phase 1: Central anti-overflow policy (never overflow screen) */
@@ -33,6 +46,11 @@ html, body {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
+}
+
+/* Prefer clip where supported (avoids scrollbars + keeps GPU-friendly) */
+@supports (overflow-x: clip) {
+  html, body { overflow-x: clip; }
 }
 
 /* ✅ Phase 1: Shrinkability in flex/grid (prevents children forcing overflow) */
@@ -49,6 +67,13 @@ body {
   min-height: 100vh;
   position: relative;
   -webkit-tap-highlight-color: transparent;
+
+  /* Mobile-safe space for bottom floating bar + safe-area */
+  padding-bottom: calc(var(--bottom-bar-h, 0px) + var(--safe-bottom, 0px));
+}
+@media (min-width: 1024px) {
+  /* Desktop: keep existing layout (no forced extra padding) */
+  body { padding-bottom: 0; }
 }
 
 /* ✅ App shell guard (layout.js sets body id="app-shell") */
@@ -401,7 +426,8 @@ a:hover { color: #2b6dd1; text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after {
-    animation-durationx: none !important;
-    transition: none !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

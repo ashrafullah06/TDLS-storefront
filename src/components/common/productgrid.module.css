@@ -1,25 +1,38 @@
-/* PURELY DIFFERENT LAYOUT, FILTERING UNAFFECTED */
+/* FILE: productgrid.module.css
+   PURELY DIFFERENT LAYOUT, FILTERING UNAFFECTED
+*/
+
+.container {
+  /* reads central tokens if you add them in globals; safe fallbacks included */
+  max-width: var(--page-max-width, 1440px);
+  margin-inline: auto;
+  padding-inline: var(--page-gutter-x, 18px);
+}
 
 .grid {
-  --gap: 28px;
+  /* Less clutter on small screens, consistent rhythm on desktop */
+  --gap: clamp(12px, 2.2vw, 28px);
+
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr)); /* mobile */
+  grid-template-columns: repeat(2, minmax(0, 1fr)); /* mobile default */
   gap: var(--gap);
   align-items: start;
 }
 
-@media (min-width: 1024px) { /* small desktop */
-  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* small desktop */
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
-@media (min-width: 1440px) { /* large desktop */
-  .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* large desktop */
+@media (min-width: 1440px) {
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
-.container {
-  max-width: 1440px;
-  margin-inline: auto;
-  padding-inline: 18px;
+.sentinel {
+  height: 1px;
 }
-
-.sentinel { height: 1px; }

@@ -1,4 +1,3 @@
-//my-project/src/components/homepage/homepage-client.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -184,18 +183,6 @@ const useReduced = () => {
 };
 
 /* ===================== CTA sequence & rules ===================== */
-/**
- * Futuristic, low-maintenance routing strategy:
- * 1) If Strapi provides an explicit URL → use it (rewriting /audience-categories/* → /collections/*).
- * 2) If Strapi provides an audience/category/collection RELATION with slug → /collections/{slug}. (PRIMARY)
- * 3) If Strapi provides a product slug relation → /products/{slug}.
- * 4) Otherwise fallback to label/title slugify → /collections/{slugifiedLabel}. (FALLBACK)
- *
- * BottomFloatingBar already uses /collections/{slug}, so homepage is aligned automatically.
- */
-
-// Keep labels exactly (UI unchanged). Hrefs are no longer hardcoded per label;
-// they will be computed via the resolver to reduce future work.
 const SEQ = [
   { label: "Explore", href: "/product" },
   { label: "Women" },
@@ -228,7 +215,7 @@ function rewriteToCollections(u) {
   }
 }
 
-/* Fallback slugify (matches BottomFloatingBar intent) */
+/* Fallback slugify */
 function slugifyAudienceLabel(input) {
   const raw = (input ?? "").toString().trim();
   if (!raw) return "";
@@ -265,7 +252,6 @@ function resolveCTA({ slide, slotIndex }) {
       ? { label: "Explore", href: "/product" }
       : SEQ[slotIndex] || { label: "Shop Now", href: "/product" };
 
-  // pick label (prefer Strapi; then slide title/name; then SEQ)
   const labelCandidates = [
     fromAttrs(slide, "cta_text"),
     fromAttrs(slide, "cta_label"),
@@ -282,12 +268,10 @@ function resolveCTA({ slide, slotIndex }) {
     .toString()
     .trim();
 
-  // Explore → all products (keep existing behavior)
   if (pickedLabel.toLowerCase() === "explore") {
     return { label: pickedLabel, href: "/product" };
   }
 
-  // 1) explicit Strapi link (rewrite legacy audience-categories → collections)
   const linkCandidates = [
     fromAttrs(slide, "cta_link"),
     fromAttrs(slide, "cta_url"),
@@ -314,7 +298,6 @@ function resolveCTA({ slide, slotIndex }) {
     if (u) return { label: pickedLabel, href: rewriteToCollections(u) };
   }
 
-  // 2) PRIMARY: audience/category/collection relation slug → /collections/{slug}
   const directAudienceSlugKeys = ["audience_slug", "category_slug", "collection_slug", "audienceSlug"];
   for (const k of directAudienceSlugKeys) {
     const raw = fromAttrs(slide, k);
@@ -341,7 +324,6 @@ function resolveCTA({ slide, slotIndex }) {
     if (s) return { label: pickedLabel, href: `/collections/${s.replace(/^\/+/, "")}` };
   }
 
-  // 3) product slug relation → /products/{slug}
   const productKeys = [
     "product_slug",
     "product",
@@ -364,11 +346,9 @@ function resolveCTA({ slide, slotIndex }) {
     if (s) return { label: pickedLabel, href: `/products/${s.replace(/^\/+/, "")}` };
   }
 
-  // 4) FALLBACK: label/title => /collections/{slugifiedLabel}
   const slug = slugifyAudienceLabel(pickedLabel);
   if (slug) return { label: pickedLabel, href: `/collections/${slug}` };
 
-  // last resort fallback (should rarely happen)
   if (fallback?.href) return { label: pickedLabel || fallback.label, href: fallback.href };
   return { label: pickedLabel || "Shop Now", href: "/product" };
 }
@@ -378,8 +358,22 @@ function PremiumButton({ label, href }) {
   return (
     <a
       href={href}
-      className="px-12 py-3 bg-white text-[#142149] text-lg md:text-xl font-extrabold rounded-[0.8rem] shadow-xl border border-neutral-200 hover:bg-[#f1f3f8] hover:text-[#06103B] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-[#1A2452] tracking-wide flex items-center justify-center"
-      style={{ minWidth: 220, letterSpacing: ".02em", textAlign: "center" }}
+      className="
+        bg-white text-[#142149] font-extrabold shadow-xl border border-neutral-200
+        hover:bg-[#f1f3f8] hover:text-[#06103B] transition-all duration-200
+        focus:outline-none focus:ring-2 focus:ring-[#1A2452]
+        flex items-center justify-center
+        rounded-[0.8rem]
+        px-6 py-3 text-base
+        sm:px-10 sm:text-lg
+        lg:px-12 lg:text-xl
+      "
+      style={{
+        width: "min(520px, calc(100vw - 2 * (var(--page-gutter-x) + var(--safe-left))))",
+        maxWidth: "92vw",
+        letterSpacing: ".02em",
+        textAlign: "center",
+      }}
     >
       {label}
     </a>
@@ -403,22 +397,14 @@ function sizesForColumns(columns) {
 }
 
 /* ========================= Media Tile ========================= */
-/**
- * SMART PREFERENCE (your rule):
- * - Prefer filling the frame with the whole image: contain + tiny safe scale to hide bands.
- * - Letterbox/pillarbox is the absolute last resort (big disparity).
- * - Main hero (hero_slides / Explore CTA) NEVER letterboxes → always cover.
- * - No distortion ever.
- * - Sharp via srcSet + sizes (browser picks the highest-res available).
- */
 function MediaTile({
   slide,
   mode = "grid",
   active,
   eager = false,
   sizesHint = null,
-  forceCover = false, // ← for main hero
-  focal = "center", // pass precomputed focal
+  forceCover = false,
+  focal = "center",
 }) {
   const img = imgUrlOf(slide);
   const imgNode = pickImageNode(slide);
@@ -430,7 +416,7 @@ function MediaTile({
   const visible = useInViewport(wrapRef, "200px");
   const { reduced, saveData } = useReduced();
 
-  const [fit, setFit] = useState(forceCover ? "cover" : "containSafe"); // "cover" | "containSafe" | "contain"
+  const [fit, setFit] = useState(forceCover ? "cover" : "containSafe");
   const [scale, setScale] = useState(1);
 
   function decideFitForBox(iw, ih, cw, ch) {
@@ -438,7 +424,7 @@ function MediaTile({
 
     const arI = iw / ih;
     const arF = cw / ch;
-    const disparity = Math.max(arF / arI, arI / arF); // >=1
+    const disparity = Math.max(arF / arI, arI / arF);
 
     const coverScale = Math.max(cw / iw, ch / ih);
     const containScale = Math.min(cw / iw, ch / ih);
@@ -564,7 +550,6 @@ function MediaTile({
 
   const styleForVideo = styleForImg;
 
-  // Render image (or fallback to video)
   if (img || (!mp4 && !hls && !webm)) {
     if (!img) return null;
     return (
@@ -685,18 +670,14 @@ function FullBleedSingle({ slides, cta, eagerFirst = false, onBlankClick }) {
   if (!slides?.length) return null;
   return (
     <section
-      className="shadow-2xl relative"
+      className="shadow-2xl relative full-bleed"
       style={{
-        width: "100vw",
-        marginLeft: "calc(-50vw + 50%)",
-        marginRight: "calc(-50vw + 50%)",
         background: "#fff",
         borderRadius: 0,
         boxShadow: "0 10px 64px #e5e5e5cc",
       }}
       onClick={onBlankClick}
     >
-      {/* hero_slides must NEVER letterbox → forceCover */}
       <HeroCarousel slides={slides} mode="single" eagerFirst={eagerFirst} sizesHint="100vw" forceCover />
       <div className="flex justify-center items-center" style={{ margin: "10px 0 22px 0" }}>
         <PremiumButton label={cta.label} href={cta.href} />
@@ -712,15 +693,7 @@ function GridRow({ items, columns, onBlankClick }) {
   const sizesHint = sizesForColumns(columns);
 
   return (
-    <section
-      style={{
-        width: "100vw",
-        marginLeft: "calc(-50vw + 50%)",
-        marginRight: "calc(-50vw + 50%)",
-        background: "#fff",
-        boxSizing: "border-box",
-      }}
-    >
+    <section className="full-bleed" style={{ background: "#fff", boxSizing: "border-box" }}>
       <div className="hero-grid" style={{ "--cols": columns }}>
         {usable.map((it, i) => {
           const firstSlide = it.slides?.[0] || {};
@@ -742,15 +715,46 @@ function GridRow({ items, columns, onBlankClick }) {
       </div>
 
       <style>{`
+        /* Full-bleed that does NOT overflow on iOS/Android */
+        .full-bleed{
+          width: 100svw;
+          margin-left: calc(50% - 50svw);
+          margin-right: calc(50% - 50svw);
+          overflow-x: clip;
+        }
+
         .hero-grid {
           display: grid;
           grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
           align-items: stretch;
-          gap: 80px; /* horizontal spacing */
+          gap: 80px;
           width: 100%;
         }
         @media (min-width: 1440px) {
           .hero-grid { gap: 96px; }
+        }
+
+        /* Mobile: remove clutter, never overflow, keep structure premium */
+        @media (max-width: 1023px) {
+          .hero-grid {
+            grid-template-columns: 1fr;
+            gap: clamp(16px, 4vw, 26px);
+            padding-left: calc(var(--page-gutter-x) + var(--safe-left));
+            padding-right: calc(var(--page-gutter-x) + var(--safe-right));
+          }
+        }
+
+        /* Small landscape / wider phones: 2-column (still safe) */
+        @media (max-width: 1023px) and (min-width: 680px) {
+          .hero-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        /* Keep single hero full-bleed; add safe padding only on mobile */
+        @media (max-width: 768px) {
+          .full-bleed{
+            padding-left: calc(var(--page-gutter-x) + var(--safe-left));
+            padding-right: calc(var(--page-gutter-x) + var(--safe-right));
+          }
         }
       `}</style>
     </section>
@@ -856,7 +860,6 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
     }
   }, [homepage]);
 
-  // tolerant to different Strapi envelopes
   const attrs = (homepage && (homepage.attributes || (homepage.data && homepage.data.attributes))) || {};
 
   const groups = useMemo(() => collectGroups(attrs), [attrs]);
@@ -882,22 +885,35 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
   }
 
   return (
-    <div className="relative min-h-screen w-full bg-white" onClick={handleHideTDLC}>
+    <div
+      className="relative min-h-screen w-full bg-white"
+      onClick={handleHideTDLC}
+      style={{
+        /* Ensure content never hides behind bottom bar on tiny devices */
+        paddingBottom: "calc(var(--bottom-bar-h, 64px) + var(--safe-bottom) + 18px)",
+      }}
+    >
       <style jsx global>{`
         :root {
-          --hero-h: clamp(560px, 100svh, 1100px);
+          /* Mobile-safe hero height system (centralized) */
+          --hero-h: clamp(var(--hero-min-h, 320px), 78svh, var(--hero-max-h, 980px));
+
           --tdlc-bar-h: var(--tdlc-bar-h, 64px);
-          --hero-section-gap: 56px;
+
+          /* Desktop gap preserved; mobile overrides come from variables.css */
+          --hero-section-gap: var(--stack-gap, 56px);
         }
+
         @media (min-width: 1024px) {
-          :root {
-            --hero-section-gap: 80px;
-          }
+          :root { --hero-section-gap: 80px; }
         }
         @media (min-width: 1440px) {
-          :root {
-            --hero-section-gap: 112px;
-          }
+          :root { --hero-section-gap: 112px; }
+        }
+
+        /* Short-height landscape devices: reduce hero to prevent vertical break */
+        @media (max-height: 480px) {
+          :root { --hero-h: clamp(220px, 74svh, var(--hero-max-h, 520px)); }
         }
       `}</style>
 
@@ -913,22 +929,24 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            width: "100vw",
+            width: "100svw",
             zIndex: 9999,
             fontFamily: "'Playfair Display', serif",
             fontWeight: 530,
-            fontSize: "25.5rem",
-            letterSpacing: ".18em",
+            /* Responsive: never overflows on mobile */
+            fontSize: "clamp(5.2rem, 22vw, 25.5rem)",
+            letterSpacing: "clamp(.06em, 1.2vw, .18em)",
             color: "#06103B",
             textAlign: "center",
             textShadow: "0 4px 36px #f9f6e855",
-            lineHeight: 1.12,
+            lineHeight: 1.05,
             pointerEvents: "none",
             userSelect: "none",
             transition: "opacity .00s",
             opacity: 1,
-            padding: "32px 0",
+            padding: "clamp(10px, 2.5vw, 32px) 0",
             boxShadow: "0 8px 44px #e6e6e6d8",
+            overflow: "hidden",
           }}
         >
           TDLC
@@ -945,7 +963,12 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
           const cta = resolveCTA({ slide: firstSlide, slotIndex: 0 });
           return (
             <div key={`row-${i}`} style={{ marginTop: i === 0 ? "0.6rem" : "var(--hero-section-gap)" }}>
-              <FullBleedSingle slides={item.slides} cta={cta} eagerFirst={i === 0} onBlankClick={handleHeroBlankClick} />
+              <FullBleedSingle
+                slides={item.slides}
+                cta={cta}
+                eagerFirst={i === 0}
+                onBlankClick={handleHeroBlankClick}
+              />
             </div>
           );
         }
@@ -962,18 +985,26 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
         </div>
       )}
 
+      {/* Safe-area aware fixed actions (no inches; never off-screen) */}
       <div
         style={{
           position: "fixed",
-          right: "1.5in",
-          bottom: "calc(var(--tdlc-bar-h, 64px) + 1in)",
+          right: "calc(14px + var(--safe-right))",
+          bottom: "calc(var(--bottom-bar-h, 64px) + var(--safe-bottom) + 14px)",
           zIndex: 60,
         }}
       >
         <Whatsappchatbutton />
       </div>
 
-      <div className="fixed right-6 bottom-24 z-50">
+      <div
+        style={{
+          position: "fixed",
+          right: "calc(14px + var(--safe-right))",
+          bottom: "calc(var(--bottom-bar-h, 64px) + var(--safe-bottom) + 72px)",
+          zIndex: 60,
+        }}
+      >
         <ThemeToggle />
       </div>
 

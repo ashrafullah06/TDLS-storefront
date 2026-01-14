@@ -147,7 +147,9 @@ const readVariants = (p) => {
 
 const fallbackColors = (p) => {
   const A = p?.attributes || {};
-  const candidates = [p?.colors, A?.colors, A?.color_options, A?.color_names, A?.color_names, get(A, "color.data")].flat?.() || [];
+  const candidates =
+    [p?.colors, A?.colors, A?.color_options, A?.color_names, A?.color_names, get(A, "color.data")]
+      .flat?.() || [];
   return (Array.isArray(candidates) ? candidates : [])
     .map((c) =>
       typeof c === "string"
@@ -280,15 +282,15 @@ const normalizeVariants = (p) => {
               ? sz.inventory
               : variantStockTotal;
 
-          const img =
-            get(sz, "image.data.attributes.url") || sz?.image?.url || sz?.image || variantImg;
+          const img = get(sz, "image.data.attributes.url") || sz?.image?.url || sz?.image || variantImg;
 
           const size_stock_id = sz?.id || null;
 
           const sku = sz?.sku || v?.sku || null;
           const barcode = sz?.barcode || v?.barcode || null;
 
-          const sz_prisma_id = sz?.prisma_id || sz?.pid || sz?.variant_pid || pv_prisma_id || null;
+          const sz_prisma_id =
+            sz?.prisma_id || sz?.pid || sz?.variant_pid || pv_prisma_id || null;
 
           flattened.push({
             color_name,
@@ -556,9 +558,8 @@ const pickVariantForSelection = (variants, selection) => {
   return bySize[0] || byColor[0] || variants[0] || null;
 };
 
-/* ---------------- premium icons (updated wishlist/share as requested) ---------------- */
+/* ---------------- premium icons ---------------- */
 function IconWishlist({ filled = false, size = 18 }) {
-  // Premium heart with crown notch (distinct from prior)
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
@@ -581,7 +582,6 @@ function IconWishlist({ filled = false, size = 18 }) {
 }
 
 function IconSharePremium({ size = 18 }) {
-  // Premium share with rounded nodes + arrow
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
@@ -597,22 +597,9 @@ function IconSharePremium({ size = 18 }) {
         strokeWidth="1.6"
         strokeLinecap="round"
       />
-      <path
-        d="M7.2 12.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"
-        stroke="#0f2147"
-        strokeWidth="1.6"
-      />
-      <path
-        d="M19.1 13.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"
-        stroke="#0f2147"
-        strokeWidth="1.6"
-      />
-      <path
-        d="M9.4 14l7.3 1.1"
-        stroke="#0f2147"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
+      <path d="M7.2 12.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z" stroke="#0f2147" strokeWidth="1.6" />
+      <path d="M19.1 13.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z" stroke="#0f2147" strokeWidth="1.6" />
+      <path d="M9.4 14l7.3 1.1" stroke="#0f2147" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -620,12 +607,7 @@ function IconSharePremium({ size = 18 }) {
 function IconCopy({ size = 18 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M9 9h10v12H9V9z"
-        stroke="#0f2147"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
+      <path d="M9 9h10v12H9V9z" stroke="#0f2147" strokeWidth="1.6" strokeLinejoin="round" />
       <path
         d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"
         stroke="#0f2147"
@@ -650,6 +632,8 @@ function Star({ filled, onClick, size = 18, title, disabled = false }) {
         cursor: disabled ? "default" : "pointer",
         lineHeight: 0,
         opacity: disabled ? 0.85 : 1,
+        WebkitTapHighlightColor: "transparent",
+        touchAction: "manipulation",
       }}
       aria-label={title}
     >
@@ -666,7 +650,7 @@ function Star({ filled, onClick, size = 18, title, disabled = false }) {
   );
 }
 
-/* ---------------- robust JSON fetch (no placeholders; tries existing routes) ---------------- */
+/* ---------------- robust JSON fetch ---------------- */
 async function tryFetchJSON(url, init) {
   const r = await fetch(url, { cache: "no-store", ...init });
   const j = await r.json().catch(() => ({}));
@@ -685,7 +669,7 @@ async function smartFetchJSON(candidates, init) {
   return { ok: false, status: 404, json: {}, used: candidates?.[0] || "" };
 }
 
-/* ---------------- Strapi details normalizers (no guessing; render only real fields) ---------------- */
+/* ---------------- Strapi details normalizers ---------------- */
 const isPlainPrimitive = (v) =>
   v == null || typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 
@@ -695,7 +679,6 @@ const toText = (v) => {
   if (typeof v === "number") return Number.isFinite(v) ? String(v) : null;
   if (typeof v === "boolean") return v ? "Yes" : "No";
 
-  // arrays: join primitives; for objects attempt best-effort string extraction
   if (Array.isArray(v)) {
     const parts = v
       .map((x) => {
@@ -708,11 +691,8 @@ const toText = (v) => {
   }
 
   if (v && typeof v === "object") {
-    // Strapi media / relation shape
     const relName = v?.data?.attributes?.name || v?.data?.attributes?.title || null;
     if (relName) return String(relName);
-
-    // generic best effort
     const maybe = v?.name || v?.label || v?.title || v?.value || null;
     return maybe ? String(maybe) : null;
   }
@@ -772,9 +752,7 @@ export default function ClientUX({ product }) {
   const [hoveredCTA, setHoveredCTA] = useState(null);
   const [validationError, setValidationError] = useState(null);
 
-  // Customer auth (central truth via /api/auth/session). Used to:
-  // - Hide/guard wishlist for guests
-  // - Avoid false "not logged in" prompts for already-authenticated customers
+  // Customer auth
   const [customerAuth, setCustomerAuth] = useState({ checked: false, userId: null, raw: null });
 
   useEffect(() => {
@@ -783,37 +761,31 @@ export default function ClientUX({ product }) {
       try {
         const r = await fetch("/api/auth/session", { cache: "no-store" });
         const j = await r.json().catch(() => null);
-
-        // Support multiple response shapes (your route returns { ok, user, session }).
         const uid =
           j?.user?.id ??
           j?.session?.user?.id ??
           j?.session?.userId ??
           j?.session?.user?.userId ??
           null;
-
         if (!cancelled) setCustomerAuth({ checked: true, userId: uid ? String(uid) : null, raw: j });
       } catch {
         if (!cancelled) setCustomerAuth({ checked: true, userId: null, raw: null });
       }
     })();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Unified action feedback (success/fail) for wishlist/share/copy/rating/reviews.
-  // Updated: execution notice now anchors near the CTA that was clicked (no new panels/drawers).
+  // Toast
   const [toast, setToast] = useState({
     open: false,
-    type: "info", // info | success | error
+    type: "info",
     title: "",
     message: "",
     actionLabel: "",
   });
-
-  const [toastPos, setToastPos] = useState(null); // { x, y, placeAbove }
+  const [toastPos, setToastPos] = useState(null);
   const toastActionRef = useRef(null);
   const toastTimerRef = useRef(null);
 
@@ -836,26 +808,22 @@ export default function ClientUX({ product }) {
       const vw = window.innerWidth || 0;
       const vh = window.innerHeight || 0;
 
-      const maxW = 420; // toast max width
-      const approxH = 130; // safe approx to keep within viewport
+      const maxW = 420;
+      const approxH = 130;
 
       const pad = 10;
       const gap = 10;
 
       let placeAbove = false;
-      // default: below
       let y = r.bottom + gap;
 
-      // if too close to bottom, place above
       if (y + approxH > vh - pad) {
         placeAbove = true;
         y = r.top - gap;
       }
 
-      // clamp Y
       y = Math.max(pad, Math.min(y, vh - pad));
 
-      // align left with CTA, clamp X
       let x = r.left;
       x = Math.max(pad, Math.min(x, vw - pad - Math.min(maxW, vw - pad * 2)));
 
@@ -871,7 +839,6 @@ export default function ClientUX({ product }) {
       const actionLabel = String(opts?.actionLabel || "").trim();
       toastActionRef.current = typeof opts?.onAction === "function" ? opts.onAction : null;
 
-      // Anchor near the CTA that triggered it (if provided)
       const anchorEl = opts?.anchorEl || null;
       const pos = anchorEl ? computeToastPosFromEl(anchorEl) : null;
       setToastPos(pos);
@@ -898,13 +865,9 @@ export default function ClientUX({ product }) {
 
   const ensureCustomerAuthed = useCallback(
     (redirectPath = null) => {
-      // If auth has not been checked yet, we still allow UI to render,
-      // but actions that require auth should prompt/redirect.
       const authed = Boolean(customerAuth.checked && customerAuth.userId);
-
       if (authed) return true;
 
-      // Guests must not have wishlist at all — prompt and redirect to login.
       const target = redirectPath || "/wishlist";
       const redirectTo = encodeURIComponent(String(target));
       showToast("info", "Wishlist", "Please log in to use wishlist.", { ms: 2200 });
@@ -930,12 +893,12 @@ export default function ClientUX({ product }) {
   const [wishlisted, setWishlisted] = useState(false);
   const [wishlistBusy, setWishlistBusy] = useState(false);
 
-  // Reviews (DB-based)
+  // Reviews
   const [reviewsBusy, setReviewsBusy] = useState(false);
   const [reviewsError, setReviewsError] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [reviewSummary, setReviewSummary] = useState({ count: 0, avgRating: 0, distribution: {} });
-  const [reviewSort, setReviewSort] = useState("recent"); // recent | helpful | highest | lowest
+  const [reviewSort, setReviewSort] = useState("recent");
   const [reviewPage, setReviewPage] = useState(1);
   const [reviewHasMore, setReviewHasMore] = useState(false);
 
@@ -949,9 +912,7 @@ export default function ClientUX({ product }) {
   const [reportReason, setReportReason] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
 
-  // Details accordion
   const [openDetailKey, setOpenDetailKey] = useState("overview");
-
   const reviewMountedRef = useRef(false);
 
   const variants = useMemo(() => (product ? normalizeVariants(product) : []), [product]);
@@ -998,7 +959,6 @@ export default function ClientUX({ product }) {
     return m;
   }, [variants, selection.color]);
 
-  // Size-based pricing (color-aware) — shows real variant pricing if present (no placeholders)
   const sizePriceMap = useMemo(() => {
     const m = new Map();
     variants.forEach((v) => {
@@ -1027,14 +987,8 @@ export default function ClientUX({ product }) {
     "BDT"
   ).toUpperCase();
 
-  const price = useMemo(
-    () => (product ? derivePrice(product, variants, selection) : null),
-    [product, variants, selection]
-  );
-  const stock = useMemo(
-    () => (product ? deriveStock(product, variants, selection) : null),
-    [product, variants, selection]
-  );
+  const price = useMemo(() => (product ? derivePrice(product, variants, selection) : null), [product, variants, selection]);
+  const stock = useMemo(() => (product ? deriveStock(product, variants, selection) : null), [product, variants, selection]);
 
   const name = product?.name || A?.name || product?.title || A?.title || "Product";
   const slug = product?.slug || A?.slug || "";
@@ -1049,7 +1003,7 @@ export default function ClientUX({ product }) {
 
   const brandTierSlug =
     (Array.isArray(product?.brand_tiers_slugs) && product.brand_tiers_slugs[0]) ||
-    (Array.isArray(A?.brand_tiers_slugs) && A?.brand_tiers_slugs[0]) ||
+    (Array.isArray(A?.brand_tiers_slugs) && A.brand_tiers_slugs[0]) ||
     null;
 
   const tierLabelRaw =
@@ -1067,13 +1021,13 @@ export default function ClientUX({ product }) {
 
   const primaryCategorySlug =
     (Array.isArray(product?.categories_slugs) && product.categories_slugs[0]) ||
-    (Array.isArray(A?.categories_slugs) && A?.categories_slugs[0]) ||
+    (Array.isArray(A?.categories_slugs) && A.categories_slugs[0]) ||
     null;
   const primaryCategoryLabel = primaryCategorySlug ? slugToLabel(primaryCategorySlug) : null;
 
   const primaryAudienceSlug =
     (Array.isArray(product?.audience_categories_slugs) && product.audience_categories_slugs[0]) ||
-    (Array.isArray(A?.audience_categories_slugs) && A?.audience_categories_slugs[0]) ||
+    (Array.isArray(A?.audience_categories_slugs) && A.audience_categories_slugs[0]) ||
     null;
   const primaryAudienceLabel = primaryAudienceSlug ? slugToLabel(primaryAudienceSlug) : null;
 
@@ -1110,7 +1064,6 @@ export default function ClientUX({ product }) {
     A?.size_system ||
     null;
 
-  // Strapi descriptions (render only if present; no placeholders)
   const shortDescription =
     A?.short_description || A?.shortDescription || product?.short_description || product?.shortDescription || null;
 
@@ -1126,7 +1079,6 @@ export default function ClientUX({ product }) {
   const shippingNote =
     A?.shipping_note || A?.shippingNote || product?.shipping_note || product?.shippingNote || null;
 
-  // Extra Strapi fields (render only if they exist)
   const highlightsRaw =
     pickAnyRaw(A, ["highlights", "key_features", "keyFeatures", "features", "feature_list", "featureList"]) ||
     pickAnyRaw(product, ["highlights", "key_features", "features"]);
@@ -1134,46 +1086,30 @@ export default function ClientUX({ product }) {
   const highlights = useMemo(() => toBullets(highlightsRaw), [highlightsRaw]);
 
   const sizeGuide =
-    pickAny(A, ["size_guide", "sizeGuide", "fit_guide", "fitGuide", "measurements_note", "measurementsNote"]) ||
-    null;
+    pickAny(A, ["size_guide", "sizeGuide", "fit_guide", "fitGuide", "measurements_note", "measurementsNote"]) || null;
 
   const origin =
-    pickAny(A, ["origin", "country_of_origin", "countryOfOrigin", "made_in", "madeIn"]) ||
-    null;
+    pickAny(A, ["origin", "country_of_origin", "countryOfOrigin", "made_in", "madeIn"]) || null;
 
   const collection =
-    pickAny(A, ["collection", "collection_name", "collectionName", "capsule", "drop"]) ||
-    null;
+    pickAny(A, ["collection", "collection_name", "collectionName", "capsule", "drop"]) || null;
 
-  const season =
-    pickAny(A, ["season", "season_name", "seasonName"]) ||
-    null;
+  const season = pickAny(A, ["season", "season_name", "seasonName"]) || null;
 
-  const occasion =
-    pickAny(A, ["occasion", "occasions", "wear_for", "wearFor"]) ||
-    null;
+  const occasion = pickAny(A, ["occasion", "occasions", "wear_for", "wearFor"]) || null;
 
-  const pattern =
-    pickAny(A, ["pattern", "print", "print_type", "printType"]) ||
-    null;
+  const pattern = pickAny(A, ["pattern", "print", "print_type", "printType"]) || null;
 
   const craft =
-    pickAny(A, ["craft", "craftsmanship", "embroidery", "embroidery_type", "embroideryType"]) ||
-    null;
+    pickAny(A, ["craft", "craftsmanship", "embroidery", "embroidery_type", "embroideryType"]) || null;
 
-  const wash =
-    pickAny(A, ["wash", "wash_type", "washType", "finish", "finishing"]) ||
-    null;
+  const wash = pickAny(A, ["wash", "wash_type", "washType", "finish", "finishing"]) || null;
 
-  const warranty =
-    pickAny(A, ["warranty", "warranty_note", "warrantyNote"]) ||
-    null;
+  const warranty = pickAny(A, ["warranty", "warranty_note", "warrantyNote"]) || null;
 
-  const tagsText =
-    pickAny(A, ["tags", "tag_list", "tagList"]) ||
-    null;
+  const tagsText = pickAny(A, ["tags", "tag_list", "tagList"]) || null;
 
-  /* ---------------- lifecycle: defaults (copied behavior) ---------------- */
+  /* ---------------- lifecycle: defaults ---------------- */
   useEffect(() => {
     if (!product) return;
     setIdx(0);
@@ -1203,7 +1139,7 @@ export default function ClientUX({ product }) {
     });
   }, [product, variants, colors]);
 
-  /* ---------------- selection + stock guards (copied) ---------------- */
+  /* ---------------- selection + stock guards ---------------- */
   const ensureSelection = () => {
     if (requiresColor && !selection.color && requiresSize && !selection.size) {
       setValidationError("Please select both color and size to continue.");
@@ -1229,7 +1165,7 @@ export default function ClientUX({ product }) {
     return { ok: true };
   };
 
-  /* ---------------- cart line builder (copied logic) ---------------- */
+  /* ---------------- cart line builder ---------------- */
   const addToCartLine = () => {
     const selCheck = ensureSelection();
     if (!selCheck.ok) return null;
@@ -1326,7 +1262,7 @@ export default function ClientUX({ product }) {
 
   const handleAddToCart = () => addToCartLine();
 
-  /* ---------------- buy now (kept intact; CTA removed as requested) ---------------- */
+  /* ---------------- buy now ---------------- */
   const buyNowServer = useCallback(async () => {
     const selCheck = ensureSelection();
     if (!selCheck.ok) return;
@@ -1400,26 +1336,19 @@ export default function ClientUX({ product }) {
       selectedSize: selection.size || null,
       colorLabel: selection.color || null,
       sizeLabel: selection.size || null,
-
       productCode,
       baseSku,
       productBarcode,
-
       variantId: sizeStockId ? String(sizeStockId) : null,
       rawVariantId: sizeStockId,
       strapiSizeId: sizeStockId ? String(sizeStockId) : null,
-
       variantPrismaId: variantPrismaId ? String(variantPrismaId) : null,
-
       productVariantStrapiId: chosen?.pv_id ? String(chosen.pv_id) : null,
-
       sku,
       barcode,
-
       fabric,
       gsm,
       fit,
-
       metadata,
     };
 
@@ -1438,9 +1367,6 @@ export default function ClientUX({ product }) {
       }
       setValidationError(null);
 
-      // IMPORTANT (per spec): Buy Now must behave like "Add to Cart" + "Go to Cart",
-      // but must NOT open the cart drawer/panel. The cart context's `addItem` emits
-      // a global `cart:open-panel` event, so we temporarily suppress it.
       try {
         if (typeof window !== "undefined") {
           const suppress = (e) => {
@@ -1454,8 +1380,6 @@ export default function ClientUX({ product }) {
             window.addEventListener("cart:open-panel", suppress, { capture: true });
           } catch {}
           try {
-            // Mirror the server-side cart add into the client cart context so the /cart page
-            // immediately reflects the added item (even if that page renders from context).
             addToCartLine();
           } finally {
             try {
@@ -1466,7 +1390,7 @@ export default function ClientUX({ product }) {
           addToCartLine();
         }
       } catch {
-        // Non-fatal: server cart already updated via /api/buy-now
+        // non-fatal
       }
 
       router.push("/cart");
@@ -1495,7 +1419,7 @@ export default function ClientUX({ product }) {
     requiresSize,
   ]);
 
-  /* ---------------- premium wishlist wiring (tries common existing APIs) ---------------- */
+  /* ---------------- wishlist wiring ---------------- */
   const wishlistIdentifiers = useMemo(() => {
     const pidExternal =
       productCode || A?.documentId || A?.uuid || slug || (product?.id != null ? String(product.id) : null);
@@ -1511,12 +1435,10 @@ export default function ClientUX({ product }) {
 
   const loadWishlistStatus = useCallback(async () => {
     if (!product) return;
-    // Wishlist is account-only. If not authenticated, treat as not wishlisted and stop.
     if (customerAuth.checked && !customerAuth.userId) {
       setWishlisted(false);
       return;
     }
-    // If auth check hasn't completed yet, don't fire a status request (prevents false 401 noise).
     if (!customerAuth.checked) return;
 
     const qs = new URLSearchParams();
@@ -1525,12 +1447,9 @@ export default function ClientUX({ product }) {
     if (wishlistIdentifiers.productCode) qs.set("productCode", wishlistIdentifiers.productCode);
     if (wishlistIdentifiers.pid) qs.set("pid", wishlistIdentifiers.pid);
 
-    // Prefer customer route first (it supports status queries); keep /status as fallback
     const candidates = [`/api/wishlist?${qs.toString()}`, `/api/wishlist/status?${qs.toString()}`];
-
     const res = await smartFetchJSON(candidates);
 
-    // Support both legacy `wishlisted` and current customer API `inWishlist`
     const w =
       typeof res?.json?.inWishlist === "boolean"
         ? res.json.inWishlist
@@ -1540,7 +1459,7 @@ export default function ClientUX({ product }) {
         ? res.json.wishlisted
         : typeof res?.json?.data?.wishlisted === "boolean"
         ? res.json.data.wishlisted
-        : (!!res?.json?.items && Array.isArray(res.json.items) && res.json.items.length > 0);
+        : !!(res?.json?.items && Array.isArray(res.json.items) && res.json.items.length > 0);
 
     setWishlisted(!!w);
   }, [product, wishlistIdentifiers, customerAuth.checked, customerAuth.userId]);
@@ -1549,12 +1468,9 @@ export default function ClientUX({ product }) {
     async (anchorEl = null) => {
       if (!product || wishlistBusy) return;
 
-      // Account-only: guests must not use wishlist.
       const redirectTarget = slug ? `/product/${encodeURIComponent(String(slug))}` : "/wishlist";
       if (!ensureCustomerAuthed(redirectTarget)) return;
 
-      // IMPORTANT: From the product page, wishlist is ADD-ONLY.
-      // Removal is allowed only inside the wishlist page UI.
       if (wishlisted) {
         showToast("info", "Wishlist", "Already in your wishlist.", {
           ms: 1800,
@@ -1576,8 +1492,6 @@ export default function ClientUX({ product }) {
 
       try {
         const payload = {
-          // Prefer add-only semantics; legacy APIs may ignore and treat as toggle,
-          // but we gate duplicates above so it will not remove from this page.
           action: "add",
           ...wishlistIdentifiers,
           name,
@@ -1588,9 +1502,7 @@ export default function ClientUX({ product }) {
           selectedSize: selection.size || null,
         };
 
-        // Prefer explicit add route when available; fallback to existing customer/legacy handlers.
         const candidates = ["/api/wishlist/add", "/api/wishlist", "/api/wishlist/toggle"];
-
         const res = await smartFetchJSON(candidates, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1598,43 +1510,20 @@ export default function ClientUX({ product }) {
         });
 
         if (res.ok) {
-          const inferred =
-            typeof res.json?.inWishlist === "boolean"
-              ? res.json.inWishlist
-              : typeof res.json?.data?.inWishlist === "boolean"
-              ? res.json.data.inWishlist
-              : typeof res.json?.wishlisted === "boolean"
-              ? res.json.wishlisted
-              : typeof res.json?.data?.wishlisted === "boolean"
-              ? res.json.data.wishlisted
-              : res.json?.action === "removed"
-              ? false
-              : res.json?.action === "added"
-              ? true
-              : true;
-
-          // Enforce add-only semantics from this page.
           setWishlisted(true);
-
-          showToast(
-            "success",
-            "Wishlist",
-            inferred ? "Added to wishlist successfully." : "Already in your wishlist.",
-            {
-              ms: 2200,
-              actionLabel: "Open wishlist",
-              onAction: () => {
-                try {
-                  router.push("/wishlist");
-                } catch {
-                  if (typeof window !== "undefined") window.location.href = "/wishlist";
-                }
-              },
-              anchorEl,
-            }
-          );
+          showToast("success", "Wishlist", "Added to wishlist successfully.", {
+            ms: 2200,
+            actionLabel: "Open wishlist",
+            onAction: () => {
+              try {
+                router.push("/wishlist");
+              } catch {
+                if (typeof window !== "undefined") window.location.href = "/wishlist";
+              }
+            },
+            anchorEl,
+          });
         } else if (res.status === 401 || res.status === 403) {
-          // Session drift / missing cookie — treat as guest and send to login
           ensureCustomerAuthed(redirectTarget);
         } else {
           const msg =
@@ -1644,7 +1533,7 @@ export default function ClientUX({ product }) {
             `Add to wishlist failed (HTTP ${res.status}).`;
           showToast("error", "Wishlist", String(msg), { ms: 2600, anchorEl });
         }
-      } catch (e) {
+      } catch {
         showToast("error", "Wishlist", "Add to wishlist failed. Please try again.", { ms: 2400, anchorEl });
       } finally {
         setWishlistBusy(false);
@@ -1667,10 +1556,9 @@ export default function ClientUX({ product }) {
       slug,
     ]
   );
-/* ---------------- wishlist: open page (alias /wishlist -> /account/wishlist) ---------------- */
+
   const openWishlistPage = useCallback(() => {
     if (!ensureCustomerAuthed("/wishlist")) return;
-
     try {
       router.push("/wishlist");
       return;
@@ -1681,52 +1569,56 @@ export default function ClientUX({ product }) {
     showToast("error", "Wishlist", "Unable to open wishlist page.", { ms: 2400 });
   }, [router, showToast, ensureCustomerAuthed]);
 
-  /* ---------------- premium share ---------------- */
-  const shareProduct = useCallback(async (anchorEl = null) => {
-    const url = typeof window !== "undefined" ? window.location.href : slug ? `/product/${slug}` : "";
-    try {
-      if (navigator?.share) {
-        await navigator.share({
-          title: name,
-          text: shortDescription ? String(shortDescription).slice(0, 140) : name,
-          url,
-        });
-        showToast("success", "Share", "Share opened successfully.", { ms: 1800, anchorEl });
-        return;
-      }
-    } catch {
-      // ignore and fallback
-    }
-
-    // Clipboard fallback (works for most desktop browsers on HTTPS)
-    try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
-        showToast("success", "Share", "Link copied to clipboard.", { ms: 2000, anchorEl });
-        return;
-      }
-      throw new Error("clipboard_not_available");
-    } catch {
-      // Last-resort fallback: show the URL for manual copy (works on HTTP / restricted clipboard environments)
+  /* ---------------- share/copy ---------------- */
+  const shareProduct = useCallback(
+    async (anchorEl = null) => {
+      const url = typeof window !== "undefined" ? window.location.href : slug ? `/product/${slug}` : "";
       try {
-        if (typeof window !== "undefined") window.prompt("Copy this product link:", url);
-      } catch {}
-      showToast("error", "Share", "Unable to open system share. Please copy the link.", { ms: 2400, anchorEl });
-    }
-  }, [name, slug, shortDescription, showToast]);
+        if (navigator?.share) {
+          await navigator.share({
+            title: name,
+            text: shortDescription ? String(shortDescription).slice(0, 140) : name,
+            url,
+          });
+          showToast("success", "Share", "Share opened successfully.", { ms: 1800, anchorEl });
+          return;
+        }
+      } catch {
+        // fallback
+      }
 
-  const copyText = useCallback(async (txt, okMsg, anchorEl = null) => {
-    const s = String(txt || "").trim();
-    if (!s) return;
-    try {
-      await navigator.clipboard.writeText(s);
-      showToast("success", "Copy", okMsg || "Copied.", { ms: 1600, anchorEl });
-    } catch {
-      showToast("error", "Copy", "Copy failed.", { ms: 2000, anchorEl });
-    }
-  }, [showToast]);
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(url);
+          showToast("success", "Share", "Link copied to clipboard.", { ms: 2000, anchorEl });
+          return;
+        }
+        throw new Error("clipboard_not_available");
+      } catch {
+        try {
+          if (typeof window !== "undefined") window.prompt("Copy this product link:", url);
+        } catch {}
+        showToast("error", "Share", "Unable to open system share. Please copy the link.", { ms: 2400, anchorEl });
+      }
+    },
+    [name, slug, shortDescription, showToast]
+  );
 
-  /* ---------------- reviews wiring (DB-based via your API) ---------------- */
+  const copyText = useCallback(
+    async (txt, okMsg, anchorEl = null) => {
+      const s = String(txt || "").trim();
+      if (!s) return;
+      try {
+        await navigator.clipboard.writeText(s);
+        showToast("success", "Copy", okMsg || "Copied.", { ms: 1600, anchorEl });
+      } catch {
+        showToast("error", "Copy", "Copy failed.", { ms: 2000, anchorEl });
+      }
+    },
+    [showToast]
+  );
+
+  /* ---------------- reviews wiring ---------------- */
   const reviewProductKey = useMemo(() => {
     return {
       productId: product?.id != null ? String(product.id) : null,
@@ -1761,7 +1653,6 @@ export default function ClientUX({ product }) {
       const qs = buildReviewQS({ page: nextPage, sort: reviewSort });
 
       const candidates = [`/api/reviews?${qs}`, `/api/product-reviews?${qs}`, `/api/customer-reviews?${qs}`];
-
       const res = await smartFetchJSON(candidates);
 
       if (!res.ok && res.status !== 404) {
@@ -1791,9 +1682,7 @@ export default function ClientUX({ product }) {
       if (summary) setReviewSummary(summary);
 
       const hasMore =
-        typeof pageInfo?.hasMore === "boolean"
-          ? pageInfo.hasMore
-          : Array.isArray(list) && list.length >= 6;
+        typeof pageInfo?.hasMore === "boolean" ? pageInfo.hasMore : Array.isArray(list) && list.length >= 6;
 
       setReviewHasMore(hasMore);
 
@@ -1818,81 +1707,83 @@ export default function ClientUX({ product }) {
     }, 0);
   }, [reviewsBusy, reviewHasMore, reviewPage, loadReviews]);
 
-  const submitReview = useCallback(async (anchorEl = null) => {
-    if (!product) return;
-    if (!reviewRating || reviewRating < 1) {
-      setValidationError("Please select a star rating before submitting.");
-      showToast("error", "Rating/Review", "Please select a star rating before submitting.", { ms: 2400, anchorEl });
-      return;
-    }
-    const _comment = String(reviewComment || "").trim();
-    const _hasComment = _comment.length > 0;
-    if (_hasComment && _comment.length < 5) {
-      setValidationError("Please write at least 5 characters for your review.");
-      showToast("error", "Review", "Please write at least 5 characters.", { ms: 2400, anchorEl });
-      return;
-    }
+  const submitReview = useCallback(
+    async (anchorEl = null) => {
+      if (!product) return;
+      if (!reviewRating || reviewRating < 1) {
+        setValidationError("Please select a star rating before submitting.");
+        showToast("error", "Rating/Review", "Please select a star rating before submitting.", { ms: 2400, anchorEl });
+        return;
+      }
+      const _comment = String(reviewComment || "").trim();
+      const _hasComment = _comment.length > 0;
+      if (_hasComment && _comment.length < 5) {
+        setValidationError("Please write at least 5 characters for your review.");
+        showToast("error", "Review", "Please write at least 5 characters.", { ms: 2400, anchorEl });
+        return;
+      }
 
-    setReviewSubmitBusy(true);
-    setValidationError(null);
+      setReviewSubmitBusy(true);
+      setValidationError(null);
 
-    const payload = {
-      action: "create",
-      productId: reviewProductKey.productId || reviewProductKey.pid || reviewProductKey.slug || "",
-      variantId: displayVariantId != null ? String(displayVariantId) : null,
-      rating: reviewRating,
-      title: null,
-      body: _hasComment ? _comment : null,
-      displayName: String(reviewName || "").trim() || null,
-      anonymous: false,
-      wouldRecommend: null,
-      fitFeedback: null,
-      email: String(reviewEmail || "").trim() || null,
-      selectedColor: selection.color || null,
-      selectedSize: selection.size || null,
-      variantPid: displayPid != null ? String(displayPid) : null,
-    };
+      const payload = {
+        action: "create",
+        productId: reviewProductKey.productId || reviewProductKey.pid || reviewProductKey.slug || "",
+        variantId: displayVariantId != null ? String(displayVariantId) : null,
+        rating: reviewRating,
+        title: null,
+        body: _hasComment ? _comment : null,
+        displayName: String(reviewName || "").trim() || null,
+        anonymous: false,
+        wouldRecommend: null,
+        fitFeedback: null,
+        email: String(reviewEmail || "").trim() || null,
+        selectedColor: selection.color || null,
+        selectedSize: selection.size || null,
+        variantPid: displayPid != null ? String(displayPid) : null,
+      };
 
-    const candidates = ["/api/reviews", "/api/reviews/create", "/api/product-reviews/create"];
+      const candidates = ["/api/reviews", "/api/reviews/create", "/api/product-reviews/create"];
+      const res = await smartFetchJSON(candidates, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    const res = await smartFetchJSON(candidates, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+      if (!res.ok) {
+        const msg = res?.json?.error || res?.json?.message || "Unable to submit review.";
+        setValidationError(String(msg || "Unable to submit review."));
+        showToast("error", "Review", String(msg || "Unable to submit review."), { ms: 2600, anchorEl });
+        setReviewSubmitBusy(false);
+        return;
+      }
 
-    if (!res.ok) {
-      const msg = res?.json?.error || res?.json?.message || "Unable to submit review.";
-      setValidationError(String(msg || "Unable to submit review."));
-      showToast("error", "Review", String(msg || "Unable to submit review."), { ms: 2600, anchorEl });
+      setReviewComment("");
+      setReviewRating(0);
+      await loadReviews({ reset: true });
+      showToast(
+        "success",
+        _hasComment ? "Review" : "Rating",
+        _hasComment ? "Review submitted successfully." : "Rating submitted successfully.",
+        { ms: 2200, anchorEl }
+      );
       setReviewSubmitBusy(false);
-      return;
-    }
-
-    setReviewComment("");
-    setReviewRating(0);
-    await loadReviews({ reset: true });
-    showToast(
-      "success",
-      _hasComment ? "Review" : "Rating",
-      _hasComment ? "Review submitted successfully." : "Rating submitted successfully.",
-      { ms: 2200, anchorEl }
-    );
-    setReviewSubmitBusy(false);
-  }, [
-    product,
-    reviewProductKey,
-    reviewRating,
-    reviewComment,
-    reviewName,
-    reviewEmail,
-    selection.color,
-    selection.size,
-    displayVariantId,
-    displayPid,
-    loadReviews,
-    showToast,
-  ]);
+    },
+    [
+      product,
+      reviewProductKey,
+      reviewRating,
+      reviewComment,
+      reviewName,
+      reviewEmail,
+      selection.color,
+      selection.size,
+      displayVariantId,
+      displayPid,
+      loadReviews,
+      showToast,
+    ]
+  );
 
   const voteReview = useCallback(async (reviewId, value) => {
     if (!reviewId) return;
@@ -1967,9 +1858,9 @@ export default function ClientUX({ product }) {
     if (!product) return;
     setReviewPage(1);
     loadReviews({ reset: true });
-  }, [reviewSort]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewSort]);
 
-  /* ---------------- derived review stats ---------------- */
   const reviewStats = useMemo(() => {
     const count = Number(reviewSummary?.count ?? 0);
     const avg = Number(reviewSummary?.avgRating ?? 0);
@@ -1985,15 +1876,15 @@ export default function ClientUX({ product }) {
     return { count: list.length, avg: avg2 ? Math.round(avg2 * 10) / 10 : 0 };
   }, [reviews, reviewSummary]);
 
-  /* ---------------- UI styles: premium, white/pearl only ---------------- */
+  /* ---------------- UI styles: premium, mobile-safe ---------------- */
   const S = {
     page: {
       width: "100%",
       background: "linear-gradient(180deg,#ffffff,#fbfdff)",
       color: "#0f2147",
+      overflowX: "hidden", // critical: prevent horizontal scroll on small devices
     },
     shell: {
-      // increased panel size + reduced margins
       maxWidth: 1760,
       margin: "0 auto",
       padding: "10px 8px 54px",
@@ -2010,10 +1901,12 @@ export default function ClientUX({ product }) {
       display: "grid",
       gridTemplateColumns: "1.10fr .90fr",
       gap: 0,
+      minWidth: 0,
     },
     left: {
       background: "radial-gradient(circle at top left,#eef2ff,#ffffff)",
       borderRight: "1px solid rgba(15,33,71,.08)",
+      minWidth: 0,
     },
     right: {
       padding: 26,
@@ -2028,12 +1921,15 @@ export default function ClientUX({ product }) {
       width: "100%",
       aspectRatio: "4 / 5",
       overflow: "hidden",
+      // mobile safety: never exceed viewport height; keep room for nav + bottom bar
+      maxHeight: "min(640px, calc(100dvh - 210px))",
     },
     heroImg: {
       width: "100%",
       height: "100%",
       objectFit: "cover",
       background: "#eef2ff",
+      display: "block",
     },
     navBtn: {
       position: "absolute",
@@ -2051,12 +1947,15 @@ export default function ClientUX({ product }) {
       fontSize: 26,
       lineHeight: 1,
       color: "#0f2147",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     },
     thumbBar: {
       display: "flex",
       gap: 10,
       padding: 14,
       overflowX: "auto",
+      overflowY: "hidden",
       WebkitOverflowScrolling: "touch",
       borderTop: "1px solid rgba(15,33,71,.06)",
       background: "rgba(255,255,255,.85)",
@@ -2074,12 +1973,15 @@ export default function ClientUX({ product }) {
       boxShadow: active ? "0 10px 22px rgba(15,33,71,.16)" : "0 2px 8px rgba(15,33,71,.08)",
       transform: active ? "translateY(-1px)" : "translateY(0)",
       transition: "transform .16s ease, box-shadow .16s ease, border-color .16s ease",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     }),
     headerRow: {
       display: "flex",
       justifyContent: "space-between",
       alignItems: "flex-start",
       gap: 12,
+      minWidth: 0,
     },
     titleColumn: { display: "flex", flexDirection: "column", gap: 8, flex: 1, minWidth: 0 },
     title: {
@@ -2089,6 +1991,7 @@ export default function ClientUX({ product }) {
       color: "#0f2147",
       fontWeight: 950,
       letterSpacing: "-0.02em",
+      overflowWrap: "anywhere",
     },
     headerMetaRow: {
       display: "flex",
@@ -2116,6 +2019,10 @@ export default function ClientUX({ product }) {
       borderRadius: 999,
       background: "rgba(15,33,71,.05)",
       border: "1px solid rgba(15,33,71,.08)",
+      maxWidth: "100%",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
     },
     actionBar: {
       display: "flex",
@@ -2126,10 +2033,9 @@ export default function ClientUX({ product }) {
       position: "relative",
       zIndex: 80,
       pointerEvents: "auto",
-      // move icons ~0.5 inch (≈48px) below current position
       marginTop: 48,
+      maxWidth: "100%",
     },
-    // icon cluster is now visually distinct: "capsule glass"
     actionBtn: (tone = "glass") => {
       const isGlass = tone === "glass";
       const isOutline = tone === "outline";
@@ -2137,7 +2043,7 @@ export default function ClientUX({ product }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 10,
-        padding: "12px 16px", // slightly larger hit-area (click anywhere on CTA)
+        padding: "12px 16px",
         borderRadius: 999,
         cursor: "pointer",
         pointerEvents: "auto",
@@ -2160,9 +2066,10 @@ export default function ClientUX({ product }) {
         opacity: wishlistBusy ? 0.92 : 1,
         WebkitTapHighlightColor: "transparent",
         touchAction: "manipulation",
+        maxWidth: "100%",
       };
     },
-    priceRow: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
+    priceRow: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", minWidth: 0 },
     price: { color: "#0f2147", fontWeight: 950, fontSize: 20, letterSpacing: "-0.01em" },
     badge: (ok) => ({
       fontSize: 12,
@@ -2174,6 +2081,7 @@ export default function ClientUX({ product }) {
       border: `1px solid ${ok ? "#a7f3d0" : "#fecaca"}`,
       textTransform: "uppercase",
       letterSpacing: ".08em",
+      whiteSpace: "nowrap",
     }),
     sectionLabel: {
       fontSize: 12,
@@ -2185,8 +2093,8 @@ export default function ClientUX({ product }) {
     },
     swatchButton: (active) => ({
       position: "relative",
-      height: 38,
-      width: 38,
+      height: 42,
+      width: 42,
       borderRadius: 999,
       padding: 0,
       border: "none",
@@ -2198,6 +2106,8 @@ export default function ClientUX({ product }) {
       transition: "transform .16s ease-out, box-shadow .16s ease-out, background .16s ease-out",
       transform: active ? "translateY(-2px) scale(1.06)" : "translateY(0) scale(1)",
       boxShadow: active ? "0 10px 22px rgba(15,33,71,0.18)" : "0 1px 3px rgba(15,33,71,0.10)",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
     }),
     swatchFrame: (active) => ({
       height: 26,
@@ -2232,6 +2142,9 @@ export default function ClientUX({ product }) {
         "transform .18s ease-out, box-shadow .18s ease-out, background .18s ease-out, border-color .18s ease-out, color .18s ease-out",
       transform: "translateY(0)",
       boxShadow: active ? "0 14px 30px rgba(15,33,71,.14)" : "0 2px 8px rgba(15,33,71,.06)",
+      WebkitTapHighlightColor: "transparent",
+      touchAction: "manipulation",
+      maxWidth: "100%",
     }),
     chipSub: {
       display: "block",
@@ -2246,6 +2159,7 @@ export default function ClientUX({ product }) {
       gap: 12,
       flexWrap: "wrap",
       alignItems: "center",
+      width: "100%",
     },
     primary: {
       padding: "14px 18px",
@@ -2264,6 +2178,7 @@ export default function ClientUX({ product }) {
       boxShadow: "0 14px 34px rgba(15,33,71,.22)",
       WebkitTapHighlightColor: "transparent",
       touchAction: "manipulation",
+      maxWidth: "100%",
     },
     primaryHover: {
       transform: "translateY(-1px)",
@@ -2289,6 +2204,7 @@ export default function ClientUX({ product }) {
       boxShadow: "0 10px 24px rgba(15,33,71,.10)",
       WebkitTapHighlightColor: "transparent",
       touchAction: "manipulation",
+      maxWidth: "100%",
     },
     ghostHover: {
       transform: "translateY(-1px)",
@@ -2309,6 +2225,7 @@ export default function ClientUX({ product }) {
       gridTemplateColumns: "auto 1fr",
       rowGap: 5,
       columnGap: 10,
+      minWidth: 0,
     },
     metaLabel: { fontWeight: 900, whiteSpace: "nowrap" },
     metaValue: {
@@ -2319,6 +2236,7 @@ export default function ClientUX({ product }) {
       display: "inline-flex",
       alignItems: "center",
       gap: 8,
+      minWidth: 0,
     },
     validationBox: {
       marginTop: 8,
@@ -2347,9 +2265,9 @@ export default function ClientUX({ product }) {
       pointerEvents: "auto",
       maxWidth: 420,
       width: "calc(100vw - 28px)",
-      // anchored near clicked CTA when pos is present; otherwise fallback stays above BottomFloatingBar
       right: pos ? "auto" : 14,
-      bottom: pos ? "auto" : 88,
+      // keep above bottom bar + iOS safe area
+      bottom: pos ? "auto" : "calc(88px + env(safe-area-inset-bottom, 0px))",
       left: pos ? pos.x : "auto",
       top: pos ? pos.y : "auto",
       transform: pos?.placeAbove ? "translateY(-100%)" : "translateY(0)",
@@ -2378,7 +2296,7 @@ export default function ClientUX({ product }) {
       marginBottom: 2,
     },
     toastMsg: { fontSize: 13, fontWeight: 800, lineHeight: 1.25 },
-    toastActions: { display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" },
+    toastActions: { display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" },
     toastBtn: {
       borderRadius: 999,
       border: "1px solid rgba(15,33,71,.18)",
@@ -2410,6 +2328,7 @@ export default function ClientUX({ product }) {
       background: "rgba(255,255,255,.92)",
       boxShadow: "0 10px 26px rgba(15,33,71,.08)",
       padding: 14,
+      minWidth: 0,
     },
     para: {
       margin: 0,
@@ -2418,6 +2337,7 @@ export default function ClientUX({ product }) {
       lineHeight: 1.7,
       fontWeight: 650,
       whiteSpace: "pre-wrap",
+      overflowWrap: "anywhere",
     },
     divider: { height: 1, background: "rgba(15,33,71,.08)", width: "100%" },
 
@@ -2478,7 +2398,7 @@ export default function ClientUX({ product }) {
       border: "1px solid rgba(15,33,71,.10)",
       background: "linear-gradient(180deg,#ffffff,#fbfdff)",
     },
-    reviewTop: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" },
+    reviewTop: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", minWidth: 0 },
     reviewName: { fontWeight: 950, color: "#0f2147", fontSize: 13 },
     reviewMeta: { color: "rgba(15,33,71,.62)", fontWeight: 800, fontSize: 12 },
     input: {
@@ -2491,6 +2411,7 @@ export default function ClientUX({ product }) {
       background: "#fff",
       outline: "none",
       boxShadow: "0 6px 18px rgba(15,33,71,.06)",
+      WebkitTapHighlightColor: "transparent",
     },
     textarea: {
       width: "100%",
@@ -2505,6 +2426,7 @@ export default function ClientUX({ product }) {
       outline: "none",
       boxShadow: "0 6px 18px rgba(15,33,71,.06)",
       lineHeight: 1.6,
+      WebkitTapHighlightColor: "transparent",
     },
     reviewSubmit: {
       padding: "12px 16px",
@@ -2542,21 +2464,78 @@ export default function ClientUX({ product }) {
       outline: "none",
       boxShadow: "0 6px 18px rgba(15,33,71,.06)",
       cursor: "pointer",
+      WebkitTapHighlightColor: "transparent",
     },
   };
 
-  // Responsive
+  // Responsive detection (mobile + small screens)
   const [isNarrow, setIsNarrow] = useState(false);
   useEffect(() => {
     const onResize = () => setIsNarrow(typeof window !== "undefined" && window.innerWidth < 980);
     onResize();
-    window.addEventListener("resize", onResize);
+    window.addEventListener("resize", onResize, { passive: true });
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const gridStyle = isNarrow ? { ...S.grid, gridTemplateColumns: "1fr" } : S.grid;
+  // Mobile-safe derived styles (no overflow, no break; Android/iOS incl. safe areas)
+  const SAFE_BOTTOM = "calc(96px + env(safe-area-inset-bottom, 0px))";
+  const SAFE_SIDE_PAD = "max(8px, env(safe-area-inset-left, 0px))";
 
-  /* ---------------- details categories (only show real fields) ---------------- */
+  const shellStyle = isNarrow
+    ? {
+        ...S.shell,
+        padding: `10px ${SAFE_SIDE_PAD} ${SAFE_BOTTOM}`,
+      }
+    : {
+        ...S.shell,
+        padding: `10px 8px ${SAFE_BOTTOM}`,
+      };
+
+  const panelStyle = isNarrow
+    ? { ...S.panel, borderRadius: 18 }
+    : S.panel;
+
+  const gridStyle = isNarrow
+    ? { ...S.grid, gridTemplateColumns: "1fr" }
+    : S.grid;
+
+  const leftStyle = isNarrow
+    ? { ...S.left, borderRight: "none", borderBottom: "1px solid rgba(15,33,71,.08)" }
+    : S.left;
+
+  const rightStyle = isNarrow
+    ? { ...S.right, padding: 14, gap: 12 }
+    : S.right;
+
+  const headerRowStyle = isNarrow
+    ? { ...S.headerRow, flexDirection: "column", alignItems: "stretch" }
+    : S.headerRow;
+
+  const actionBarStyle = isNarrow
+    ? {
+        ...S.actionBar,
+        marginTop: 10,
+        justifyContent: "flex-start",
+      }
+    : S.actionBar;
+
+  const metaBoxStyle = isNarrow
+    ? { ...S.metaBox, gridTemplateColumns: "1fr", rowGap: 10 }
+    : S.metaBox;
+
+  const primaryBtnBase = isNarrow
+    ? { width: "100%", minWidth: "unset" }
+    : null;
+
+  const heroWrapStyle = isNarrow
+    ? {
+        ...S.heroWrap,
+        aspectRatio: "1 / 1",
+        maxHeight: "min(520px, calc(100dvh - 260px))",
+      }
+    : S.heroWrap;
+
+  /* ---------------- details categories ---------------- */
   const detailsSections = useMemo(() => {
     const src = A || {};
     const sections = [];
@@ -2617,12 +2596,6 @@ export default function ClientUX({ product }) {
       if (exclude.has(k)) return;
       const v = src[k];
       if (v == null) return;
-      if (typeof v === "object") {
-        const txt = toText(v);
-        if (!txt) return;
-        extraPairs.push([slugToLabel(k), txt]);
-        return;
-      }
       const txt = toText(v);
       if (!txt) return;
       extraPairs.push([slugToLabel(k), txt]);
@@ -2630,7 +2603,8 @@ export default function ClientUX({ product }) {
 
     if (overviewText) sections.push({ key: "overview", title: "Overview", type: "text", value: overviewText });
     if (highlights && highlights.length) sections.push({ key: "highlights", title: "Highlights", type: "bullets", value: highlights });
-    if (fabricText || headerGsm || headerFit || headerSizeSystem)
+
+    if (fabricText || headerGsm || headerFit || headerSizeSystem) {
       sections.push({
         key: "fabric",
         title: "Fabric & Build",
@@ -2645,17 +2619,13 @@ export default function ClientUX({ product }) {
           ...(wash ? [["Finish / Wash", String(wash)]] : []),
         ],
       });
+    }
 
-    if (sizeGuide)
-      sections.push({ key: "size", title: "Size & Fit Guide", type: "text", value: String(sizeGuide) });
+    if (sizeGuide) sections.push({ key: "size", title: "Size & Fit Guide", type: "text", value: String(sizeGuide) });
+    if (careText) sections.push({ key: "care", title: "Care Instructions", type: "text", value: String(careText) });
+    if (designText) sections.push({ key: "design", title: "Design Notes", type: "text", value: String(designText) });
 
-    if (careText)
-      sections.push({ key: "care", title: "Care Instructions", type: "text", value: String(careText) });
-
-    if (designText)
-      sections.push({ key: "design", title: "Design Notes", type: "text", value: String(designText) });
-
-    if (origin || collection || season || occasion || warranty || tagsText)
+    if (origin || collection || season || occasion || warranty || tagsText) {
       sections.push({
         key: "context",
         title: "Origin & Context",
@@ -2669,17 +2639,18 @@ export default function ClientUX({ product }) {
           ...(tagsText ? [["Tags", String(tagsText)]] : []),
         ],
       });
+    }
 
-    if (shippingText)
-      sections.push({ key: "shipping", title: "Shipping Note", type: "text", value: String(shippingText) });
+    if (shippingText) sections.push({ key: "shipping", title: "Shipping Note", type: "text", value: String(shippingText) });
 
-    if (extraPairs.length)
+    if (extraPairs.length) {
       sections.push({
         key: "more",
         title: "Additional Information",
         type: "pairs",
         value: extraPairs,
       });
+    }
 
     return sections;
   }, [
@@ -2706,9 +2677,7 @@ export default function ClientUX({ product }) {
 
   const renderDetailSectionBody = (sec) => {
     if (!sec) return null;
-    if (sec.type === "text") {
-      return <p style={S.para}>{String(sec.value)}</p>;
-    }
+    if (sec.type === "text") return <p style={S.para}>{String(sec.value)}</p>;
     if (sec.type === "bullets") {
       const list = Array.isArray(sec.value) ? sec.value : [];
       return (
@@ -2724,7 +2693,16 @@ export default function ClientUX({ product }) {
       return (
         <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap: 10 }}>
           {pairs.map(([k, v], i) => (
-            <div key={`${k}-${i}`} style={{ padding: 10, borderRadius: 14, border: "1px solid rgba(15,33,71,.10)", background: "#fff" }}>
+            <div
+              key={`${k}-${i}`}
+              style={{
+                padding: 10,
+                borderRadius: 14,
+                border: "1px solid rgba(15,33,71,.10)",
+                background: "#fff",
+                minWidth: 0,
+              }}
+            >
               <div style={{ ...S.sectionLabel, marginBottom: 6 }}>{String(k)}</div>
               <p style={S.para}>{String(v)}</p>
             </div>
@@ -2735,12 +2713,38 @@ export default function ClientUX({ product }) {
     return null;
   };
 
+  const formatDate = (d) => {
+    const raw = d?.createdAt || d?.created_at || d?.date || d?.created || null;
+    if (!raw) return "";
+    try {
+      const dt = new Date(raw);
+      if (Number.isNaN(dt.getTime())) return "";
+      return dt.toLocaleDateString("en-GB", { year: "numeric", month: "short", day: "2-digit" });
+    } catch {
+      return "";
+    }
+  };
+
+  const renderStarsInline = (n) => {
+    const v = Math.max(0, Math.min(5, Number(n || 0)));
+    return (
+      <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} aria-label={`${v} out of 5`}>
+        {[1, 2, 3, 4, 5].map((i) => (
+          <span key={i} style={{ fontWeight: 950, color: i <= v ? "#0f2147" : "rgba(15,33,71,.25)" }}>
+            ★
+          </span>
+        ))}
+      </span>
+    );
+  };
+
   if (!product) return null;
 
   /* ---------------- render ---------------- */
   return (
     <>
       <Navbar />
+
       {toast?.open ? (
         <div style={S.toastWrap(toastPos)} role="status" aria-live="polite">
           <div style={S.toastCard(toast.type)}>
@@ -2770,20 +2774,19 @@ export default function ClientUX({ product }) {
           </div>
         </div>
       ) : null}
+
       <div style={S.page}>
-        <div style={S.shell}>
-          <div style={S.panel}>
+        <div style={shellStyle}>
+          <div style={panelStyle}>
             <div style={gridStyle}>
               {/* LEFT: gallery */}
-              <div style={S.left}>
+              <div style={leftStyle}>
                 <div
-                  style={S.heroWrap}
+                  style={heroWrapStyle}
                   tabIndex={0}
                   onKeyDown={(e) => {
-                    if (e.key === "ArrowLeft" && images.length > 1)
-                      setIdx((i) => (i - 1 + images.length) % images.length);
-                    if (e.key === "ArrowRight" && images.length > 1)
-                      setIdx((i) => (i + 1) % images.length);
+                    if (e.key === "ArrowLeft" && images.length > 1) setIdx((i) => (i - 1 + images.length) % images.length);
+                    if (e.key === "ArrowRight" && images.length > 1) setIdx((i) => (i + 1) % images.length);
                   }}
                 >
                   {images.length ? (
@@ -2824,7 +2827,7 @@ export default function ClientUX({ product }) {
                         onClick={() => setIdx(ti)}
                         style={S.thumb(ti === idx)}
                       >
-                        <img src={t} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        <img src={t} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       </button>
                     ))}
                   </div>
@@ -2832,9 +2835,9 @@ export default function ClientUX({ product }) {
               </div>
 
               {/* RIGHT: info */}
-              <div style={S.right}>
-                {/* Header row with premium wishlist/share section */}
-                <div style={S.headerRow}>
+              <div style={rightStyle}>
+                {/* Header row */}
+                <div style={headerRowStyle}>
                   <div style={S.titleColumn}>
                     <h1 style={S.title}>{name}</h1>
 
@@ -2854,22 +2857,26 @@ export default function ClientUX({ product }) {
                     ) : null}
                   </div>
 
-                  {/* Distinct premium icon cluster */}
-                  <div style={S.actionBar}>
+                  {/* Premium icon cluster */}
+                  <div style={actionBarStyle}>
                     <button
                       type="button"
                       onClick={(e) => {
-                        // clickable anywhere on this CTA pill
                         e.preventDefault();
                         openWishlistPage();
                       }}
-                      style={S.actionBtn("glass")}
+                      style={{
+                        ...S.actionBtn("glass"),
+                        flex: isNarrow ? "1 1 auto" : "0 0 auto",
+                      }}
                       onMouseEnter={(e) => {
+                        if (isNarrow) return;
                         e.currentTarget.style.transform = "translateY(-1px)";
                         e.currentTarget.style.boxShadow = "0 18px 38px rgba(15,33,71,.14)";
                         e.currentTarget.style.borderColor = "rgba(15,33,71,.22)";
                       }}
                       onMouseLeave={(e) => {
+                        if (isNarrow) return;
                         e.currentTarget.style.transform = "translateY(0)";
                         e.currentTarget.style.boxShadow = "0 12px 26px rgba(15,33,71,.10)";
                         e.currentTarget.style.borderColor = "rgba(15,33,71,.10)";
@@ -2886,13 +2893,18 @@ export default function ClientUX({ product }) {
                         e.preventDefault();
                         shareProduct(e.currentTarget);
                       }}
-                      style={S.actionBtn("outline")}
+                      style={{
+                        ...S.actionBtn("outline"),
+                        flex: isNarrow ? "1 1 auto" : "0 0 auto",
+                      }}
                       onMouseEnter={(e) => {
+                        if (isNarrow) return;
                         e.currentTarget.style.transform = "translateY(-1px)";
                         e.currentTarget.style.boxShadow = "0 18px 38px rgba(15,33,71,.14)";
                         e.currentTarget.style.borderColor = "rgba(15,33,71,.22)";
                       }}
                       onMouseLeave={(e) => {
+                        if (isNarrow) return;
                         e.currentTarget.style.transform = "translateY(0)";
                         e.currentTarget.style.boxShadow = "0 10px 22px rgba(15,33,71,.08)";
                         e.currentTarget.style.borderColor = "rgba(15,33,71,.18)";
@@ -2905,8 +2917,13 @@ export default function ClientUX({ product }) {
 
                     <button
                       type="button"
-                      onClick={(e) => copyText((typeof window !== "undefined" && window.location.href) || "", "Link copied.", e.currentTarget)}
-                      style={S.actionBtn("outline")}
+                      onClick={(e) =>
+                        copyText((typeof window !== "undefined" && window.location.href) || "", "Link copied.", e.currentTarget)
+                      }
+                      style={{
+                        ...S.actionBtn("outline"),
+                        flex: isNarrow ? "1 1 auto" : "0 0 auto",
+                      }}
                       aria-label="Copy link"
                     >
                       <IconCopy />
@@ -2917,9 +2934,7 @@ export default function ClientUX({ product }) {
 
                 <div style={S.priceRow}>
                   <span style={S.price}>{money(currencyCode, price)}</span>
-                  {stock != null && (
-                    <span style={S.badge(stock > 0)}>{stock > 0 ? `In stock (${stock})` : "Out of stock"}</span>
-                  )}
+                  {stock != null && <span style={S.badge(stock > 0)}>{stock > 0 ? `In stock (${stock})` : "Out of stock"}</span>}
                   {reviewStats.count > 0 ? (
                     <span style={S.subtleMeta}>
                       {reviewStats.avg} / 5 • {reviewStats.count} review{reviewStats.count === 1 ? "" : "s"}
@@ -2930,7 +2945,7 @@ export default function ClientUX({ product }) {
                 </div>
 
                 {(productCode || baseSku || productBarcode || displaySku || displayBarcode || displayPid || displayVariantId || tierLabel) && (
-                  <div style={S.metaBox}>
+                  <div style={metaBoxStyle}>
                     {tierLabel && tierText && (
                       <>
                         <div style={S.metaLabel}>Tier</div>
@@ -2986,7 +3001,11 @@ export default function ClientUX({ product }) {
                         <div style={S.metaLabel}>Variant ID</div>
                         <div style={S.metaValue}>
                           {displayVariantId}
-                          <button type="button" style={S.smallBtn} onClick={(e) => copyText(String(displayVariantId), "Variant ID copied.", e.currentTarget)}>
+                          <button
+                            type="button"
+                            style={S.smallBtn}
+                            onClick={(e) => copyText(String(displayVariantId), "Variant ID copied.", e.currentTarget)}
+                          >
                             Copy
                           </button>
                         </div>
@@ -3065,7 +3084,7 @@ export default function ClientUX({ product }) {
                   </div>
                 )}
 
-                {/* Size (color-aware) + size-based pricing */}
+                {/* Size */}
                 {!!sizes.length && (
                   <div style={S.infoCard}>
                     <div style={S.sectionLabel}>Size</div>
@@ -3088,10 +3107,11 @@ export default function ClientUX({ product }) {
                             title={isOOS ? `${s} - Out of stock` : s}
                             disabled={isOOS}
                           >
-                            <span>{s}{isOOS ? " (OOS)" : ""}</span>
-                            {typeof p === "number" ? (
-                              <span style={S.chipSub}>{money(currencyCode, p)}</span>
-                            ) : null}
+                            <span>
+                              {s}
+                              {isOOS ? " (OOS)" : ""}
+                            </span>
+                            {typeof p === "number" ? <span style={S.chipSub}>{money(currencyCode, p)}</span> : null}
                           </button>
                         );
                       })}
@@ -3101,10 +3121,8 @@ export default function ClientUX({ product }) {
 
                 {/* Quantity */}
                 <div style={S.infoCard}>
-                  <div style={S.sectionLabel}>
-                    Quantity {stock != null && stock > 0 ? `(Available: ${stock})` : ""}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={S.sectionLabel}>Quantity {stock != null && stock > 0 ? `(Available: ${stock})` : ""}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <button
                       type="button"
                       onClick={() => {
@@ -3142,13 +3160,14 @@ export default function ClientUX({ product }) {
                   </div>
                 )}
 
-                {/* CTA block — Add to Cart + Buy Now + Wishlist + Go to Cart (no deletions) */}
+                {/* CTA block */}
                 <div style={S.ctas}>
                   <button
                     type="button"
                     onClick={handleAddToCart}
                     style={{
                       ...S.primary,
+                      ...(primaryBtnBase || {}),
                       background: "#111827",
                       border: "1px solid #111827",
                       ...(hoveredCTA === "add" ? S.primaryHover : null),
@@ -3165,6 +3184,7 @@ export default function ClientUX({ product }) {
                     onClick={buyNowServer}
                     style={{
                       ...S.primary,
+                      ...(primaryBtnBase || {}),
                       background: "#0f2147",
                       border: "1px solid #0f2147",
                       ...(hoveredCTA === "buynow" ? S.primaryHover : null),
@@ -3181,6 +3201,7 @@ export default function ClientUX({ product }) {
                     onClick={(e) => toggleWishlist(e.currentTarget)}
                     style={{
                       ...S.primary,
+                      ...(primaryBtnBase || {}),
                       background: "#0f2147",
                       border: "1px solid #0f2147",
                       ...(hoveredCTA === "wish" ? S.primaryHover : null),
@@ -3198,6 +3219,7 @@ export default function ClientUX({ product }) {
                     onClick={() => router.push("/cart")}
                     style={{
                       ...S.ghost,
+                      ...(primaryBtnBase || {}),
                       ...(hoveredCTA === "gocart" ? S.ghostHover : null),
                     }}
                     onMouseEnter={() => setHoveredCTA("gocart")}
@@ -3209,7 +3231,7 @@ export default function ClientUX({ product }) {
 
                 <div style={S.divider} />
 
-                {/* Deep Product Details (Strapi-driven, categorized, no placeholders) */}
+                {/* Product Details */}
                 {detailsSections.length ? (
                   <div style={S.infoCard}>
                     <div style={S.sectionLabel}>Product Details</div>
@@ -3236,11 +3258,11 @@ export default function ClientUX({ product }) {
                   </div>
                 ) : null}
 
-                {/* Specifications (kept) */}
+                {/* Specifications (kept; mobile-safe grid) */}
                 {(headerFit || headerGsm || headerSizeSystem || selection.color || selection.size) && (
                   <div style={S.infoCard}>
                     <div style={S.sectionLabel}>Specifications</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap: 10 }}>
                       {headerFit ? (
                         <div>
                           <div style={S.sectionLabel}>Fit</div>
@@ -3275,225 +3297,219 @@ export default function ClientUX({ product }) {
                   </div>
                 )}
 
-                {/* Reviews (DB-based): sort + pagination + vote + report */}
+                {/* Reviews */}
                 <div style={S.infoCard}>
                   <div style={S.reviewsHeader}>
-                    <div>
-                      <div style={S.sectionLabel}>Customer Reviews</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                      <div style={S.sectionLabel}>Ratings & Reviews</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <span style={{ fontWeight: 950, color: "#0f2147" }}>
-                          {reviewStats.count ? `${reviewStats.avg} / 5` : "No ratings yet"}
+                        {renderStarsInline(reviewStats.avg)}
+                        <span style={S.subtleMeta}>
+                          {reviewStats.avg || 0} / 5 • {reviewStats.count} review{reviewStats.count === 1 ? "" : "s"}
                         </span>
-                        <span style={{ color: "rgba(15,33,71,.65)", fontWeight: 900 }}>
-                          {reviewStats.count ? `${reviewStats.count} review${reviewStats.count === 1 ? "" : "s"}` : ""}
-                        </span>
-
-                        <select
-                          value={reviewSort}
-                          onChange={(e) => setReviewSort(e.target.value)}
-                          style={S.select}
-                          aria-label="Sort reviews"
-                        >
-                          <option value="recent">Most Recent</option>
-                          <option value="helpful">Most Helpful</option>
-                          <option value="highest">Highest Rating</option>
-                          <option value="lowest">Lowest Rating</option>
-                        </select>
-
-                        <button type="button" onClick={() => loadReviews({ reset: true })} style={S.smallBtn} disabled={reviewsBusy}>
-                          Refresh
-                        </button>
+                        {reviewsBusy ? <span style={S.subtleMeta}>Loading…</span> : null}
+                        {reviewsError ? <span style={{ ...S.subtleMeta, color: "#b91c1c" }}>{String(reviewsError)}</span> : null}
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ ...S.sectionLabel, marginBottom: 0 }}>Your Rating</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        {[1, 2, 3, 4, 5].map((n) => (
-                          <Star
-                            key={n}
-                            filled={reviewRating >= n}
-                            onClick={() => {
-                              setReviewRating(n);
-                              setValidationError(null);
-                            }}
-                            title={`Rate ${n} star${n === 1 ? "" : "s"}`}
-                          />
-                        ))}
-                      </div>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <select
+                        value={reviewSort}
+                        onChange={(e) => setReviewSort(String(e.target.value || "recent"))}
+                        style={S.select}
+                        aria-label="Sort reviews"
+                      >
+                        <option value="recent">Most Recent</option>
+                        <option value="helpful">Most Helpful</option>
+                        <option value="highest">Highest Rating</option>
+                        <option value="lowest">Lowest Rating</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        style={S.smallBtn}
+                        onClick={() => loadReviews({ reset: true })}
+                        disabled={reviewsBusy}
+                      >
+                        Refresh
+                      </button>
                     </div>
                   </div>
 
-                  {reviewsError ? (
-                    <div style={{ ...S.validationBox, marginTop: 12 }}>
-                      <div style={S.validationTitle}>Reviews Error</div>
-                      <div>{reviewsError}</div>
-                    </div>
-                  ) : null}
-
-                  <div style={{ display: "grid", gridTemplateColumns: isNarrow ? "1fr" : "1fr 1fr", gap: 10, marginTop: 12 }}>
-                    <div>
-                      <div style={S.sectionLabel}>Name (optional)</div>
-                      <input
-                        value={reviewName}
-                        onChange={(e) => setReviewName(e.target.value)}
-                        style={S.input}
-                        placeholder="Your name"
-                        autoComplete="name"
-                      />
-                    </div>
-
-                    <div>
-                      <div style={S.sectionLabel}>Email (optional)</div>
-                      <input
-                        value={reviewEmail}
-                        onChange={(e) => setReviewEmail(e.target.value)}
-                        style={S.input}
-                        placeholder="your@email.com"
-                        autoComplete="email"
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: 10 }}>
-                    <div style={S.sectionLabel}>Review (optional)</div>
-                    <textarea
-                      value={reviewComment}
-                      onChange={(e) => setReviewComment(e.target.value)}
-                      style={S.textarea}
-                      placeholder="Write your review (optional)"
-                    />
-                  </div>
-
-                  <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      style={S.reviewSubmit}
-                      onClick={(e) => submitReview(e.currentTarget)}
-                      disabled={reviewSubmitBusy}
-                    >
-                      {reviewSubmitBusy ? "Submitting..." : "Submit"}
-                    </button>
-                  </div>
-
+                  {/* Review list */}
                   <div style={S.reviewList}>
                     {(Array.isArray(reviews) ? reviews : []).map((r) => {
-                      const rid = r?.id ?? r?._id ?? r?.reviewId ?? "";
-                      const rname = r?.displayName || r?.name || "Customer";
-                      const rating = Number(r?.rating ?? r?.stars ?? r?.score ?? 0);
-                      const body = r?.body || r?.comment || r?.text || "";
-                      const createdAt = r?.createdAt || r?.created_at || r?.date || null;
-                      const helpful = typeof r?.helpfulCount === "number" ? r.helpfulCount : 0;
-                      const notHelpful = typeof r?.notHelpfulCount === "number" ? r.notHelpfulCount : 0;
+                      const id = r?.id ?? r?._id ?? r?.reviewId ?? null;
+                      const rating = Number(r?.rating ?? r?.stars ?? r?.score ?? 0) || 0;
+                      const body = String(r?.body ?? r?.comment ?? r?.text ?? "").trim();
+                      const who = String(r?.displayName ?? r?.name ?? "Anonymous").trim() || "Anonymous";
+                      const date = formatDate(r);
+                      const helpful = Number(r?.helpfulCount ?? r?.helpful ?? 0) || 0;
+                      const notHelpful = Number(r?.notHelpfulCount ?? r?.notHelpful ?? 0) || 0;
+                      const myVote = typeof r?.myVote === "number" ? r.myVote : 0;
 
                       return (
-                        <div key={String(rid) || `${rname}-${createdAt || ""}-${Math.random()}`} style={S.reviewItem}>
+                        <div key={String(id || `${who}-${date}-${body.slice(0, 8)}`)} style={S.reviewItem}>
                           <div style={S.reviewTop}>
-                            <div>
-                              <div style={S.reviewName}>{String(rname || "Customer")}</div>
-                              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
-                                {[1, 2, 3, 4, 5].map((n) => (
-                                  <Star
-                                    key={n}
-                                    filled={rating >= n}
-                                    onClick={() => {}}
-                                    disabled
-                                    title={`${rating || 0} / 5`}
-                                  />
-                                ))}
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <span style={S.reviewName}>{who}</span>
+                                {date ? <span style={S.reviewMeta}>{date}</span> : null}
                               </div>
+                              <div>{renderStarsInline(rating)}</div>
                             </div>
-                            <div style={S.reviewMeta}>
-                              {createdAt ? String(createdAt) : ""}
-                            </div>
+
+                            {id ? (
+                              <button
+                                type="button"
+                                style={S.smallBtn}
+                                onClick={() => setReportOpenId((prev) => (String(prev) === String(id) ? null : String(id)))}
+                              >
+                                Report
+                              </button>
+                            ) : null}
                           </div>
 
                           {body ? (
-                            <div style={{ marginTop: 10 }}>
-                              <p style={S.para}>{String(body)}</p>
+                            <div style={{ marginTop: 8 }}>
+                              <p style={S.para}>{body}</p>
                             </div>
                           ) : null}
 
-                          <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                            <button
-                              type="button"
-                              style={S.smallBtn}
-                              onClick={() => voteReview(rid, 1)}
-                            >
-                              Helpful ({helpful})
-                            </button>
-                            <button
-                              type="button"
-                              style={S.smallBtn}
-                              onClick={() => voteReview(rid, -1)}
-                            >
-                              Not Helpful ({notHelpful})
-                            </button>
-                            <button
-                              type="button"
-                              style={S.smallBtn}
-                              onClick={() => {
-                                setReportOpenId(String(rid));
-                                setReportReason("");
-                                setValidationError(null);
-                              }}
-                            >
-                              Report
-                            </button>
-                          </div>
+                          {id ? (
+                            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                              <button
+                                type="button"
+                                style={{
+                                  ...S.smallBtn,
+                                  borderColor: myVote === 1 ? "#0f2147" : "rgba(15,33,71,.18)",
+                                }}
+                                onClick={() => voteReview(id, 1)}
+                              >
+                                Helpful ({helpful})
+                              </button>
+                              <button
+                                type="button"
+                                style={{
+                                  ...S.smallBtn,
+                                  borderColor: myVote === -1 ? "#0f2147" : "rgba(15,33,71,.18)",
+                                }}
+                                onClick={() => voteReview(id, -1)}
+                              >
+                                Not helpful ({notHelpful})
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {reportOpenId && id && String(reportOpenId) === String(id) ? (
+                            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                              <input
+                                value={reportReason}
+                                onChange={(e) => setReportReason(String(e.target.value || ""))}
+                                placeholder="Reason (min 3 characters)"
+                                style={S.input}
+                              />
+                              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                <button type="button" style={S.reviewSubmit} onClick={reportReview} disabled={reportBusy}>
+                                  {reportBusy ? "Submitting…" : "Submit report"}
+                                </button>
+                                <button
+                                  type="button"
+                                  style={S.smallBtn}
+                                  onClick={() => {
+                                    setReportOpenId(null);
+                                    setReportReason("");
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}
 
-                    {reviewsBusy ? (
-                      <div style={{ ...S.validationBox, marginTop: 10, borderColor: "rgba(15,33,71,.16)", background: "#fff", color: "#0f2147" }}>
-                        <div style={S.validationTitle}>Loading</div>
-                        <div>Loading reviews...</div>
-                      </div>
-                    ) : null}
-
-                    {!reviewsBusy && (!Array.isArray(reviews) || reviews.length === 0) ? (
-                      <div style={{ ...S.validationBox, marginTop: 10, borderColor: "rgba(15,33,71,.16)", background: "#fff", color: "#0f2147" }}>
-                        <div style={S.validationTitle}>Reviews</div>
-                        <div>No reviews yet.</div>
+                    {!reviewsBusy && (!reviews || reviews.length === 0) ? (
+                      <div style={{ padding: 10, borderRadius: 14, border: "1px solid rgba(15,33,71,.10)", background: "#fff" }}>
+                        <p style={S.para}>No reviews yet. Be the first to rate this product.</p>
                       </div>
                     ) : null}
 
                     {reviewHasMore ? (
-                      <button type="button" onClick={loadMoreReviews} style={S.smallBtn} disabled={reviewsBusy}>
-                        {reviewsBusy ? "Loading..." : "Load more"}
+                      <button type="button" style={S.reviewSubmit} onClick={loadMoreReviews} disabled={reviewsBusy}>
+                        {reviewsBusy ? "Loading…" : "Load more reviews"}
                       </button>
                     ) : null}
                   </div>
 
-                  {reportOpenId ? (
-                    <div style={{ marginTop: 12, padding: 12, borderRadius: 14, border: "1px solid rgba(15,33,71,.14)", background: "#fff" }}>
-                      <div style={S.sectionLabel}>Report review</div>
-                      <textarea
-                        value={reportReason}
-                        onChange={(e) => setReportReason(e.target.value)}
-                        style={S.textarea}
-                        placeholder="Write a short reason (min 3 characters)"
+                  {/* Submit review */}
+                  <div style={{ marginTop: 14 }}>
+                    <div style={S.sectionLabel}>Leave a rating / review</div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <Star
+                          key={i}
+                          filled={i <= reviewRating}
+                          onClick={() => setReviewRating(i)}
+                          title={`${i} star${i === 1 ? "" : "s"}`}
+                          size={20}
+                          disabled={reviewSubmitBusy}
+                        />
+                      ))}
+                      <span style={S.subtleMeta}>{reviewRating ? `${reviewRating} / 5` : "Select rating"}</span>
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                      <input
+                        value={reviewName}
+                        onChange={(e) => setReviewName(String(e.target.value || ""))}
+                        placeholder="Name (optional)"
+                        style={S.input}
                       />
-                      <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <button type="button" style={S.reviewSubmit} onClick={reportReview} disabled={reportBusy}>
-                          {reportBusy ? "Submitting..." : "Submit report"}
+                      <input
+                        value={reviewEmail}
+                        onChange={(e) => setReviewEmail(String(e.target.value || ""))}
+                        placeholder="Email (optional)"
+                        style={S.input}
+                      />
+                      <textarea
+                        value={reviewComment}
+                        onChange={(e) => setReviewComment(String(e.target.value || ""))}
+                        placeholder="Write a review (optional)"
+                        style={S.textarea}
+                      />
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          style={S.reviewSubmit}
+                          onClick={(e) => submitReview(e.currentTarget)}
+                          disabled={reviewSubmitBusy}
+                        >
+                          {reviewSubmitBusy ? "Submitting…" : "Submit"}
                         </button>
                         <button
                           type="button"
                           style={S.smallBtn}
                           onClick={() => {
-                            setReportOpenId(null);
-                            setReportReason("");
+                            setReviewRating(0);
+                            setReviewComment("");
+                            setReviewName("");
+                            setReviewEmail("");
+                            setValidationError(null);
                           }}
-                          disabled={reportBusy}
+                          disabled={reviewSubmitBusy}
                         >
-                          Cancel
+                          Clear
                         </button>
                       </div>
                     </div>
-                  ) : null}
+                  </div>
                 </div>
+
+                {/* Extra bottom padding spacer so nothing can ever sit under bottom bar on short screens */}
+                <div style={{ height: isNarrow ? 12 : 6 }} />
               </div>
             </div>
           </div>

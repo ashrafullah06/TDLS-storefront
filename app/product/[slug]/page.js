@@ -4,6 +4,18 @@ import { fetchproductbyslug } from "@/lib/fetchproductbyslug";
 import { trackProductView } from "@/lib/trackview";
 import ClientUX from "@/components/product/clientux";
 
+/**
+ * IMPORTANT (Mobile correctness):
+ * - Ensure the browser uses device-width viewport and safe-area insets (iOS notch).
+ * - This does NOT change desktop layout; it only prevents mobile scaling quirks.
+ */
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: "cover",
+};
+
 /* ========= SHAPE NORMALISER ========= */
 /**
  * Normalises Strapi product shapes into:
@@ -114,9 +126,7 @@ function buildScopedOptions(product) {
       if (value == null || typeof value === "object") continue;
       const k = String(key).toLowerCase();
 
-      if (
-        !["color", "size", "fit", "material", "style", "length"].includes(k)
-      )
+      if (!["color", "size", "fit", "material", "style", "length"].includes(k))
         continue;
 
       if (!map[k]) map[k] = new Set();
@@ -244,10 +254,7 @@ async function loadStockFromPrisma({ product, slug }) {
       or.push({ strapiSlug: product.slug });
     }
 
-    if (
-      product.attributes?.slug &&
-      typeof product.attributes.slug === "string"
-    ) {
+    if (product.attributes?.slug && typeof product.attributes.slug === "string") {
       or.push({ slug: product.attributes.slug });
       or.push({ strapiSlug: product.attributes.slug });
     }
@@ -278,9 +285,7 @@ async function loadStockFromPrisma({ product, slug }) {
       const available = computeAvailableForVariant(variant);
 
       const key =
-        variant.strapiSizeId != null
-          ? String(variant.strapiSizeId)
-          : variant.id;
+        variant.strapiSizeId != null ? String(variant.strapiSizeId) : variant.id;
 
       stockByVariantKey[key] = available;
       total += available;
@@ -383,7 +388,7 @@ export default async function ProductPage(ctx) {
 
   if (!product) {
     return (
-      <main className="max-w-4xl mx-auto w-full pt-16 pb-24 px-4">
+      <main className="max-w-4xl mx-auto w-full pt-16 pb-24 px-4 overflow-x-hidden">
         <h1 className="text-2xl font-semibold mb-2">Product not found</h1>
         <p className="text-slate-600 text-sm">
           We couldn&apos;t find a product with slug: <code>{slug}</code>.
@@ -394,10 +399,8 @@ export default async function ProductPage(ctx) {
 
   if (isSoftDisabled(product)) {
     return (
-      <main className="max-w-4xl mx-auto w-full pt-16 pb-24 px-4">
-        <h1 className="text-2xl font-semibold mb-2">
-          This product is unavailable
-        </h1>
+      <main className="max-w-4xl mx-auto w-full pt-16 pb-24 px-4 overflow-x-hidden">
+        <h1 className="text-2xl font-semibold mb-2">This product is unavailable</h1>
         <p className="text-slate-600 text-sm">
           This item is currently not available for purchase.
         </p>
@@ -416,8 +419,7 @@ export default async function ProductPage(ctx) {
     ? {
         "@type": "AggregateRating",
         ratingValue: (
-          reviews.reduce((sum, r) => sum + (r.rating || 5), 0) /
-          reviews.length
+          reviews.reduce((sum, r) => sum + (r.rating || 5), 0) / reviews.length
         ).toFixed(1),
         reviewCount: reviews.length,
       }
@@ -443,19 +445,16 @@ export default async function ProductPage(ctx) {
       ? product.price_mrp
       : 0;
 
-  const priceCurrency =
-    product.currency || product.attributes?.currency || "BDT";
+  const priceCurrency = product.currency || product.attributes?.currency || "BDT";
 
   // 🔹 STOCK: DB (Prisma) is canonical, Strapi is only fallback
   const prismaStock = await loadStockFromPrisma({ product, slug });
   const stockQty =
-    typeof prismaStock.stockQty === "number" &&
-    Number.isFinite(prismaStock.stockQty)
+    typeof prismaStock.stockQty === "number" && Number.isFinite(prismaStock.stockQty)
       ? prismaStock.stockQty
       : fallbackStockFromStrapi(product);
 
-  const sku =
-    product.sku || product.product_code || product.base_sku || undefined;
+  const sku = product.sku || product.product_code || product.base_sku || undefined;
 
   const scopedOptions = buildScopedOptions(product);
 
@@ -501,7 +500,29 @@ export default async function ProductPage(ctx) {
   };
 
   return (
-    <main className="max-w-6xl mx-auto w-full pt-12 pb-20 px-2 sm:px-6 lg:px-8">
+    <main
+      className={[
+        // Desktop kept intact (your existing max width & breakpoints remain).
+        "max-w-6xl mx-auto w-full pt-12 pb-20 px-2 sm:px-6 lg:px-8",
+
+        // Mobile hardening: never allow horizontal overflow on small screens.
+        "overflow-x-hidden",
+
+        /**
+         * Mobile typography + control sizing:
+         * - On mobile we slightly reduce inherited font size so CTAs/text inside ClientUX
+         *   don’t render “too large” by default.
+         * - Desktop remains unchanged at sm+.
+         */
+        "text-[13px] leading-[1.2] sm:text-[16px] sm:leading-normal",
+      ].join(" ")}
+      style={{
+        // iOS safe-area support (notch/home-indicator) without affecting desktop.
+        paddingLeft: "max(0.5rem, env(safe-area-inset-left))",
+        paddingRight: "max(0.5rem, env(safe-area-inset-right))",
+        paddingBottom: "max(5rem, env(safe-area-inset-bottom))",
+      }}
+    >
       {/* JSON-LD (same content), but avoids importing next/script (prevents Turbopack HMR crash path) */}
       <script
         id="product-schema"
