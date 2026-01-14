@@ -24,10 +24,20 @@ export const metadata = {
   robots: { index: true, follow: true },
 };
 
+/**
+ * ✅ Phase 1: Correct viewport behavior for Android + iPhone (App Router)
+ * Prevents "only a portion of the site shows" caused by wrong layout viewport scaling.
+ */
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>
+      <body id="app-shell">
         <AdminRouteGate
           adminTree={<main role="main">{children}</main>}
           siteTree={

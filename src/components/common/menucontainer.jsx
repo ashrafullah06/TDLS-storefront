@@ -15,8 +15,16 @@ import { AnimatePresence, motion } from "framer-motion";
  * - CATCHER PLAN: uses SAME-ORIGIN proxy (/api/strapi) to avoid CORS and keep it fast.
  * - Instant open: localStorage cache + TTL, then refresh in background.
  * - Mobile safe: never overflow screen (vertical/horizontal); internal scroll only.
+ *
+ * CENTRAL TOKENS (from src/styles/variables.css):
+ * - --page-gutter-x
+ * - --safe-top/--safe-right/--safe-bottom/--safe-left
+ * - --shadow-soft
+ * - --ring-focus
+ * - --tap-target-min
  */
 
+/* ------------------------- constants ------------------------- */
 const CANONICAL_PREFIX = "/collections";
 
 /* ------------------------- local cache ------------------------- */
@@ -345,12 +353,6 @@ function CategoryCard({ node, onNavigate }) {
 }
 
 /* ------------------------- Component ------------------------- */
-/**
- * IMPORTANT SAFETY:
- * - `open` is now controlled-safe AND cannot accidentally default to open.
- * - If parent forgets to pass `open`, this component stays closed (prevents “white veil”).
- * - If parent passes `open={true}` but forgets `onClose`, the component can still self-close.
- */
 export default function MenuContainer({ open: openProp, onClose = null, options = null }) {
   const isControlled = typeof openProp === "boolean";
   const [selfOpen, setSelfOpen] = useState(false);
@@ -375,7 +377,6 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
     openRef.current = open;
   }, [open]);
 
-  // If uncontrolled and it ever becomes open via internal use, allow self-close.
   const close = () => {
     if (typeof onClose === "function") {
       onClose();
@@ -436,7 +437,6 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
         .then(({ items, sourcePath }) => {
           if (!mounted || !openRef.current) return;
 
-          // Build a real tree (top level nodes keep their children)
           const tree = items.map((it) => toNode(it, 0, 4)).filter(Boolean);
           const deduped = dedupeByHref(tree);
           const sorted = sortNodes(deduped);
@@ -468,7 +468,6 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
             }))
           );
 
-          // If we already had cached nodes, keep them; otherwise use fallback.
           setNodes((prev) => (Array.isArray(prev) && prev.length ? prev : fb));
           setDiag({
             loading: false,
@@ -515,7 +514,7 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
       html.style.overflow = prevHtmlOverflow;
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [open]); // close() is stable enough; do not rebind on every render
+  }, [open]);
 
   const q = query.trim().toLowerCase();
 
@@ -536,8 +535,6 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
 
     return filterTree(nodes);
   }, [nodes, q]);
-
-  if (!open) return null;
 
   const safeTierIdx = Math.max(0, Math.min(activeTierIdx, TIERS.length - 1));
   const activeTier = TIERS[safeTierIdx];
@@ -560,37 +557,60 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
             display: "flex",
             alignItems: "flex-start",
             justifyContent: "center",
-            padding: "max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom))",
+            padding:
+              "max(var(--page-gutter-x), var(--safe-top)) max(var(--page-gutter-x), var(--safe-right)) max(var(--page-gutter-x), var(--safe-bottom)) max(var(--page-gutter-x), var(--safe-left))",
             overflow: "hidden",
           }}
           onPointerDown={(e) => {
-            // outside click closes (touch-safe)
             if (e.target === e.currentTarget) close();
           }}
           role="dialog"
           aria-modal="true"
         >
           <style>{`
+            :root{
+              /* Overlay sizing tokens (centralized via CSS vars; safe defaults) */
+              --overlay-shell-max-w: 1180px;
+              --overlay-shell-w: 94vw;
+              --overlay-shell-max-h: 860px;
+              --overlay-shell-max-dvh: 92dvh;
+              --overlay-radius: 26px;
+
+              --overlay-left-col: 280px;
+              --overlay-pad: 16px;
+
+              /* Breakpoints (as tokens, for consistency across overlays) */
+              --overlay-bp-md: 1024px;
+              --overlay-bp-stack: 900px;
+              --overlay-bp-sm: 480px;
+
+              /* Header stacking breakpoint (earlier than full body stacking) */
+              --overlay-bp-header-stack: 720px;
+            }
+
             .tdls-menu-shell{
-              width: min(1180px, 94vw);
-              max-height: min(92dvh, 860px);
-              border-radius: 26px;
+              width: min(var(--overlay-shell-max-w), var(--overlay-shell-w));
+              max-height: min(var(--overlay-shell-max-dvh), var(--overlay-shell-max-h));
+              border-radius: var(--overlay-radius);
               border: 1px solid rgba(255,255,255,0.14);
               background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(252,252,255,0.96) 100%);
-              box-shadow: 0 40px 120px rgba(0,0,0,0.25);
+              box-shadow: var(--shadow-soft, 0 40px 120px rgba(0,0,0,0.25));
               overflow: hidden;
               display: flex;
               flex-direction: column;
               min-width: 0;
+              contain: layout paint style;
             }
+
             .tdls-menu-body{
               display: grid;
-              grid-template-columns: 280px 1fr;
+              grid-template-columns: var(--overlay-left-col) 1fr;
               gap: 0;
               min-height: 0;
               flex: 1 1 auto;
               overflow: hidden;
             }
+
             .tdls-left{
               padding: 14px;
               border-right: 1px solid rgba(15,33,71,0.08);
@@ -599,34 +619,94 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
               -webkit-overflow-scrolling: touch;
               min-width: 0;
             }
+
             .tdls-right{
-              padding: 16px;
+              padding: var(--overlay-pad);
               overflow: auto;
               -webkit-overflow-scrolling: touch;
               min-width: 0;
             }
+
             .tdls-grid{
               display: grid;
               grid-template-columns: repeat(3, minmax(0, 1fr));
               gap: 12px;
             }
-            @media (max-width: 1024px){
+
+            @media (max-width: var(--overlay-bp-md)){
               .tdls-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
             }
-            @media (max-width: 768px){
-              .tdls-menu-shell{
-                width: min(980px, 96vw);
-                max-height: min(94dvh, 900px);
-                border-radius: 22px;
-              }
-              .tdls-menu-body{
-                grid-template-columns: 1fr;
-              }
+
+            /* Earlier stacking (mobile landscape safe) */
+            @media (max-width: var(--overlay-bp-stack)){
+              .tdls-menu-body{ grid-template-columns: 1fr; }
               .tdls-left{
                 border-right: none;
                 border-bottom: 1px solid rgba(15,33,71,0.08);
               }
               .tdls-grid{ grid-template-columns: 1fr; }
+            }
+
+            @media (max-width: 768px){
+              :root{
+                --overlay-shell-w: 96vw;
+                --overlay-shell-max-h: 900px;
+                --overlay-shell-max-dvh: 94dvh;
+                --overlay-radius: 22px;
+              }
+            }
+
+            @media (max-width: var(--overlay-bp-sm)){
+              :root{
+                --overlay-shell-w: 96vw;
+                --overlay-radius: 20px;
+                --overlay-pad: 14px;
+              }
+              .tdls-left{ padding: 12px; }
+            }
+
+            /* Focus ring (premium + accessible), uses central token */
+            .tdls-focusable:focus{
+              outline: none;
+            }
+            .tdls-focusable:focus-visible{
+              box-shadow: var(--ring-focus, 0 0 0 2px rgba(36, 31, 68, 0.22));
+            }
+
+            /* Header: stack earlier to avoid width traps */
+            .tdls-header{
+              padding: 16px;
+              border-bottom: 1px solid rgba(15,33,71,0.08);
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 12px;
+              flex-wrap: wrap;
+              min-width: 0;
+            }
+            .tdls-header-left{
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              min-width: 0; /* ✅ plan: allow shrink */
+              flex: 1 1 auto;
+            }
+            .tdls-header-right{
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex: 2 1 auto;
+              justify-content: flex-end;
+              min-width: 0;
+            }
+            @media (max-width: var(--overlay-bp-header-stack)){
+              .tdls-header{
+                align-items: stretch;
+              }
+              .tdls-header-right{
+                width: 100%;
+                justify-content: space-between;
+              }
             }
           `}</style>
 
@@ -636,24 +716,12 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
             animate={{ y: 0, scale: 1, opacity: 1 }}
             exit={{ y: 14, scale: 0.985, opacity: 0 }}
             transition={{ duration: 0.22 }}
-            onPointerDown={(e) => {
-              // keep inside interactions from bubbling to the outside close layer
-              e.stopPropagation();
-            }}
+            onPointerDown={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div
-              style={{
-                padding: 16,
-                borderBottom: "1px solid rgba(15,33,71,0.08)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                flexWrap: "wrap",
-              }}
-            >
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
+            <div className="tdls-header">
+              {/* ✅ Plan: minWidth 220 → 0 (shrinkable) */}
+              <div className="tdls-header-left">
                 <div
                   style={{
                     fontFamily: "'Playfair Display', serif",
@@ -662,33 +730,50 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
                     color: "#0F2147",
                     textTransform: "uppercase",
                     fontSize: 16,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   Collections
                 </div>
-                <div style={{ color: "rgba(15,33,71,0.65)", fontWeight: 850, fontSize: 12 }}>
+                <div
+                  style={{
+                    color: "rgba(15,33,71,0.65)",
+                    fontWeight: 850,
+                    fontSize: 12,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   Canonical routing: <span style={{ fontWeight: 950 }}>/collections/&lt;slug&gt;</span>
                 </div>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "1 1 360px", justifyContent: "flex-end" }}>
+              <div className="tdls-header-right">
+                {/* ✅ Plan: width responsive base = min(320px, 100%) */}
                 <input
+                  className="tdls-focusable"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search audience…"
                   style={{
-                    width: 320,
+                    width: "min(320px, 100%)",
                     maxWidth: "100%",
-                    flex: "1 1 260px",
+                    flex: "1 1 240px",
                     borderRadius: 999,
                     border: "1px solid rgba(15,33,71,0.12)",
                     padding: "10px 14px",
                     fontWeight: 850,
                     outline: "none",
                     background: "#fff",
+                    minWidth: 0,
                   }}
                 />
+
                 <button
+                  className="tdls-focusable"
                   type="button"
                   onClick={close}
                   style={{
@@ -700,6 +785,8 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
                     background: "#fff",
                     cursor: "pointer",
                     flexShrink: 0,
+                    whiteSpace: "nowrap",
+                    minHeight: "var(--tap-target-min, 44px)",
                   }}
                 >
                   Close
@@ -724,6 +811,7 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
                     href={tierHref}
                     prefetch
                     onClick={close}
+                    className="tdls-focusable"
                     style={{
                       textDecoration: "none",
                       borderRadius: 16,
@@ -736,6 +824,7 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
                       textTransform: "uppercase",
                       boxShadow: "0 18px 50px rgba(0,0,0,0.10)",
                       display: "block",
+                      minWidth: 0,
                     }}
                   >
                     Explore {activeTier?.label || "Collections"}
@@ -751,6 +840,7 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
                       fontWeight: 850,
                       fontSize: 12,
                       lineHeight: 1.35,
+                      minWidth: 0,
                     }}
                   >
                     {diag.loading ? "Loading audience categories…" : "Audience categories ready."}
@@ -778,18 +868,17 @@ export default function MenuContainer({ open: openProp, onClose = null, options 
                     gap: 12,
                     marginBottom: 12,
                     flexWrap: "wrap",
+                    minWidth: 0,
                   }}
                 >
-                  <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 240 }}>
-                    <div style={{ fontWeight: 950, color: "#0F2147", fontSize: 16 }}>
-                      Audience Categories
-                    </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, flex: "1 1 240px" }}>
+                    <div style={{ fontWeight: 950, color: "#0F2147", fontSize: 16 }}>Audience Categories</div>
                     <div style={{ fontWeight: 850, color: "rgba(15,33,71,0.62)", fontSize: 12 }}>
                       Same slug everywhere → same filtered page
                     </div>
                   </div>
 
-                  <div style={{ fontWeight: 900, color: "rgba(15,33,71,0.60)", fontSize: 12 }}>
+                  <div style={{ fontWeight: 900, color: "rgba(15,33,71,0.60)", fontSize: 12, flexShrink: 0 }}>
                     {filteredNodes.length} items
                   </div>
                 </div>

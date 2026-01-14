@@ -28,6 +28,7 @@ function HomeButton({ onClick, isActive }) {
         background: "none",
         border: "none",
         outline: "none",
+        flex: "0 0 auto",
       }}
     >
       <span
@@ -57,6 +58,7 @@ function HomeButton({ onClick, isActive }) {
         </svg>
       </span>
       <span
+        className="tdlc-home-label"
         style={{
           marginTop: 6,
           fontFamily: "'Playfair Display', serif",
@@ -65,6 +67,7 @@ function HomeButton({ onClick, isActive }) {
           letterSpacing: ".12em",
           color: "#0c2340",
           textAlign: "center",
+          whiteSpace: "nowrap",
         }}
       >
         HOME
@@ -215,45 +218,53 @@ export default function Navbar() {
     <>
       <header
         ref={headerRef}
+        className="tdlc-header"
         style={{
           position: "fixed",
           top: 0,
           left: 0,
           width: "100%",
-          height: "89px",
           background: "#FFFDF8",
           borderBottom: "1px solid #ece9db",
           boxShadow: "0 2px 10px rgba(36,31,68,0.04)",
           zIndex: 2147483647,
           display: "grid",
           alignItems: "center",
-          /* BASE padding for small/medium; desktop override below via media queries */
-          paddingLeft: "24px",
-          paddingRight: "24px",
+          height: "89px",
+          paddingLeft: "var(--nav-gutter-x, var(--page-gutter-x))",
+          paddingRight: "var(--nav-gutter-x, var(--page-gutter-x))",
           transition: "background .34s, box-shadow .28s, border .28s, height .18s",
         }}
       >
-        {/* GRID: left / center / right — brand stays centered */}
         <div
           className="tdlc-navgrid"
           style={{
             display: "grid",
-            gridTemplateColumns: "auto 1fr auto",
+            gridTemplateColumns: "minmax(0, auto) minmax(0, 1fr) minmax(0, auto)",
             gridTemplateAreas: "'left center right'",
             alignItems: "center",
             width: "100%",
             height: "100%",
-            columnGap: "14px",
+            columnGap: 14,
             minWidth: 0,
           }}
         >
           {/* LEFT */}
-          <div style={{ gridArea: "left", display: "flex", alignItems: "center", minWidth: 0 }}>
+          <div
+            className="tdlc-left"
+            style={{
+              gridArea: "left",
+              display: "flex",
+              alignItems: "center",
+              minWidth: 0,
+            }}
+          >
             <HomeButton onClick={handleHomeClick} isActive={homePanelOpen} />
           </div>
 
           {/* CENTER — BRAND */}
           <div
+            className="tdlc-center"
             style={{
               gridArea: "center",
               display: "flex",
@@ -283,6 +294,7 @@ export default function Navbar() {
                 transition: "transform .12s",
                 userSelect: "none",
                 cursor: "pointer",
+                minWidth: 0,
               }}
             >
               <Logorotator size={36} />
@@ -291,16 +303,10 @@ export default function Navbar() {
                 style={{
                   fontFamily: "'Playfair Display', serif",
                   fontWeight: 800,
-                  fontSize: "3.9rem",
                   color: "#0c2340",
-                  letterSpacing: ".19em",
                   textTransform: "uppercase",
-                  whiteSpace: "nowrap",
                   lineHeight: 1.1,
                   textShadow: "0 2px 14px #e7ebf640",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  maxWidth: "54vw",
                 }}
               >
                 TDLC
@@ -308,23 +314,25 @@ export default function Navbar() {
             </div>
           </div>
 
-          {/* RIGHT — SEARCH + HAMBURGER */}
+          {/* RIGHT — SEARCH (desktop only) + HAMBURGER */}
           <div
+            className="tdlc-right"
             style={{
               gridArea: "right",
               display: "flex",
               alignItems: "center",
               justifyContent: "flex-end",
               minWidth: 0,
-              /* Kept wider breathing room between Search and MENU */
               gap: 18,
             }}
           >
+            {/* Search stays for desktop/tablet; hidden on mobile via CSS below */}
             <NavSearchbar className="tdlc-navsearch" />
 
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}>
               <button
                 aria-label="Open menu"
+                className="tdlc-menu-btn"
                 style={{
                   background: "#fffdf8",
                   border: "1px solid #ece9db",
@@ -339,6 +347,7 @@ export default function Navbar() {
                   boxShadow: "0 2px 8px #e3e9f180",
                   padding: "6px 0",
                   transition: "background 0.18s, transform .1s",
+                  flex: "0 0 auto",
                 }}
                 onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#F4F2E7")}
                 onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#fffdf8")}
@@ -353,7 +362,9 @@ export default function Navbar() {
                   <rect y="17.2" width="26" height="3.2" rx="1.6" fill="#0c2340" />
                 </svg>
               </button>
+
               <span
+                className="tdlc-menu-label"
                 style={{
                   fontFamily: "'Playfair Display', serif",
                   fontWeight: 800,
@@ -363,6 +374,7 @@ export default function Navbar() {
                   textShadow: "0 1px 5px #e7e2ce70",
                   letterSpacing: "0.22em",
                   lineHeight: 1.04,
+                  whiteSpace: "nowrap",
                 }}
               >
                 MENU
@@ -371,103 +383,140 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* Responsive rules: 1in only on large screens; smaller screens use compact paddings */}
         <style jsx>{`
-          /* Big screens: apply exactly 1 inch on left/right */
+          /* Shared gutter token (no “inch” padding) */
+          .tdlc-header {
+            --nav-gutter-x: var(--page-gutter-x);
+          }
+
+          /* Width-trap prevention: allow shrink everywhere it matters */
+          .tdlc-navgrid,
+          .tdlc-left,
+          .tdlc-center,
+          .tdlc-right,
+          .tdlc-brand {
+            min-width: 0;
+          }
+
+          /* Desktop default brand: premium single-line with safe truncation */
+          .tdlc-brand-text {
+            font-size: 3.9rem;
+            letter-spacing: 0.19em;
+
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: min(54vw, 560px);
+          }
+
+          /* Large screens: constrain heavy rules through shared token */
           @media (min-width: 1280px) {
-            header {
+            .tdlc-header {
+              --nav-gutter-x: clamp(28px, 4.6vw, 96px);
               height: 92px;
-              padding-left: 1in !important;
-              padding-right: 1in !important;
-            }
-            .tdlc-brand-text {
-              max-width: 54vw;
-              letter-spacing: 0.19em;
-              font-size: 3.9rem;
-            }
-            :global(.tdlc-navsearch .tdlc-searchwrap) {
-              width: clamp(180px, 26vw, 260px) !important;
             }
           }
 
-          /* 1024–1279: roomy but not 1 inch */
+          /* 1024–1279: 2-line clamp to prevent brand forcing overflow */
           @media (max-width: 1279px) and (min-width: 1024px) {
-            header {
+            .tdlc-header {
               height: 84px;
-              padding-left: 36px !important;
-              padding-right: 36px !important;
+              --nav-gutter-x: clamp(20px, 3.2vw, 44px);
             }
+
             .tdlc-brand-text {
-              max-width: 52vw;
-              letter-spacing: 0.16em;
               font-size: 1.7rem;
+              letter-spacing: 0.16em;
+              max-width: min(52vw, 520px);
+
+              white-space: normal;
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+              text-overflow: ellipsis;
             }
+
             :global(.tdlc-navsearch .tdlc-searchwrap) {
               width: clamp(160px, 24vw, 220px) !important;
+              min-width: 0 !important;
             }
           }
 
           /* 820–1023 */
           @media (max-width: 1023px) and (min-width: 820px) {
-            header {
+            .tdlc-header {
               height: 82px;
-              padding-left: 28px !important;
-              padding-right: 28px !important;
+              --nav-gutter-x: clamp(18px, 3vw, 32px);
             }
+
             .tdlc-brand-text {
-              max-width: 48vw;
-              letter-spacing: 0.14em;
               font-size: 1.5rem;
+              letter-spacing: 0.14em;
+              max-width: min(48vw, 460px);
+
+              white-space: normal;
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+              text-overflow: ellipsis;
             }
+
             :global(.tdlc-navsearch .tdlc-searchwrap) {
               width: clamp(150px, 30vw, 210px) !important;
+              min-width: 0 !important;
             }
           }
 
           /* 640–819 */
           @media (max-width: 819px) and (min-width: 640px) {
-            header {
-              padding-left: 22px !important;
-              padding-right: 22px !important;
+            .tdlc-header {
+              --nav-gutter-x: clamp(14px, 2.8vw, 22px);
             }
+
             .tdlc-brand-text {
-              max-width: 44vw;
               font-size: 1.34rem;
               letter-spacing: 0.12em;
+              max-width: min(44vw, 420px);
+
+              white-space: normal;
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+              text-overflow: ellipsis;
             }
+
             :global(.tdlc-navsearch .tdlc-searchwrap) {
               width: clamp(140px, 36vw, 200px) !important;
+              min-width: 0 !important;
             }
           }
 
-          /* 480–639 */
-          @media (max-width: 639px) and (min-width: 480px) {
-            header {
-              padding-left: 18px !important;
-              padding-right: 18px !important;
-            }
-            .tdlc-brand-text {
-              max-width: 40vw;
-              font-size: 1.22rem;
-              letter-spacing: 0.1em;
-            }
-            :global(.tdlc-navsearch .tdlc-searchwrap) {
-              width: clamp(130px, 42vw, 190px) !important;
-            }
-          }
-
-          /* <=479: tightest padding; hide big text to free space */
-          @media (max-width: 479px) {
-            header {
+          /* Mobile: remove searchbar; keep clean layout */
+          @media (max-width: 639px) {
+            .tdlc-header {
               height: 78px;
-              padding-left: 16px !important;
-              padding-right: 16px !important;
+              --nav-gutter-x: clamp(12px, 3vw, 16px);
             }
+
+            :global(.tdlc-navsearch) {
+              display: none !important;
+            }
+
             .tdlc-brand-text {
               display: none;
             }
-            :global(.tdlc-navsearch .tdlc-searchwrap) {
-              width: clamp(128px, 50vw, 200px) !important;
+
+            .tdlc-right {
+              gap: 12px !important;
+            }
+
+            .tdlc-home-label,
+            .tdlc-menu-label {
+              font-size: 0.82rem !important;
+              letter-spacing: 0.18em !important;
             }
           }
         `}</style>
