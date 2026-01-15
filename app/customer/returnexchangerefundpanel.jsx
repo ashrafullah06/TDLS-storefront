@@ -1,4 +1,4 @@
-//my-project\app\customer\returnexchangerefundpanel.jsx
+// FILE: my-project/app/customer/returnexchangerefundpanel.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -612,6 +612,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
 
   return (
     <div
+      className="rer-wrap"
       style={{
         display: "flex",
         gap: 24,
@@ -623,6 +624,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
     >
       {/* main panel */}
       <div
+        className="rer-main"
         style={{
           flex: 2,
           minWidth: 320,
@@ -637,6 +639,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
         }}
       >
         <h2
+          className="rer-title"
           style={{
             margin: 0,
             fontSize: 18,
@@ -650,6 +653,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
 
         {/* lookup block */}
         <div
+          className="rer-lookup-grid"
           style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
@@ -658,6 +662,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
           }}
         >
           <input
+            className="rer-input"
             placeholder="order no"
             value={lookup.order_no}
             onChange={(e) => set_lookup((s) => ({ ...s, order_no: e.target.value }))}
@@ -670,6 +675,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
             }}
           />
           <input
+            className="rer-input"
             placeholder="invoice no"
             value={lookup.invoice_no}
             onChange={(e) => set_lookup((s) => ({ ...s, invoice_no: e.target.value }))}
@@ -682,6 +688,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
             }}
           />
           <input
+            className="rer-input"
             placeholder="product no"
             value={lookup.product_no}
             onChange={(e) => set_lookup((s) => ({ ...s, product_no: e.target.value }))}
@@ -694,6 +701,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
             }}
           />
           <input
+            className="rer-input"
             placeholder="sku"
             value={lookup.sku}
             onChange={(e) => set_lookup((s) => ({ ...s, sku: e.target.value }))}
@@ -706,6 +714,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
             }}
           />
           <input
+            className="rer-input"
             placeholder="barcode"
             value={lookup.barcode}
             onChange={(e) => set_lookup((s) => ({ ...s, barcode: e.target.value }))}
@@ -723,6 +732,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
         {items.length > 0 && (
           <div style={{ marginBottom: 16 }}>
             <div
+              className="rer-muted"
               style={{
                 fontSize: 13,
                 color: "#6a7280",
@@ -741,7 +751,9 @@ export default function ReturnExchangeRefundPanel({ user }) {
                 return (
                   <button
                     key={k}
+                    type="button"
                     onClick={() => set_selected(it)}
+                    className="rer-item"
                     style={{
                       textAlign: "left",
                       padding: "10px 12px",
@@ -751,7 +763,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
                       cursor: "pointer",
                     }}
                   >
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>
+                    <div className="rer-item-title" style={{ fontWeight: 600, fontSize: 14 }}>
                       {d.name}
                       {(d.color || d.size) && (
                         <span style={{ fontWeight: 600 }}>
@@ -759,7 +771,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: 12, color: "#677187" }}>
+                    <div className="rer-item-meta" style={{ fontSize: 12, color: "#677187" }}>
                       order #{d.order} • invoice {d.invoice} • qty {d.qty}
                       {d.sku ? ` • sku ${d.sku}` : ""}
                       {d.barcode ? ` • ean ${d.barcode}` : ""}
@@ -774,6 +786,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
 
         {/* action + reason */}
         <div
+          className="rer-two-col"
           style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
@@ -782,6 +795,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
           }}
         >
           <select
+            className="rer-input"
             value={action_type}
             onChange={(e) => set_action_type(e.target.value)}
             style={{
@@ -797,6 +811,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
           </select>
 
           <select
+            className="rer-input"
             value={reason}
             onChange={(e) => set_reason(e.target.value)}
             style={{
@@ -814,11 +829,16 @@ export default function ReturnExchangeRefundPanel({ user }) {
           </select>
         </div>
 
-        {timing_msg ? <div style={{ marginBottom: 12, color: "#b00020", fontSize: 13 }}>{timing_msg}</div> : null}
+        {timing_msg ? (
+          <div className="rer-warn" style={{ marginBottom: 12, color: "#b00020", fontSize: 13 }}>
+            {timing_msg}
+          </div>
+        ) : null}
 
         {/* description */}
         <div style={{ marginBottom: 12 }}>
           <textarea
+            className="rer-textarea"
             rows={5}
             placeholder="describe the issue (required)"
             value={description}
@@ -835,6 +855,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
         {/* refund options */}
         {action_type === "refund" && (
           <div
+            className="rer-two-col"
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 1fr",
@@ -843,6 +864,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
             }}
           >
             <select
+              className="rer-input"
               value={refund_method}
               onChange={(e) => set_refund_method(e.target.value)}
               style={{
@@ -859,6 +881,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
 
             {refund_method === "mfs" ? (
               <select
+                className="rer-input"
                 value={mfs_service}
                 onChange={(e) => set_mfs_service(e.target.value)}
                 style={{
@@ -876,6 +899,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
               </select>
             ) : (
               <input
+                className="rer-input"
                 placeholder={refund_method === "bank" ? "bank account info" : "—"}
                 disabled={refund_method !== "bank"}
                 value={account_info}
@@ -892,15 +916,18 @@ export default function ReturnExchangeRefundPanel({ user }) {
 
         {/* images */}
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 13, color: "#6a7280", marginBottom: 6 }}>
+          <div className="rer-muted" style={{ fontSize: 13, color: "#6a7280", marginBottom: 6 }}>
             upload up to {MAX_IMAGES} images (refund requires at least 1)
           </div>
-          <input type="file" accept="image/*" multiple onChange={on_pick_images} />
+
+          <input className="rer-file" type="file" accept="image/*" multiple onChange={on_pick_images} />
+
           {images.length > 0 && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            <div className="rer-chip-row" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
               {images.map((f, idx) => (
                 <div
                   key={idx}
+                  className="rer-chip"
                   style={{
                     border: "1px solid #e6eaf1",
                     borderRadius: 10,
@@ -910,10 +937,13 @@ export default function ReturnExchangeRefundPanel({ user }) {
                     gap: 8,
                   }}
                 >
-                  <span style={{ fontSize: 12 }}>{f.name}</span>
+                  <span className="rer-chip-text" style={{ fontSize: 12 }}>
+                    {f.name}
+                  </span>
                   <button
                     type="button"
                     onClick={() => remove_image(idx)}
+                    className="rer-chip-btn"
                     style={{
                       border: "1px solid #e6eaf1",
                       borderRadius: 8,
@@ -931,11 +961,12 @@ export default function ReturnExchangeRefundPanel({ user }) {
         </div>
 
         {/* submit */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div className="rer-submit-row" style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <button
             type="button"
             onClick={on_submit}
             disabled={!can_submit || submitting}
+            className="rer-submit"
             style={{
               padding: "10px 14px",
               borderRadius: 10,
@@ -949,12 +980,17 @@ export default function ReturnExchangeRefundPanel({ user }) {
             {submitting ? "submitting..." : "submit"}
           </button>
 
-          {message && <div style={{ fontSize: 13, color: "#334155" }}>{message}</div>}
+          {message && (
+            <div className="rer-message" style={{ fontSize: 13, color: "#334155" }}>
+              {message}
+            </div>
+          )}
         </div>
       </div>
 
       {/* right bar */}
       <div
+        className="rer-side"
         style={{
           flex: 1,
           minWidth: 260,
@@ -966,6 +1002,7 @@ export default function ReturnExchangeRefundPanel({ user }) {
         }}
       >
         <div
+          className="rer-side-card"
           style={{
             border: "1px solid #e4e7ef",
             borderRadius: 16,
@@ -973,12 +1010,16 @@ export default function ReturnExchangeRefundPanel({ user }) {
             padding: 16,
           }}
         >
-          <div style={{ fontWeight: 700, marginBottom: 10 }}>status timeline</div>
+          <div className="rer-side-title" style={{ fontWeight: 700, marginBottom: 10 }}>
+            status timeline
+          </div>
+
           {timeline?.length ? (
             <div style={{ display: "grid", gap: 8 }}>
               {timeline.map((t, i) => (
                 <div
                   key={i}
+                  className="rer-timeline-card"
                   style={{
                     border: "1px solid #eef1f7",
                     borderRadius: 12,
@@ -986,23 +1027,33 @@ export default function ReturnExchangeRefundPanel({ user }) {
                     background: "#fafbff",
                   }}
                 >
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{t.step}</div>
-                  <div style={{ fontSize: 12, color: "#6a7280" }}>
+                  <div className="rer-timeline-step" style={{ fontWeight: 600, fontSize: 14 }}>
+                    {t.step}
+                  </div>
+                  <div className="rer-timeline-date" style={{ fontSize: 12, color: "#6a7280" }}>
                     {t.date ? new Date(t.date).toLocaleString() : "pending"}
                   </div>
-                  {t.info && <div style={{ fontSize: 12, color: "#334155", marginTop: 4 }}>{t.info}</div>}
+                  {t.info && (
+                    <div className="rer-timeline-info" style={{ fontSize: 12, color: "#334155", marginTop: 4 }}>
+                      {t.info}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           ) : (
-            <div style={{ fontSize: 13, color: "#6a7280" }}>no timeline yet.</div>
+            <div className="rer-muted" style={{ fontSize: 13, color: "#6a7280" }}>
+              no timeline yet.
+            </div>
           )}
 
           {application_id && (
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <a
+                className="rer-link"
                 href={`/api/customers/returns/${encodeURIComponent(application_id)}`}
                 target="_blank"
+                rel="noreferrer"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 10,
@@ -1018,6 +1069,199 @@ export default function ReturnExchangeRefundPanel({ user }) {
           )}
         </div>
       </div>
+
+      {/* Mobile-only overrides. Desktop remains intact because inline styles dominate above breakpoints. */}
+      <style jsx>{`
+        .rer-wrap {
+          box-sizing: border-box;
+          padding-left: env(safe-area-inset-left, 0px);
+          padding-right: env(safe-area-inset-right, 0px);
+        }
+
+        /* Guardrails: never overflow */
+        .rer-main,
+        .rer-side {
+          max-width: 100%;
+        }
+        .rer-input,
+        .rer-textarea,
+        .rer-file {
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+        .rer-item,
+        .rer-chip {
+          max-width: 100%;
+        }
+        .rer-item-title,
+        .rer-item-meta,
+        .rer-chip-text,
+        .rer-message,
+        .rer-timeline-info {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        /* Mobile: reduce sizes, reflow grids, disable sticky sidebar */
+        @media (max-width: 680px) {
+          .rer-wrap {
+            gap: 14px !important;
+            justify-content: stretch !important;
+            padding-left: calc(env(safe-area-inset-left, 0px) + 10px);
+            padding-right: calc(env(safe-area-inset-right, 0px) + 10px);
+            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+          }
+
+          .rer-main {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            padding: 16px 14px !important;
+            border-radius: 14px !important;
+          }
+
+          .rer-title {
+            font-size: 16px !important;
+            margin-bottom: 12px !important;
+          }
+
+          .rer-lookup-grid {
+            grid-template-columns: 1fr !important;
+            gap: 10px !important;
+            margin-bottom: 12px !important;
+          }
+
+          .rer-two-col {
+            grid-template-columns: 1fr !important;
+            gap: 10px !important;
+          }
+
+          .rer-input {
+            padding: 9px 10px !important;
+            border-radius: 10px !important;
+            font-size: 13px !important;
+          }
+
+          .rer-textarea {
+            padding: 10px !important;
+            border-radius: 12px !important;
+            font-size: 13px !important;
+            line-height: 1.35 !important;
+          }
+
+          .rer-muted {
+            font-size: 12px !important;
+          }
+
+          .rer-item {
+            padding: 10px 10px !important;
+            border-radius: 12px !important;
+          }
+
+          .rer-item-title {
+            font-size: 13px !important;
+          }
+
+          .rer-item-meta {
+            font-size: 11.5px !important;
+          }
+
+          .rer-chip {
+            padding: 6px 8px !important;
+            border-radius: 12px !important;
+            gap: 8px !important;
+          }
+
+          .rer-chip-text {
+            font-size: 11.5px !important;
+          }
+
+          .rer-chip-btn {
+            padding: 2px 8px !important;
+            border-radius: 10px !important;
+            font-size: 12px !important;
+          }
+
+          .rer-submit-row {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 8px !important;
+          }
+
+          .rer-submit {
+            width: 100% !important;
+            padding: 10px 12px !important;
+            border-radius: 12px !important;
+            font-size: 13.5px !important;
+            line-height: 1.2 !important;
+            min-height: 44px !important;
+          }
+
+          .rer-message {
+            font-size: 12.5px !important;
+          }
+
+          .rer-side {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            position: static !important; /* critical: avoid sticky overlap on small screens */
+            top: auto !important;
+          }
+
+          .rer-side-card {
+            padding: 14px !important;
+            border-radius: 14px !important;
+          }
+
+          .rer-side-title {
+            font-size: 14px !important;
+          }
+
+          .rer-timeline-step {
+            font-size: 13px !important;
+          }
+          .rer-timeline-date,
+          .rer-timeline-info {
+            font-size: 11.5px !important;
+          }
+
+          .rer-link {
+            display: inline-flex !important;
+            justify-content: center !important;
+            width: 100% !important;
+            font-size: 12.5px !important;
+            padding: 9px 10px !important;
+            border-radius: 12px !important;
+          }
+        }
+
+        /* Ultra small (e.g., 320px, older Android) */
+        @media (max-width: 360px) {
+          .rer-wrap {
+            padding-left: calc(env(safe-area-inset-left, 0px) + 8px);
+            padding-right: calc(env(safe-area-inset-right, 0px) + 8px);
+          }
+          .rer-main {
+            padding: 14px 12px !important;
+          }
+          .rer-input {
+            font-size: 12.5px !important;
+          }
+          .rer-submit {
+            font-size: 13px !important;
+          }
+        }
+
+        /* Landscape phones (short height): tighten vertical rhythm */
+        @media (max-height: 420px) and (max-width: 920px) {
+          .rer-main {
+            padding: 14px 12px !important;
+          }
+          .rer-lookup-grid {
+            margin-bottom: 10px !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

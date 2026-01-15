@@ -17,6 +17,7 @@ function HomeButton({ onClick, isActive }) {
       onMouseLeave={() => setHover(false)}
       onClick={onClick}
       type="button"
+      className="tdlc-homebtn"
       style={{
         marginLeft: 0,
         marginRight: 18,
@@ -29,9 +30,12 @@ function HomeButton({ onClick, isActive }) {
         border: "none",
         outline: "none",
         flex: "0 0 auto",
+        padding: 0,
+        WebkitTapHighlightColor: "transparent",
       }}
     >
       <span
+        className="tdlc-homebtn-icon"
         style={{
           display: "flex",
           alignItems: "center",
@@ -52,11 +56,21 @@ function HomeButton({ onClick, isActive }) {
           transition: "all .18s cubic-bezier(.7,.1,.8,1.2)",
         }}
       >
-        <svg width="28" height="28" fill="none" stroke="#BFA750" strokeWidth="2.4" viewBox="0 0 32 32" aria-hidden>
+        <svg
+          className="tdlc-homebtn-svg"
+          width="28"
+          height="28"
+          fill="none"
+          stroke="#BFA750"
+          strokeWidth="2.4"
+          viewBox="0 0 32 32"
+          aria-hidden
+        >
           <path d="M6 16L16 7L26 16" />
           <rect x="10.6" y="18.6" width="10.8" height="7.6" rx="2" stroke="#0c2340" strokeWidth="2" />
         </svg>
       </span>
+
       <span
         className="tdlc-home-label"
         style={{
@@ -68,6 +82,7 @@ function HomeButton({ onClick, isActive }) {
           color: "#0c2340",
           textAlign: "center",
           whiteSpace: "nowrap",
+          lineHeight: 1.06,
         }}
       >
         HOME
@@ -297,6 +312,7 @@ export default function Navbar() {
                 minWidth: 0,
               }}
             >
+              {/* Keep Logorotator size as-is on mobile (do NOT downscale) */}
               <Logorotator size={36} />
               <span
                 className="tdlc-brand-text"
@@ -309,7 +325,7 @@ export default function Navbar() {
                   textShadow: "0 2px 14px #e7ebf640",
                 }}
               >
-                TDLC
+                TDLS
               </span>
             </div>
           </div>
@@ -329,7 +345,7 @@ export default function Navbar() {
             {/* Search stays for desktop/tablet; hidden on mobile via CSS below */}
             <NavSearchbar className="tdlc-navsearch" />
 
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}>
+            <div className="tdlc-menublock" style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}>
               <button
                 aria-label="Open menu"
                 className="tdlc-menu-btn"
@@ -348,6 +364,7 @@ export default function Navbar() {
                   padding: "6px 0",
                   transition: "background 0.18s, transform .1s",
                   flex: "0 0 auto",
+                  WebkitTapHighlightColor: "transparent",
                 }}
                 onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#F4F2E7")}
                 onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#fffdf8")}
@@ -356,7 +373,7 @@ export default function Navbar() {
                 onClick={handleMenuClick}
                 type="button"
               >
-                <svg width={28} height={26} viewBox="0 0 26 26" fill="none" aria-hidden>
+                <svg className="tdlc-menu-svg" width={28} height={26} viewBox="0 0 26 26" fill="none" aria-hidden>
                   <rect y="5" width="26" height="3.2" rx="1.6" fill="#0c2340" />
                   <rect y="11.2" width="26" height="3.2" rx="1.6" fill="#a6b6d6" />
                   <rect y="17.2" width="26" height="3.2" rx="1.6" fill="#0c2340" />
@@ -494,29 +511,82 @@ export default function Navbar() {
             }
           }
 
-          /* Mobile: remove searchbar; keep clean layout */
+          /* Mobile: remove searchbar; keep clean layout; reduce CTA sizes without touching desktop */
           @media (max-width: 639px) {
             .tdlc-header {
-              height: 78px;
-              --nav-gutter-x: clamp(12px, 3vw, 16px);
+              height: clamp(64px, 12.5vw, 76px);
+              --nav-gutter-x: clamp(10px, 3.2vw, 14px);
             }
 
             :global(.tdlc-navsearch) {
               display: none !important;
             }
 
+            /* Keep brand text hidden on mobile as before (Logorotator still visible, size preserved) */
             .tdlc-brand-text {
               display: none;
             }
 
             .tdlc-right {
-              gap: 12px !important;
+              gap: clamp(10px, 2.6vw, 12px) !important;
             }
 
+            /* HOME + MENU labels: smaller on tiny screens */
             .tdlc-home-label,
             .tdlc-menu-label {
-              font-size: 0.82rem !important;
-              letter-spacing: 0.18em !important;
+              font-size: clamp(0.72rem, 2.9vw, 0.82rem) !important;
+              letter-spacing: 0.16em !important;
+              line-height: 1.02 !important;
+              margin-top: 2px !important;
+            }
+
+            /* Home button: reduce footprint (touch-safe, premium) */
+            :global(.tdlc-homebtn) {
+              width: clamp(46px, 13vw, 56px) !important;
+              margin-right: clamp(10px, 3vw, 14px) !important;
+            }
+            :global(.tdlc-homebtn-icon) {
+              width: clamp(34px, 10.5vw, 40px) !important;
+              height: clamp(34px, 10.5vw, 40px) !important;
+              border-radius: clamp(14px, 4.2vw, 18px) !important;
+              box-shadow: 0 2px 10px #e7dac944, 0 2px 7px #0c23400f !important;
+            }
+            :global(.tdlc-homebtn-svg) {
+              width: clamp(20px, 6.2vw, 24px) !important;
+              height: clamp(20px, 6.2vw, 24px) !important;
+            }
+
+            /* Menu button: reduce footprint + SVG scale down */
+            :global(.tdlc-menu-btn) {
+              width: clamp(42px, 12.5vw, 50px) !important;
+              height: clamp(34px, 10.5vw, 40px) !important;
+              border-radius: clamp(12px, 3.8vw, 14px) !important;
+              padding: 0 !important;
+              box-shadow: 0 2px 8px #e3e9f170 !important;
+            }
+            :global(.tdlc-menu-svg) {
+              width: clamp(20px, 6.2vw, 24px) !important;
+              height: clamp(18px, 5.8vw, 22px) !important;
+            }
+
+            /* Prevent horizontal overflow in ultra-small / landscape */
+            .tdlc-navgrid {
+              column-gap: clamp(8px, 2vw, 12px) !important;
+            }
+            .tdlc-left,
+            .tdlc-right {
+              max-width: 40vw;
+            }
+          }
+
+          /* Extra safety: very small landscape (e.g., 568x320) */
+          @media (max-width: 639px) and (max-height: 420px) {
+            .tdlc-header {
+              height: clamp(58px, 14.5vh, 68px);
+            }
+            .tdlc-home-label,
+            .tdlc-menu-label {
+              display: none !important; /* prevents vertical crowding only in tiny landscape */
             }
           }
         `}</style>

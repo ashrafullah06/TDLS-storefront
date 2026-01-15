@@ -113,7 +113,7 @@ export default function AddressForm({
 }) {
   const [vals, setVals] = useState(() => {
     const draft = readDraft();
-    const p = (prefill && typeof prefill === "object") ? prefill : {};
+    const p = prefill && typeof prefill === "object" ? prefill : {};
     return {
       name: "",
       phone: "",
@@ -171,7 +171,7 @@ export default function AddressForm({
   useEffect(() => {
     // Prefill can change frequently in some flows.
     // Merge only owned fields and avoid state update loops.
-    const p = (prefill && typeof prefill === "object") ? prefill : {};
+    const p = prefill && typeof prefill === "object" ? prefill : {};
     const patch = {
       name: p.name,
       phone: p.phone,
@@ -342,6 +342,11 @@ export default function AddressForm({
       phone: phoneRaw,
       email: emailRaw,
 
+      // extra explicit raw aliases for backward-compat (some parents expect these)
+      nameRaw,
+      phoneRaw,
+      emailRaw,
+
       // provide normalized variants for parent logic
       nameNormalized: nameNorm,
       phoneNormalized: phoneNorm,
@@ -387,10 +392,14 @@ export default function AddressForm({
     setError("");
     setFieldErrors({});
 
-    const name = String(vals.name || "").trim();
-    const phoneRaw = String(vals.phone || "").trim();
+    // Preserve raw inputs explicitly for DB-save flows (shipping/billing edit)
+    const nameRaw = String(vals.name || "");
+    const phoneRaw = String(vals.phone || "");
+    const emailRaw = String(vals.email || "");
+
+    const name = nameRaw.trim();
     const phone = normalizeBDPhone(phoneRaw);
-    const email = String(vals.email || "").trim().toLowerCase();
+    const email = emailRaw.trim().toLowerCase();
 
     const errs = {};
 
@@ -398,7 +407,7 @@ export default function AddressForm({
       if (!name) errs.name = "required";
 
       if (requirePhone) {
-        if (!phoneRaw) errs.phone = "required";
+        if (!phoneRaw.trim()) errs.phone = "required";
         else if (!isValidBDMobile(phoneRaw)) errs.phone = "invalid";
       }
     }
@@ -436,6 +445,9 @@ export default function AddressForm({
     }
 
     // remember key fields for next checkout
+    rememberField("name", nameRaw);
+    rememberField("phone", phone);
+    rememberField("email", email);
     rememberField("streetAddress", street);
     rememberField("address2", vals.address2);
     rememberField("upazila", city);
@@ -445,17 +457,40 @@ export default function AddressForm({
     rememberField("policeStation", vals.policeStation);
     rememberField("union", vals.union);
 
+    // IMPORTANT: keep both raw + normalized fields to avoid breaking parent save logic
     const candidate = {
       ...vals,
+
+      // authoritative fields
       name,
       phone,
       email,
+
+      // backward-compat fields (raw input)
+      nameRaw,
+      phoneRaw,
+      emailRaw,
+
+      // normalized convenience fields (many flows use these)
+      nameNormalized: name,
+      phoneNormalized: phone,
+      emailNormalized: email,
+
       countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
       makeDefault: forceDefault ? true : !!vals.makeDefault,
     };
 
-    const res = await onSubmit?.(candidate);
-    if (res === false) return;
+    try {
+      const res = await onSubmit?.(candidate);
+      if (res === false) return;
+    } catch (err) {
+      // If API/DB save fails, do not silently succeed
+      setError(
+        "Could not save your address. Please try again. If the problem continues, refresh the page and re-submit."
+      );
+      // eslint-disable-next-line no-console
+      console.error("AddressForm onSubmit failed:", err);
+    }
   }
 
   return (
@@ -772,6 +807,7 @@ export default function AddressForm({
           display: grid;
           gap: 10px;
 
+          /* Default (desktop): keep as-is to preserve desktop layout */
           padding: 10px 12px;
           padding-top: calc(10px + env(safe-area-inset-top));
           padding-bottom: calc(
@@ -780,6 +816,8 @@ export default function AddressForm({
 
           align-content: start;
           box-sizing: border-box;
+          max-width: 100%;
+          overflow-x: clip;
         }
 
         .ca-title {
@@ -813,6 +851,7 @@ export default function AddressForm({
           grid-template-columns: repeat(3, minmax(160px, 1fr));
           gap: 10px;
           align-items: start;
+          min-width: 0;
         }
         .ca-span2 {
           grid-column: span 2;
@@ -866,13 +905,14 @@ export default function AddressForm({
           outline: none;
 
           background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
-          box-shadow:
-            inset 0 2px 8px rgba(15, 33, 71, 0.08),
+          box-shadow: inset 0 2px 8px rgba(15, 33, 71, 0.08),
             inset 0 1px 0 rgba(255, 255, 255, 0.9),
             0 10px 22px rgba(15, 33, 71, 0.06);
           transition: box-shadow 150ms ease, border-color 150ms ease, transform 120ms ease;
           box-sizing: border-box;
           width: 100%;
+          min-width: 0;
+          max-width: 100%;
         }
 
         .ca-field input::placeholder {
@@ -884,10 +924,9 @@ export default function AddressForm({
         .ca-field input:focus,
         .ca-field select:focus {
           border-color: rgba(15, 33, 71, 0.38);
-          box-shadow:
-            inset 0 2px 9px rgba(15, 33, 71, 0.10),
+          box-shadow: inset 0 2px 9px rgba(15, 33, 71, 0.1),
             0 0 0 4px rgba(14, 165, 233, 0.14),
-            0 12px 26px rgba(15, 33, 71, 0.10);
+            0 12px 26px rgba(15, 33, 71, 0.1);
           transform: translateY(-0.5px);
         }
 
@@ -906,6 +945,7 @@ export default function AddressForm({
           gap: 10px;
           justify-content: flex-end;
           padding-top: 6px;
+          flex-wrap: wrap;
         }
         .ca-btn {
           height: 44px;
@@ -918,10 +958,11 @@ export default function AddressForm({
           font-size: 13px;
           box-shadow: 0 10px 18px rgba(15, 33, 71, 0.06);
           transition: transform 120ms ease, box-shadow 150ms ease;
+          max-width: 100%;
         }
         .ca-btn:hover {
           transform: translateY(-1px);
-          box-shadow: 0 14px 26px rgba(15, 33, 71, 0.10);
+          box-shadow: 0 14px 26px rgba(15, 33, 71, 0.1);
         }
         .ca-btn:active {
           transform: translateY(0px);
@@ -940,9 +981,22 @@ export default function AddressForm({
         }
 
         @media (max-width: 1024px) {
+          /* Ensure safe top/bottom distance under fixed navbar/bottom bar on smaller screens */
           .ca-form {
             width: min(980px, 100%);
+            padding-left: 12px;
+            padding-right: 12px;
+
+            /* Parent can override with --navbar-h; fallback 96px */
+            padding-top: calc(10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+
+            /* If BottomFloatingBar doesn't set --bottom-floating-h, keep a safe fallback */
+            padding-bottom: calc(
+              12px + env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 76px))
+            );
           }
+
           .ca-grid {
             grid-template-columns: repeat(2, minmax(160px, 1fr));
           }
@@ -952,17 +1006,65 @@ export default function AddressForm({
         }
 
         @media (max-width: 640px) {
+          /* Mobile: scale down CTA + fonts; never overflow; keep premium density */
           .ca-form {
-            width: min(920px, 100%);
-            padding: 10px 10px;
+            width: 100%;
+            padding-left: 10px;
+            padding-right: 10px;
+
+            padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 84px));
+            padding-bottom: calc(
+              10px + env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+            );
           }
+
+          .ca-title {
+            font-size: 14px;
+          }
+          .ca-sub {
+            font-size: 12px;
+          }
+          .ca-error {
+            font-size: 12px;
+            padding: 9px 10px;
+          }
+
           .ca-grid {
             grid-template-columns: repeat(2, minmax(140px, 1fr));
-            gap: 10px;
+            gap: 9px;
           }
           .ca-span2,
           .ca-span3 {
             grid-column: span 2;
+          }
+
+          .ca-field label {
+            font-size: 10px;
+            letter-spacing: 0.11em;
+          }
+
+          .ca-field input,
+          .ca-field select {
+            height: 40px;
+            border-radius: 13px;
+            padding: 0 12px;
+            font-size: 12.5px;
+          }
+
+          .chk {
+            font-size: 12px;
+          }
+
+          .ca-actions {
+            gap: 8px;
+            justify-content: stretch;
+          }
+          .ca-btn {
+            height: 40px;
+            font-size: 12.5px;
+            padding: 0 14px;
+            flex: 1 1 160px; /* prevents overflow in landscape, wraps if needed */
           }
         }
 
@@ -973,6 +1075,15 @@ export default function AddressForm({
           .ca-span2,
           .ca-span3 {
             grid-column: span 1;
+          }
+          .ca-field input,
+          .ca-field select {
+            height: 40px;
+            font-size: 12.25px;
+          }
+          .ca-btn {
+            flex: 1 1 auto;
+            width: 100%;
           }
         }
       `}</style>

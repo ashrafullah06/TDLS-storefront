@@ -152,10 +152,7 @@ export default function CartPage() {
   // Total quantity (not just number of lines)
   const totalItems = useMemo(
     () =>
-      items.reduce(
-        (sum, it) => sum + Number(it?.quantity ?? it?.qty ?? 1),
-        0
-      ),
+      items.reduce((sum, it) => sum + Number(it?.quantity ?? it?.qty ?? 1), 0),
     [items]
   );
 
@@ -165,12 +162,7 @@ export default function CartPage() {
     const keys = new Set();
     for (const it of items) {
       const md = it && typeof it.metadata === "object" ? it.metadata : {};
-      const key =
-        it.productId ||
-        md.productId ||
-        it.slug ||
-        it.id ||
-        null;
+      const key = it.productId || md.productId || it.slug || it.id || null;
       if (!key) continue;
       keys.add(String(key));
     }
@@ -190,8 +182,7 @@ export default function CartPage() {
 
   const currencyCode = (items[0]?.currency || "BDT").toUpperCase();
   const money = (n) => {
-    const sym =
-      { BDT: "৳", USD: "$", EUR: "€", GBP: "£" }[currencyCode] || "";
+    const sym = { BDT: "৳", USD: "$", EUR: "€", GBP: "£" }[currencyCode] || "";
     return `${sym}${Number(n || 0).toFixed(2)}`;
   };
 
@@ -325,11 +316,11 @@ export default function CartPage() {
     return () => window.removeEventListener("storage", onAny);
   }, []);
 
-  /* ---------- styles (premium look, no hiding) ---------- */
+  /* ---------- styles (desktop preserved; mobile adaptive via CSS overrides) ---------- */
 
   const S = {
     page: {
-      padding: "120px 16px 96px", // extra top & bottom so nothing hides under navbar/bottom bar
+      padding: "120px 16px 96px", // desktop unchanged
       maxWidth: 1120,
       margin: "0 auto",
       position: "relative",
@@ -356,19 +347,20 @@ export default function CartPage() {
       width: 40,
       borderRadius: 999,
       border: "1px solid #d7dcef",
-      background:
-        "radial-gradient(circle at 20% 0%,#ffffff,#eef2ff 80%)",
+      background: "radial-gradient(circle at 20% 0%,#ffffff,#eef2ff 80%)",
       fontSize: 18,
       cursor: "pointer",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       boxShadow: "0 10px 22px rgba(15,23,42,0.18)",
+      flex: "0 0 auto",
     },
     titleWrap: {
       display: "flex",
       flexDirection: "column",
       gap: 2,
+      minWidth: 0,
     },
     title: {
       fontFamily: "'Playfair Display', serif",
@@ -377,10 +369,13 @@ export default function CartPage() {
       letterSpacing: ".04em",
       color: "#0f2147",
       textTransform: "uppercase",
+      margin: 0,
+      lineHeight: 1.1,
     },
     subtitle: {
       fontSize: 13,
       color: "#6b7280",
+      lineHeight: 1.35,
     },
     pillCount: {
       padding: "4px 10px",
@@ -393,11 +388,13 @@ export default function CartPage() {
       textTransform: "uppercase",
       color: "#0f2147",
       whiteSpace: "nowrap",
+      flex: "0 0 auto",
     },
     layout: {
       display: "grid",
-      gridTemplateColumns: "minmax(0,1.6fr) minmax(320px,0.9fr)",
+      gridTemplateColumns: "minmax(0,1.6fr) minmax(320px,0.9fr)", // desktop unchanged
       gap: 20,
+      alignItems: "start",
     },
     card: {
       background: "#ffffff",
@@ -405,6 +402,7 @@ export default function CartPage() {
       borderRadius: 18,
       boxShadow: "0 14px 36px rgba(8,21,64,.08)",
       overflow: "hidden",
+      minWidth: 0,
     },
     listHead: {
       display: "grid",
@@ -416,8 +414,7 @@ export default function CartPage() {
       fontWeight: 700,
       textTransform: "uppercase",
       letterSpacing: ".08em",
-      background:
-        "linear-gradient(90deg,#f9fafb,#eef2ff,#f9fafb)",
+      background: "linear-gradient(90deg,#f9fafb,#eef2ff,#f9fafb)",
     },
     row: {
       display: "grid",
@@ -426,6 +423,7 @@ export default function CartPage() {
       padding: "12px 14px",
       alignItems: "center",
       borderBottom: "1px dashed #eef2ff",
+      minWidth: 0,
     },
     imgWrap: {
       width: 80,
@@ -440,8 +438,14 @@ export default function CartPage() {
       color: "#0f2147",
       marginBottom: 4,
       fontSize: 14,
+      lineHeight: 1.25,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      display: "-webkit-box",
+      WebkitLineClamp: 2,
+      WebkitBoxOrient: "vertical",
     },
-    meta: { fontSize: 12, color: "#6b7280" },
+    meta: { fontSize: 12, color: "#6b7280", lineHeight: 1.35 },
     qtyBox: {
       display: "inline-flex",
       alignItems: "center",
@@ -451,6 +455,7 @@ export default function CartPage() {
       padding: "4px 10px",
       background: "rgba(249,250,251,0.8)",
       boxShadow: "0 4px 10px rgba(15,23,42,0.08)",
+      maxWidth: "100%",
     },
     qtyBtn: {
       height: 26,
@@ -463,6 +468,7 @@ export default function CartPage() {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
+      flex: "0 0 auto",
     },
     qtyValue: {
       minWidth: 26,
@@ -471,7 +477,7 @@ export default function CartPage() {
       fontSize: 13,
       color: "#0f2147",
     },
-    price: { fontWeight: 900, color: "#0f2147", fontSize: 14 },
+    price: { fontWeight: 900, color: "#0f2147", fontSize: 14, whiteSpace: "nowrap" },
     remove: {
       height: 34,
       width: 34,
@@ -490,15 +496,13 @@ export default function CartPage() {
       display: "flex",
       flexDirection: "column",
       gap: 14,
-      background:
-        "radial-gradient(circle at top,#0f172a,#020617 55%,#020617 100%)",
+      background: "radial-gradient(circle at top,#0f172a,#020617 55%,#020617 100%)",
       color: "#e5e7eb",
     },
     summaryCardInner: {
       padding: 16,
       borderRadius: 14,
-      background:
-        "linear-gradient(135deg,rgba(15,23,42,.95),rgba(15,23,42,.9))",
+      background: "linear-gradient(135deg,rgba(15,23,42,.95),rgba(15,23,42,.9))",
       border: "1px solid rgba(55,65,81,0.9)",
       display: "flex",
       flexDirection: "column",
@@ -509,6 +513,7 @@ export default function CartPage() {
       justifyContent: "space-between",
       alignItems: "center",
       fontSize: 13,
+      gap: 12,
     },
     dimLabel: {
       color: "#9ca3af",
@@ -524,14 +529,13 @@ export default function CartPage() {
       fontSize: 11,
       fontWeight: 800,
     },
-    total: { fontWeight: 900, fontSize: 18, color: "#f9fafb" },
+    total: { fontWeight: 900, fontSize: 18, color: "#f9fafb", whiteSpace: "nowrap" },
     primary: {
       width: "100%",
       padding: "12px 16px",
       borderRadius: 999,
       fontWeight: 900,
-      background:
-        "linear-gradient(135deg,#facc15,#a16207 90%)",
+      background: "linear-gradient(135deg,#facc15,#a16207 90%)",
       color: "#111827",
       border: "none",
       cursor: "pointer",
@@ -553,13 +557,8 @@ export default function CartPage() {
       letterSpacing: ".12em",
       textTransform: "uppercase",
     },
-    dashed: {
-      borderStyle: "dashed",
-    },
-    smallHint: {
-      fontSize: 11,
-      color: "#9ca3af",
-    },
+    dashed: { borderStyle: "dashed" },
+    smallHint: { fontSize: 11, color: "#9ca3af", lineHeight: 1.35 },
     emptyWrap: {
       textAlign: "center",
       padding: "70px 24px",
@@ -568,13 +567,8 @@ export default function CartPage() {
       borderRadius: 18,
       boxShadow: "0 18px 50px rgba(8,21,64,.10)",
     },
-    emptyTitle: {
-      fontWeight: 900,
-      fontSize: 24,
-      color: "#0f2147",
-      marginBottom: 8,
-    },
-    emptyText: { color: "#6b7280", marginBottom: 18, fontSize: 13 },
+    emptyTitle: { fontWeight: 900, fontSize: 24, color: "#0f2147", marginBottom: 8 },
+    emptyText: { color: "#6b7280", marginBottom: 18, fontSize: 13, lineHeight: 1.4 },
     recentWrap: { marginTop: 28 },
     recentGrid: {
       display: "grid",
@@ -587,17 +581,10 @@ export default function CartPage() {
       overflow: "hidden",
       background: "#fff",
       boxShadow: "0 8px 22px rgba(15,23,42,0.06)",
+      minWidth: 0,
     },
-    recentImg: {
-      width: "100%",
-      aspectRatio: "1 / 1",
-      objectFit: "cover",
-    },
-    recentBody: {
-      padding: 10,
-      display: "grid",
-      gap: 6,
-    },
+    recentImg: { width: "100%", aspectRatio: "1 / 1", objectFit: "cover" },
+    recentBody: { padding: 10, display: "grid", gap: 6 },
     bottomBarSpacer: { height: 80 },
   };
 
@@ -609,27 +596,29 @@ export default function CartPage() {
       {/* Fixed premium navbar (already handles its own layout) */}
       <Navbar />
 
-      <div style={S.page}>
+      <div className="tdls-cart-shell" style={S.page}>
         {/* top bar with conditional Back, title, and counts pill */}
-        <div style={S.topbar}>
-          <div style={S.leftTop}>
+        <div className="tdls-cart-topbar" style={S.topbar}>
+          <div className="tdls-cart-lefttop" style={S.leftTop}>
             {canGoBack && (
               <button
                 type="button"
                 aria-label="Back"
                 onClick={goBack}
                 style={S.back}
+                className="tdls-cart-back"
               >
                 ←
               </button>
             )}
-            <div style={S.titleWrap}>
-              <h1 style={S.title}>Your Shopping Bag</h1>
-              <div style={S.subtitle}>
+            <div className="tdls-cart-titlewrap" style={S.titleWrap}>
+              <h1 className="tdls-cart-title" style={S.title}>
+                Your Shopping Bag
+              </h1>
+              <div className="tdls-cart-subtitle" style={S.subtitle}>
                 {totalItems > 0 ? (
                   <>
-                    {uniqueProductsCount} product
-                    {uniqueProductsCount === 1 ? "" : "s"} · {totalItems} item
+                    {uniqueProductsCount} product{uniqueProductsCount === 1 ? "" : "s"} · {totalItems} item
                     {totalItems === 1 ? "" : "s"} in your bag
                   </>
                 ) : (
@@ -639,28 +628,29 @@ export default function CartPage() {
             </div>
           </div>
 
-          <div style={S.pillCount}>
-            {uniqueProductsCount} PRODUCT
-            {uniqueProductsCount === 1 ? "" : "S"} · {totalItems} ITEM
+          <div className="tdls-cart-pill" style={S.pillCount}>
+            {uniqueProductsCount} PRODUCT{uniqueProductsCount === 1 ? "" : "S"} · {totalItems} ITEM
             {totalItems === 1 ? "" : "S"}
           </div>
         </div>
 
         {items.length === 0 ? (
-          <div style={S.emptyWrap}>
-            <div style={S.emptyTitle}>Your cart is empty.</div>
-            <div style={S.emptyText}>
+          <div className="tdls-cart-empty" style={S.emptyWrap}>
+            <div className="tdls-cart-empty-title" style={S.emptyTitle}>
+              Your cart is empty.
+            </div>
+            <div className="tdls-cart-empty-text" style={S.emptyText}>
               Discover your next favourite piece from THE DNA LAB CLOTHING.
             </div>
-            <button style={S.primary} onClick={goShop}>
+            <button className="tdls-cart-primary" style={S.primary} onClick={goShop}>
               Start shopping
             </button>
           </div>
         ) : (
-          <div style={S.layout}>
+          <div className="tdls-cart-layout" style={S.layout}>
             {/* Left: list */}
-            <div style={S.card}>
-              <div style={S.listHead}>
+            <div className="tdls-cart-card" style={S.card}>
+              <div className="tdls-cart-listhead" style={S.listHead}>
                 <div>Item</div>
                 <div>Product</div>
                 <div>Quantity</div>
@@ -676,21 +666,18 @@ export default function CartPage() {
 
                 return (
                   <div
-                    key={`${it.productId || it.id || "p"}-${
-                      it.variantId || it.vid || "v"
-                    }-${colorLabel || "x"}-${sizeLabel || "x"}-${i}`}
+                    key={`${it.productId || it.id || "p"}-${it.variantId || it.vid || "v"}-${colorLabel || "x"}-${
+                      sizeLabel || "x"
+                    }-${i}`}
+                    className="tdls-cart-row"
                     style={S.row}
                   >
-                    <div style={S.imgWrap}>
+                    <div className="tdls-cart-imgwrap" style={S.imgWrap}>
                       {imgSrc ? (
                         <img
                           src={imgSrc}
                           alt={it.name || it.title || "Product"}
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "cover",
-                          }}
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
                         />
                       ) : (
                         <div
@@ -709,11 +696,11 @@ export default function CartPage() {
                       )}
                     </div>
 
-                    <div>
-                      <div style={S.name}>
+                    <div className="tdls-cart-prod">
+                      <div className="tdls-cart-name" style={S.name}>
                         {it.name || it.title || "Product"}
                       </div>
-                      <div style={S.meta}>
+                      <div className="tdls-cart-meta" style={S.meta}>
                         {colorLabel ? (
                           <>
                             Color: <strong>{colorLabel}</strong> •{" "}
@@ -728,22 +715,24 @@ export default function CartPage() {
                       </div>
                     </div>
 
-                    <div>
-                      <div style={S.qtyBox}>
+                    <div className="tdls-cart-qty">
+                      <div className="tdls-cart-qtybox" style={S.qtyBox}>
                         <button
                           type="button"
                           style={S.qtyBtn}
-                          onClick={() =>
-                            setQty(it, Math.max(1, qty - 1))
-                          }
+                          className="tdls-cart-qtybtn"
+                          onClick={() => setQty(it, Math.max(1, qty - 1))}
                           aria-label="Decrease quantity"
                         >
                           −
                         </button>
-                        <div style={S.qtyValue}>{qty}</div>
+                        <div className="tdls-cart-qtyval" style={S.qtyValue}>
+                          {qty}
+                        </div>
                         <button
                           type="button"
                           style={S.qtyBtn}
+                          className="tdls-cart-qtybtn"
                           onClick={() => setQty(it, qty + 1)}
                           aria-label="Increase quantity"
                         >
@@ -752,16 +741,15 @@ export default function CartPage() {
                       </div>
                     </div>
 
-                    <div style={S.price}>
-                      {money(
-                        Number(it.price || it.unitPrice || 0) * qty
-                      )}
+                    <div className="tdls-cart-line-total" style={S.price}>
+                      {money(Number(it.price || it.unitPrice || 0) * qty)}
                     </div>
 
-                    <div>
+                    <div className="tdls-cart-removecell">
                       <button
                         type="button"
                         style={S.remove}
+                        className="tdls-cart-remove"
                         aria-label="Remove item"
                         onClick={() => removeLine(it)}
                         title="Remove"
@@ -775,8 +763,8 @@ export default function CartPage() {
             </div>
 
             {/* Right: summary */}
-            <aside style={S.card}>
-              <div style={S.summary}>
+            <aside className="tdls-cart-card tdls-cart-summarycard" style={S.card}>
+              <div className="tdls-cart-summary" style={S.summary}>
                 <div style={S.summaryCardInner}>
                   <div style={S.rowFlex}>
                     <span style={S.dimLabel}>Products</span>
@@ -790,9 +778,7 @@ export default function CartPage() {
                     <span style={S.totalLabel}>Subtotal</span>
                     <span style={S.total}>{money(subtotal)}</span>
                   </div>
-                  <div style={S.smallHint}>
-                    Shipping &amp; taxes are calculated at checkout.
-                  </div>
+                  <div style={S.smallHint}>Shipping &amp; taxes are calculated at checkout.</div>
                 </div>
 
                 <button
@@ -801,6 +787,7 @@ export default function CartPage() {
                     opacity: syncing ? 0.7 : 1,
                     pointerEvents: syncing ? "none" : "auto",
                   }}
+                  className="tdls-cart-primary"
                   onClick={syncAndGo}
                   disabled={syncing}
                   aria-busy={syncing ? "true" : "false"}
@@ -808,10 +795,11 @@ export default function CartPage() {
                   {syncing ? "Preparing checkout…" : "Proceed to Checkout"}
                 </button>
 
-                <button style={S.ghost} onClick={goShop}>
+                <button className="tdls-cart-ghost" style={S.ghost} onClick={goShop}>
                   Continue Shopping
                 </button>
                 <button
+                  className="tdls-cart-ghost"
                   style={{ ...S.ghost, ...S.dashed }}
                   onClick={clearAll}
                   title="Clear cart"
@@ -825,65 +813,34 @@ export default function CartPage() {
 
         {/* Recently viewed */}
         {recent.length > 0 && (
-          <section style={S.recentWrap}>
-            <h2
-              style={{
-                ...S.title,
-                fontSize: 22,
-                marginTop: 6,
-                marginBottom: 12,
-              }}
-            >
+          <section className="tdls-cart-recent" style={S.recentWrap}>
+            <h2 style={{ ...S.title, fontSize: 22, marginTop: 6, marginBottom: 12 }}>
               Recently Viewed &amp; Related
             </h2>
-            <div style={S.recentGrid}>
+            <div className="tdls-cart-recentgrid" style={S.recentGrid}>
               {recent.map((r, i) => (
-                <article
-                  key={(r.slug || r.id || i) + "-rv"}
-                  style={S.recentCard}
-                >
+                <article key={(r.slug || r.id || i) + "-rv"} style={S.recentCard} className="tdls-cart-recentcard">
                   {r.image ? (
-                    <img
-                      src={r.image}
-                      alt={r.name || "Product"}
-                      style={S.recentImg}
-                    />
+                    <img src={r.image} alt={r.name || "Product"} style={S.recentImg} />
                   ) : (
                     <div
                       style={{
                         ...S.recentImg,
-                        background:
-                          "radial-gradient(circle,#eef2ff,#e5e7eb)",
+                        background: "radial-gradient(circle,#eef2ff,#e5e7eb)",
                       }}
                     />
                   )}
                   <div style={S.recentBody}>
-                    <div
-                      style={{
-                        fontWeight: 800,
-                        color: "#0f2147",
-                        fontSize: 13,
-                      }}
-                    >
+                    <div style={{ fontWeight: 800, color: "#0f2147", fontSize: 13, lineHeight: 1.25 }}>
                       {r.name || r.title || "Product"}
                     </div>
-                    <div
-                      style={{
-                        color: "#6b7280",
-                        fontSize: 13,
-                      }}
-                    >
-                      {r.price != null
-                        ? money(Number(r.price || r.base_price || 0))
-                        : "—"}
+                    <div style={{ color: "#6b7280", fontSize: 13 }}>
+                      {r.price != null ? money(Number(r.price || r.base_price || 0)) : "—"}
                     </div>
                     <button
                       type="button"
-                      onClick={() =>
-                        router.push(
-                          r.slug ? `/product/${r.slug}` : "/product"
-                        )
-                      }
+                      onClick={() => router.push(r.slug ? `/product/${r.slug}` : "/product")}
+                      className="tdls-cart-viewbtn"
                       style={{
                         padding: "10px 12px",
                         borderRadius: 999,
@@ -909,6 +866,123 @@ export default function CartPage() {
         <div style={S.bottomBarSpacer} />
         <BottomFloatingBar />
       </div>
+
+      {/* Mobile-only adaptive overrides (desktop stays intact) */}
+      <style>{`
+        .tdls-cart-shell { overflow-x: hidden; }
+
+        /* Slight hover polish (desktop only behaviors kept) */
+        .tdls-cart-remove:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(15,23,42,0.14); }
+        .tdls-cart-qtybtn:hover { transform: translateY(-1px); }
+        .tdls-cart-viewbtn:hover { filter: brightness(1.02); transform: translateY(-1px); }
+
+        /* Tablets / smaller desktops: keep layout but reduce gutters safely */
+        @media (max-width: 980px) {
+          .tdls-cart-shell { max-width: 98vw !important; }
+          .tdls-cart-layout { grid-template-columns: minmax(0,1fr) !important; }
+          .tdls-cart-summarycard { order: 2; }
+        }
+
+        /* Mobile: compact, no overflow, single column, smaller CTAs/fonts */
+        @media (max-width: 720px) {
+          .tdls-cart-shell{
+            padding: calc(92px + env(safe-area-inset-top)) 10px calc(96px + env(safe-area-inset-bottom)) !important;
+            border-radius: 18px !important;
+            box-shadow: 0 14px 40px rgba(15,23,42,0.10) !important;
+          }
+
+          .tdls-cart-topbar{
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 10px !important;
+          }
+
+          .tdls-cart-lefttop{ width: 100% !important; }
+          .tdls-cart-titlewrap{ width: 100% !important; }
+          .tdls-cart-title{ font-size: 20px !important; letter-spacing: .03em !important; }
+          .tdls-cart-subtitle{ font-size: 12px !important; }
+
+          .tdls-cart-pill{
+            align-self: flex-start !important;
+            font-size: 10px !important;
+            padding: 4px 9px !important;
+            letter-spacing: .12em !important;
+          }
+
+          .tdls-cart-back{
+            width: 34px !important;
+            height: 34px !important;
+            font-size: 16px !important;
+            box-shadow: 0 8px 18px rgba(15,23,42,0.14) !important;
+          }
+
+          .tdls-cart-layout{ grid-template-columns: 1fr !important; gap: 14px !important; }
+
+          /* Header row is too wide for mobile; remove it and use stacked rows */
+          .tdls-cart-listhead{ display: none !important; }
+
+          /* Turn each line into a compact 2-column grid with safe wrapping */
+          .tdls-cart-row{
+            grid-template-columns: 74px 1fr !important;
+            gap: 10px !important;
+            align-items: flex-start !important;
+          }
+
+          /* Grid placement by order (5 children) */
+          .tdls-cart-row > div:nth-child(1){ grid-row: 1 / span 3 !important; } /* image */
+          .tdls-cart-row > div:nth-child(2){ grid-column: 2 !important; grid-row: 1 !important; min-width: 0 !important; } /* title/meta */
+          .tdls-cart-row > div:nth-child(3){ grid-column: 2 !important; grid-row: 2 !important; justify-self: start !important; } /* qty */
+          .tdls-cart-row > div:nth-child(4){ grid-column: 2 !important; grid-row: 2 !important; justify-self: end !important; } /* total */
+          .tdls-cart-row > div:nth-child(5){ grid-column: 2 !important; grid-row: 1 !important; justify-self: end !important; } /* remove */
+
+          .tdls-cart-imgwrap{ width: 70px !important; height: 78px !important; border-radius: 12px !important; }
+          .tdls-cart-name{ font-size: 13px !important; }
+          .tdls-cart-meta{ font-size: 11px !important; }
+
+          .tdls-cart-qtybox{ padding: 3px 8px !important; gap: 7px !important; }
+          .tdls-cart-qtybtn{ width: 24px !important; height: 24px !important; }
+          .tdls-cart-qtyval{ font-size: 12px !important; min-width: 22px !important; }
+
+          .tdls-cart-line-total{ font-size: 13px !important; }
+
+          .tdls-cart-remove{
+            width: 30px !important;
+            height: 30px !important;
+            font-size: 16px !important;
+            line-height: 28px !important;
+          }
+
+          /* Summary: keep premium but reduce padding and button sizes */
+          .tdls-cart-summary{ padding: 14px !important; gap: 12px !important; }
+          .tdls-cart-primary{ padding: 11px 14px !important; font-size: 12px !important; letter-spacing: .12em !important; }
+          .tdls-cart-ghost{ padding: 10px 14px !important; font-size: 11px !important; letter-spacing: .10em !important; }
+
+          /* Empty state: reduce sizes */
+          .tdls-cart-empty{ padding: 52px 16px !important; }
+          .tdls-cart-empty-title{ font-size: 20px !important; }
+          .tdls-cart-empty-text{ font-size: 12px !important; }
+
+          /* Recently viewed: smaller cards, avoid overflow */
+          .tdls-cart-recentgrid{
+            grid-template-columns: repeat(2, minmax(0,1fr)) !important;
+            gap: 10px !important;
+          }
+          .tdls-cart-viewbtn{
+            padding: 9px 11px !important;
+            font-size: 11px !important;
+            letter-spacing: .10em !important;
+          }
+        }
+
+        /* Ultra-small + landscape phones: tighter spacing, prevent vertical crowding */
+        @media (max-width: 420px), (max-height: 520px) {
+          .tdls-cart-shell{
+            padding: calc(86px + env(safe-area-inset-top)) 8px calc(92px + env(safe-area-inset-bottom)) !important;
+          }
+          .tdls-cart-title{ font-size: 18px !important; }
+          .tdls-cart-recentgrid{ grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+        }
+      `}</style>
     </>
   );
 }

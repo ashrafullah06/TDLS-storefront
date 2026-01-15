@@ -62,9 +62,7 @@ function useSessionShell() {
   const { data: session, status } = useSession();
   const base = useMemo(() => {
     const u = session?.user;
-    return u
-      ? { id: u.id || '', name: u.name || '', email: u.email || '', phone: u.phone || '' }
-      : null;
+    return u ? { id: u.id || '', name: u.name || '', email: u.email || '', phone: u.phone || '' } : null;
   }, [session]);
   return { base, status };
 }
@@ -74,6 +72,7 @@ function DashboardOptionDropdown({ open, options, selectedKey, onSelect, setOpen
 
   return (
     <div
+      className="tdls-dd-wrap"
       style={{
         position: 'relative',
         marginTop: '46px',
@@ -82,6 +81,7 @@ function DashboardOptionDropdown({ open, options, selectedKey, onSelect, setOpen
       }}
     >
       <div
+        className="tdls-dd-label"
         style={{
           fontSize: 12,
           letterSpacing: '.18em',
@@ -94,6 +94,7 @@ function DashboardOptionDropdown({ open, options, selectedKey, onSelect, setOpen
       </div>
 
       <button
+        className="tdls-dd-btn"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -119,8 +120,9 @@ function DashboardOptionDropdown({ open, options, selectedKey, onSelect, setOpen
         aria-label="open dashboard menu"
         title="open dashboard menu"
       >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <span
+            className="tdls-dd-icon"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -130,19 +132,31 @@ function DashboardOptionDropdown({ open, options, selectedKey, onSelect, setOpen
               borderRadius: '999px',
               border: `1px solid ${NAVY}`,
               fontSize: 11,
+              flex: '0 0 auto',
             }}
           >
             ⌖
           </span>
 
-          <span>{showMenuLabel ? 'Dashboard Menu' : selected ? selected.label : 'Dashboard Menu'}</span>
+          <span
+            className="tdls-dd-selected"
+            style={{
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {showMenuLabel ? 'Dashboard Menu' : selected ? selected.label : 'Dashboard Menu'}
+          </span>
         </span>
 
-        <span style={{ fontSize: 18, marginLeft: 8 }}>▾</span>
+        <span style={{ fontSize: 18, marginLeft: 8, flex: '0 0 auto' }}>▾</span>
       </button>
 
       {open && (
         <ul
+          className="tdls-dd-list"
           role="listbox"
           style={{
             position: 'absolute',
@@ -184,8 +198,10 @@ function DashboardOptionDropdown({ open, options, selectedKey, onSelect, setOpen
                 transition: 'background 0.16s ease, transform 0.16s ease, color 0.16s ease',
               }}
             >
-              <span>{opt.label}</span>
-              <span style={{ fontSize: 11, opacity: selectedKey === opt.key ? 1 : 0.3 }}>→</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {opt.label}
+              </span>
+              <span style={{ fontSize: 11, opacity: selectedKey === opt.key ? 1 : 0.3, flex: '0 0 auto' }}>→</span>
             </li>
           ))}
         </ul>
@@ -199,6 +215,7 @@ function Banner({ children }) {
     <div
       role="status"
       aria-live="polite"
+      className="tdls-banner"
       style={{
         borderRadius: 12,
         padding: '12px 14px',
@@ -218,8 +235,6 @@ function deriveOrderStatus(o) {
   const s = o?.status || o?.orderStatus || o?.state || o?.fulfillmentStatus || o?.paymentStatus || '';
   return String(s || '').trim();
 }
-
-
 
 // ────────────────────────────────────────────────────────────────
 // Customer-safe panel guard:
@@ -248,6 +263,7 @@ class TDLCPanelErrorBoundary extends React.Component {
 function TDLCPanelFallback({ title = 'This section', onRetry }) {
   return (
     <div
+      className="tdls-panel-fallback"
       style={{
         width: '100%',
         border: '1px solid #e4e7ef',
@@ -261,9 +277,7 @@ function TDLCPanelFallback({ title = 'This section', onRetry }) {
       aria-live="polite"
     >
       <div style={{ fontWeight: 900, color: NAVY, fontSize: 16, textTransform: 'capitalize' }}>{title}</div>
-      <div style={{ marginTop: 8, color: '#475569', fontSize: 14 }}>
-        failed to execute right now. please try again later.
-      </div>
+      <div style={{ marginTop: 8, color: '#475569', fontSize: 14 }}>failed to execute right now. please try again later.</div>
       <div style={{ marginTop: 12 }}>
         <button
           type="button"
@@ -286,9 +300,7 @@ function TDLCPanelFallback({ title = 'This section', onRetry }) {
         >
           retry
         </button>
-        <span style={{ marginLeft: 10, fontSize: 12, color: '#94a3b8' }}>
-          or check back later (coming soon updates).
-        </span>
+        <span style={{ marginLeft: 10, fontSize: 12, color: '#94a3b8' }}>or check back later (coming soon updates).</span>
       </div>
     </div>
   );
@@ -308,14 +320,11 @@ function SafePanel({ title, children }) {
     return /failed to fetch|networkerror|load failed/i.test(m);
   }, []);
 
-  const blockNow = useCallback(
-    (msg) => {
-      if (blockedRef.current) return;
-      blockedRef.current = true;
-      setBlocked(true);
-    },
-    [],
-  );
+  const blockNow = useCallback((msg) => {
+    if (blockedRef.current) return;
+    blockedRef.current = true;
+    setBlocked(true);
+  }, []);
 
   // Catch unhandled promise rejections (dev overlay) coming from panel fetches.
   useEffect(() => {
@@ -379,75 +388,75 @@ export default function Dashboard() {
   const [authLost, setAuthLost] = useState(false);
   const [authLostReason, setAuthLostReason] = useState('');
 
-  const buildLoginUrl = useCallback((reason = "logged_out") => {
-  const nextPath = "/customer/dashboard";
-  return `/login?next=${encodeURIComponent(nextPath)}&reason=${encodeURIComponent(String(reason || "logged_out"))}`;
-}, []);
+  const buildLoginUrl = useCallback((reason = 'logged_out') => {
+    const nextPath = '/customer/dashboard';
+    return `/login?next=${encodeURIComponent(nextPath)}&reason=${encodeURIComponent(String(reason || 'logged_out'))}`;
+  }, []);
 
-const handleAuthLost = useCallback(
-  (reason = "logged_out") => {
-    if (redirectingRef.current) return;
-    redirectingRef.current = true;
+  const handleAuthLost = useCallback(
+    (reason = 'logged_out') => {
+      if (redirectingRef.current) return;
+      redirectingRef.current = true;
 
-    const finalReason = String(reason || "logged_out");
-    const loginUrl = buildLoginUrl(finalReason);
+      const finalReason = String(reason || 'logged_out');
+      const loginUrl = buildLoginUrl(finalReason);
 
-    setAuthLost(true);
-    setAuthLostReason(finalReason);
+      setAuthLost(true);
+      setAuthLostReason(finalReason);
 
-    /**
-     * IMPORTANT:
-     * Use NextAuth signOut redirect (callbackUrl) so cookies clear BEFORE we land on /login.
-     * This prevents "login page flicker" (login -> loading -> stable) caused by a transient authenticated session.
-     */
-    try {
-      if (statusRef.current === "unauthenticated") {
-        if (typeof window !== "undefined") window.location.assign(loginUrl);
-        else router.replace(loginUrl);
-        return;
-      }
-
-      void signOut({ callbackUrl: loginUrl });
-      return;
-    } catch {
-      // Fallback: client-side redirect.
+      /**
+       * IMPORTANT:
+       * Use NextAuth signOut redirect (callbackUrl) so cookies clear BEFORE we land on /login.
+       * This prevents "login page flicker" (login -> loading -> stable) caused by a transient authenticated session.
+       */
       try {
-        if (typeof window !== "undefined") window.location.assign(loginUrl);
-        else router.replace(loginUrl);
+        if (statusRef.current === 'unauthenticated') {
+          if (typeof window !== 'undefined') window.location.assign(loginUrl);
+          else router.replace(loginUrl);
+          return;
+        }
+
+        void signOut({ callbackUrl: loginUrl });
+        return;
       } catch {
-        router.replace(loginUrl);
+        // Fallback: client-side redirect.
+        try {
+          if (typeof window !== 'undefined') window.location.assign(loginUrl);
+          else router.replace(loginUrl);
+        } catch {
+          router.replace(loginUrl);
+        }
       }
-    }
-  },
-  [router, buildLoginUrl],
-);
+    },
+    [router, buildLoginUrl],
+  );
 
   // If NextAuth session fetch gets stuck (network/proxy) we must fail fast (no endless spinner).
   useEffect(() => {
     if (authLost) return;
-    if (status !== "loading") return;
+    if (status !== 'loading') return;
 
     const SESSION_SOFT_TIMEOUT_MS = 1500;
     const SESSION_FETCH_TIMEOUT_MS = 1500;
 
     const t = setTimeout(async () => {
       // If status already resolved, do nothing.
-      if (statusRef.current !== "loading") return;
+      if (statusRef.current !== 'loading') return;
 
       try {
         const controller = new AbortController();
         const tt = setTimeout(() => controller.abort(), SESSION_FETCH_TIMEOUT_MS);
 
-        const r = await fetch("/api/auth/session", { cache: "no-store", signal: controller.signal });
+        const r = await fetch('/api/auth/session', { cache: 'no-store', signal: controller.signal });
         clearTimeout(tt);
 
-        if (!r.ok) return handleAuthLost("session_check_failed");
+        if (!r.ok) return handleAuthLost('session_check_failed');
 
         const j = await r.json().catch(() => null);
         // next-auth returns `null` when logged out.
-        if (!j || !j.user) return handleAuthLost("logged_out");
+        if (!j || !j.user) return handleAuthLost('logged_out');
       } catch {
-        return handleAuthLost("session_timeout");
+        return handleAuthLost('session_timeout');
       }
     }, SESSION_SOFT_TIMEOUT_MS);
 
@@ -489,7 +498,6 @@ const handleAuthLost = useCallback(
   }, [userId, base, profileLoadedOnce]);
 
   const [orders, setOrders] = useState([]);
-
   const [ordersLoading, setOrdersLoading] = useState(true);
 
   const [selectedOption, setSelectedOption] = useState('profile');
@@ -811,9 +819,7 @@ const handleAuthLost = useCallback(
         }}
       >
         logged out. redirecting to login…
-        {authLostReason ? (
-          <div style={{ marginTop: 10, fontSize: 12, color: '#64748b' }}>reason: {authLostReason}</div>
-        ) : null}
+        {authLostReason ? <div style={{ marginTop: 10, fontSize: 12, color: '#64748b' }}>reason: {authLostReason}</div> : null}
       </div>
     );
   }
@@ -847,6 +853,7 @@ const handleAuthLost = useCallback(
     }, []);
     return (
       <div
+        className="tdls-welcome"
         style={{
           width: '100%',
           maxWidth: 900,
@@ -875,11 +882,12 @@ const handleAuthLost = useCallback(
         >
           skip to main content
         </a>
-        <div style={{ fontWeight: 800, fontSize: 24, color: NAVY }}>
+        <div className="tdls-welcome-title" style={{ fontWeight: 800, fontSize: 24, color: NAVY }}>
           {welcomeTime},{' '}
           <span style={{ color: '#2A7D46' }}>{user.name}</span>!
         </div>
         <div
+          className="tdls-welcome-chip"
           style={{
             marginLeft: 13,
             fontSize: 15,
@@ -891,15 +899,11 @@ const handleAuthLost = useCallback(
             border: '1px solid #e4e7ef',
           }}
         >
-          <b>membership:</b>{' '}
-          <span style={{ color: NAVY, fontWeight: 800 }}>
-            {user.tier || '—'}
-          </span>{' '}
-          &nbsp;|&nbsp;
-          <b>points:</b>{' '}
-          <span style={{ color: '#267' }}>{user.points}</span>
+          <b>membership:</b> <span style={{ color: NAVY, fontWeight: 800 }}>{user.tier || '—'}</span> &nbsp;|&nbsp;
+          <b>points:</b> <span style={{ color: '#267' }}>{user.points}</span>
         </div>
         <div
+          className="tdls-welcome-chip"
           style={{
             marginLeft: 13,
             fontSize: 15,
@@ -910,10 +914,10 @@ const handleAuthLost = useCallback(
             border: '1px solid #e4e7ef',
           }}
         >
-          user id:{' '}
-          <span style={{ color: NAVY, fontWeight: 700 }}>{user.id}</span>
+          user id: <span style={{ color: NAVY, fontWeight: 700 }}>{user.id}</span>
         </div>
         <div
+          className="tdls-welcome-chip"
           style={{
             marginLeft: 13,
             fontSize: 15,
@@ -925,11 +929,10 @@ const handleAuthLost = useCallback(
           }}
         >
           referral:{' '}
-          <span style={{ color: NAVY, fontWeight: 700 }}>
-            {user.referral_code || user.referral_id || '—'}
-          </span>
+          <span style={{ color: NAVY, fontWeight: 700 }}>{user.referral_code || user.referral_id || '—'}</span>
         </div>
         <button
+          className="tdls-welcome-notif"
           onClick={() => {
             setNotificationFlyout(true);
             fetchNotifications(1, { force: true });
@@ -974,10 +977,7 @@ const handleAuthLost = useCallback(
 
   function CustomerSupportBot() {
     const [messages, setMessages] = useState([
-      {
-        from: 'bot',
-        text: 'hi! this is your premium tdlc assistant. ask about orders, refunds, wallet, loyalty, policies or anything!',
-      },
+      { from: 'bot', text: 'hi! this is your premium tdlc assistant. ask about orders, refunds, wallet, loyalty, policies or anything!' },
     ]);
     const [input, setInput] = useState('');
     const chatRef = useRef();
@@ -996,6 +996,7 @@ const handleAuthLost = useCallback(
 
     return (
       <div
+        className="tdls-support-bot"
         style={{
           width: '100%',
           maxWidth: 880,
@@ -1014,6 +1015,7 @@ const handleAuthLost = useCallback(
         aria-label="customer support chat"
       >
         <div
+          className="tdls-support-title"
           style={{
             fontWeight: 800,
             fontSize: 22,
@@ -1027,6 +1029,7 @@ const handleAuthLost = useCallback(
         </div>
         <div
           ref={chatRef}
+          className="tdls-support-chat"
           style={{
             minHeight: 180,
             maxHeight: 370,
@@ -1043,6 +1046,7 @@ const handleAuthLost = useCallback(
           {messages.map((m, i) => (
             <div
               key={i}
+              className={`tdls-chat-bubble ${m.from === 'user' ? 'is-user' : 'is-bot'}`}
               style={{
                 margin: '11px 0',
                 textAlign: m.from === 'user' ? 'right' : 'left',
@@ -1054,6 +1058,8 @@ const handleAuthLost = useCallback(
                 maxWidth: '93%',
                 fontWeight: 500,
                 fontSize: 15,
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
               }}
             >
               {m.text}
@@ -1062,6 +1068,7 @@ const handleAuthLost = useCallback(
         </div>
         <form
           onSubmit={sendMessage}
+          className="tdls-support-form"
           style={{
             display: 'flex',
             gap: 10,
@@ -1071,6 +1078,7 @@ const handleAuthLost = useCallback(
           }}
         >
           <input
+            className="tdls-support-input"
             style={{
               flex: 1,
               borderRadius: 999,
@@ -1079,6 +1087,7 @@ const handleAuthLost = useCallback(
               fontFamily: 'inherit',
               fontSize: 15,
               background: '#fff',
+              minWidth: 0,
             }}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -1087,6 +1096,7 @@ const handleAuthLost = useCallback(
           />
           <button
             type="submit"
+            className="tdls-support-send"
             style={{
               background: NAVY,
               color: '#fff',
@@ -1098,6 +1108,7 @@ const handleAuthLost = useCallback(
               cursor: 'pointer',
               fontSize: 13,
               textTransform: 'uppercase',
+              flex: '0 0 auto',
             }}
           >
             send
@@ -1128,9 +1139,7 @@ const handleAuthLost = useCallback(
           <div style={{ color: '#476A8A' }}>email: {user.email}</div>
           <div style={{ color: '#476A8A' }}>phone: {user.phone}</div>
           <div style={{ color: '#476A8A' }}>user id: {user.id}</div>
-          <div style={{ color: '#476A8A' }}>
-            referral: {user.referral_code || user.referral_id || '—'}
-          </div>
+          <div style={{ color: '#476A8A' }}>referral: {user.referral_code || user.referral_id || '—'}</div>
         </div>
       );
     }
@@ -1140,6 +1149,7 @@ const handleAuthLost = useCallback(
         <div
           id="dashboard-main"
           tabIndex={-1}
+          className="tdls-main-section"
           style={{
             width: '100%',
             maxWidth: 950,
@@ -1155,24 +1165,16 @@ const handleAuthLost = useCallback(
           </SafePanel>
 
           <div style={{ marginTop: 20 }}>
-            {ordersLoading && (
-              <div style={{ color: '#6c7a8a', padding: '12px 0' }}>loading orders…</div>
-            )}
-            {!ordersLoading && orders.length === 0 && (
-              <div style={{ color: '#6c7a8a', padding: '12px 0' }}>no orders found.</div>
-            )}
+            {ordersLoading && <div style={{ color: '#6c7a8a', padding: '12px 0' }}>loading orders…</div>}
+            {!ordersLoading && orders.length === 0 && <div style={{ color: '#6c7a8a', padding: '12px 0' }}>no orders found.</div>}
             {!ordersLoading &&
               orders.map((o) => {
                 const orderNumber = o.orderNumber || o.id;
                 const statusLine = deriveOrderStatus(o);
 
                 const createdAt = o.createdAt ? new Date(o.createdAt) : null;
-                const dateLabel = createdAt
-                  ? createdAt.toLocaleDateString('en-BD', { year: 'numeric', month: 'short', day: 'numeric' })
-                  : '';
-                const timeLabel = createdAt
-                  ? createdAt.toLocaleTimeString('en-BD', { hour: '2-digit', minute: '2-digit' })
-                  : '';
+                const dateLabel = createdAt ? createdAt.toLocaleDateString('en-BD', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+                const timeLabel = createdAt ? createdAt.toLocaleTimeString('en-BD', { hour: '2-digit', minute: '2-digit' }) : '';
                 const itemCount =
                   typeof o.itemCount === 'number'
                     ? o.itemCount
@@ -1207,14 +1209,14 @@ const handleAuthLost = useCallback(
                       cursor: 'pointer',
                       transition: 'transform 0.16s ease, box-shadow 0.16s ease',
                     }}
-                    className="tdlc-order-card"
+                    className="tdlc-order-card tdls-order-card"
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontWeight: 800, color: '#223', fontSize: 17 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 800, color: '#223', fontSize: 17, overflowWrap: 'anywhere' }}>
                           order #{String(orderNumber)}
                         </div>
-                        <div style={{ color: '#558', margin: '4px 0 7px 0' }}>
+                        <div style={{ color: '#558', margin: '4px 0 7px 0', overflowWrap: 'anywhere' }}>
                           status: <b>{statusLine}</b>
                           {paidAmountNum != null && (
                             <>
@@ -1224,13 +1226,13 @@ const handleAuthLost = useCallback(
                           )}
                         </div>
                       </div>
-                      <div style={{ textAlign: 'right', fontSize: 13, color: '#6c7a8a' }}>
+                      <div style={{ textAlign: 'right', fontSize: 13, color: '#6c7a8a', flex: '0 0 auto' }}>
                         {dateLabel && <div>placed: {dateLabel}</div>}
                         {timeLabel && <div>time: {timeLabel}</div>}
                       </div>
                     </div>
 
-                    <div style={{ marginTop: 6, fontSize: 14, color: '#4b5a72' }}>
+                    <div style={{ marginTop: 6, fontSize: 14, color: '#4b5a72', overflowWrap: 'anywhere' }}>
                       {itemCount != null && (
                         <span>
                           {itemCount} item{itemCount === 1 ? '' : 's'} ·{' '}
@@ -1241,7 +1243,7 @@ const handleAuthLost = useCallback(
                       </span>
                     </div>
 
-                    <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
                       <div style={{ fontSize: 13, color: '#6c7a8a' }}>click to view full details &amp; download invoice</div>
                       <OrderAgainButton orderId={String(orderNumber)} userId={user.id} />
                     </div>
@@ -1306,11 +1308,7 @@ const handleAuthLost = useCallback(
     }
 
     if (selectedOption === 'wallet') {
-      return (
-        <div style={{ fontWeight: 700, color: NAVY, fontSize: 23, padding: 70 }}>
-          wallet: balance, statement, add funds, withdraw, view usage history etc.
-        </div>
-      );
+      return <div style={{ fontWeight: 700, color: NAVY, fontSize: 23, padding: 70 }}>wallet: balance, statement, add funds, withdraw, view usage history etc.</div>;
     }
 
     if (selectedOption === 'security') {
@@ -1344,16 +1342,7 @@ const handleAuthLost = useCallback(
             textAlign: 'left',
           }}
         >
-          <h2
-            style={{
-              fontWeight: 900,
-              fontSize: 25,
-              color: NAVY,
-              marginBottom: 10,
-            }}
-          >
-            notifications
-          </h2>
+          <h2 style={{ fontWeight: 900, fontSize: 25, color: NAVY, marginBottom: 10 }}>notifications</h2>
           {notifErr && <div style={{ color: '#b00', marginBottom: 10 }}>failed to execute right now. please try again later.</div>}
 
           {(notifications || []).map((n) => (
@@ -1365,21 +1354,19 @@ const handleAuthLost = useCallback(
                 borderRadius: 10,
                 padding: '12px 16px',
                 marginBottom: 10,
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
               }}
             >
               <div style={{ fontWeight: 800, color: NAVY }}>{n.title}</div>
               <div style={{ color: '#476A8A', marginTop: 4 }}>{n.body}</div>
-              <div style={{ color: '#6c7a8a', fontSize: 12, marginTop: 6 }}>
-                {new Date(n.createdAt).toLocaleString()}
-              </div>
+              <div style={{ color: '#6c7a8a', fontSize: 12, marginTop: 6 }}>{new Date(n.createdAt).toLocaleString()}</div>
             </div>
           ))}
 
-          {(!notifications || notifications.length === 0) && (
-            <div style={{ color: '#888', padding: '30px 0' }}>no notifications.</div>
-          )}
+          {(!notifications || notifications.length === 0) && <div style={{ color: '#888', padding: '30px 0' }}>no notifications.</div>}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
             <button onClick={markAllRead} className="rounded border px-3 py-1 text-sm hover:bg-neutral-50">
               mark all as read
             </button>
@@ -1427,6 +1414,7 @@ const handleAuthLost = useCallback(
   function NotificationFlyout() {
     return (
       <div
+        className="tdls-notif-overlay"
         style={{
           position: 'fixed',
           top: 0,
@@ -1443,6 +1431,7 @@ const handleAuthLost = useCallback(
         }}
       >
         <div
+          className="tdls-notif-panel"
           style={{
             position: 'absolute',
             right: 25,
@@ -1484,7 +1473,7 @@ const handleAuthLost = useCallback(
               ×
             </button>
           </div>
-          <div style={{ maxHeight: 370, overflowY: 'auto', padding: '14px 22px' }}>
+          <div className="tdls-notif-body" style={{ maxHeight: 370, overflowY: 'auto', padding: '14px 22px' }}>
             {(notifications || []).length === 0 ? (
               <div style={{ color: '#888', padding: '45px 0' }}>no notifications.</div>
             ) : (
@@ -1498,12 +1487,12 @@ const handleAuthLost = useCallback(
                     background: !n.readAt ? '#f8fcff' : '#fff',
                     padding: '7px 5px',
                     borderRadius: 8,
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
                   }}
                 >
                   {n.title} — {n.body}
-                  <span style={{ color: '#7b7', fontWeight: 400, marginLeft: 8 }}>
-                    {new Date(n.createdAt).toLocaleString()}
-                  </span>
+                  <span style={{ color: '#7b7', fontWeight: 400, marginLeft: 8 }}>{new Date(n.createdAt).toLocaleString()}</span>
                 </div>
               ))
             )}
@@ -1675,7 +1664,7 @@ const handleAuthLost = useCallback(
   }
 
   return (
-    <div style={{ background: SLATE_BG, minHeight: '100vh' }}>
+    <div className="tdls-dashboard-root" style={{ background: SLATE_BG, minHeight: '100vh' }}>
       <Navbar />
       <EdgeQuickPanel />
 
@@ -1684,6 +1673,7 @@ const handleAuthLost = useCallback(
 
       <div style={{ height: '46px' }} />
       <div
+        className="tdls-dashboard-shell"
         style={{
           maxWidth: 1420,
           borderRadius: 32,
@@ -1699,6 +1689,7 @@ const handleAuthLost = useCallback(
         <WelcomeBlock />
 
         <div
+          className="tdls-dashboard-row"
           style={{
             display: 'flex',
             gap: 0,
@@ -1711,6 +1702,7 @@ const handleAuthLost = useCallback(
           }}
         >
           <div
+            className="tdls-dashboard-left"
             style={{
               minWidth: 230,
               maxWidth: 240,
@@ -1733,6 +1725,7 @@ const handleAuthLost = useCallback(
           </div>
 
           <div
+            className="tdls-dashboard-main"
             style={{
               flex: 1,
               marginLeft: 32,
@@ -1760,7 +1753,7 @@ const handleAuthLost = useCallback(
 
         <div style={{ height: 25 }} />
 
-        <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <div className="tdls-support-wrap" style={{ maxWidth: 960, margin: '0 auto' }}>
           <CustomerSupportBot />
         </div>
       </div>
@@ -1768,6 +1761,7 @@ const handleAuthLost = useCallback(
       <NotificationFlyout />
 
       <div
+        className="tdls-bottom-area"
         style={{
           height: '4.5in',
           minHeight: 260,
@@ -1782,7 +1776,9 @@ const handleAuthLost = useCallback(
         {recentOrder ? (
           <PaymentMethodsBar
             /** NEW: forces PaymentMethodsBar to remount when the latest order status changes */
-            key={`pmb:${String(recentOrder.orderNumber || '')}:${String(recentOrder.id || '')}:${String(recentOrderStatus)}:${String(recentOrder.updatedAt || recentOrder.createdAt || recentOrder.placedAt || '')}`}
+            key={`pmb:${String(recentOrder.orderNumber || '')}:${String(recentOrder.id || '')}:${String(recentOrderStatus)}:${String(
+              recentOrder.updatedAt || recentOrder.createdAt || recentOrder.placedAt || '',
+            )}`}
             orderId={String(recentOrder.orderNumber || recentOrder.id)}
             locale="en"
             /** Optional non-breaking hints (ignored if component doesn't use them) */
@@ -1797,11 +1793,13 @@ const handleAuthLost = useCallback(
       <WhatsAppFloatingButton />
 
       {/**
-        * NEW: also give Bottomfloatingbar a stable key that changes with the latest order status.
-        * This prevents stale "Pending" if it internally caches the last order state.
-        */}
+       * NEW: also give Bottomfloatingbar a stable key that changes with the latest order status.
+       * This prevents stale "Pending" if it internally caches the last order state.
+       */}
       <Bottomfloatingbar
-        key={`bfb:${String(recentOrder?.orderNumber || '')}:${String(recentOrder?.id || '')}:${String(recentOrderStatus)}:${String(recentOrder?.updatedAt || recentOrder?.createdAt || recentOrder?.placedAt || '')}`}
+        key={`bfb:${String(recentOrder?.orderNumber || '')}:${String(recentOrder?.id || '')}:${String(recentOrderStatus)}:${String(
+          recentOrder?.updatedAt || recentOrder?.createdAt || recentOrder?.placedAt || '',
+        )}`}
         latestOrder={
           recentOrder
             ? {
@@ -1815,6 +1813,7 @@ const handleAuthLost = useCallback(
       />
 
       <style>{`
+        /* Keep desktop intact; mobile overrides are isolated to new class selectors. */
         .tdlc-edge-panel { pointer-events: auto; }
         .tdlc-edge-panel .tdlc-edge-item:hover {
           background: rgba(15,23,42,0.78);
@@ -1825,29 +1824,168 @@ const handleAuthLost = useCallback(
           color: #ffffff !important;
           transform: translateX(3px);
         }
-        .tdlc-nav-option:hover span:last-child {
-          opacity: 1 !important;
-        }
+        .tdlc-nav-option:hover span:last-child { opacity: 1 !important; }
         .tdlc-order-card:hover {
           transform: translateY(-2px);
           box-shadow: 0 18px 50px rgba(15,23,42,0.18);
         }
 
+        /* Base safety: prevent any accidental horizontal overflow on small screens */
+        .tdls-dashboard-root { overflow-x: clip; }
+        .tdls-dashboard-root, .tdls-dashboard-root * { box-sizing: border-box; }
+
         @media (max-width: 900px) {
           .tdlc-edge-panel { display: none !important; }
         }
 
+        /* Tablet / small laptop: keep structure but tighten padding (no desktop change above 1100px) */
         @media (max-width: 1100px) {
-          div[style*="max-width: 1420px"] { max-width: 99vw !important; }
-          div[style*="min-width: 230px"] { min-width: 140px !important; max-width: 100vw !important; }
-          div[style*="marginLeft: 32px"] { margin-left: 0 !important; }
-          div[style*="max-width: 960px"] { padding: 1.2em 0.8em !important; }
+          .tdls-dashboard-shell { max-width: 99vw !important; width: 99vw !important; }
+          .tdls-dashboard-row { max-width: 99vw !important; padding: 0 10px !important; }
+          .tdls-dashboard-left { min-width: 180px !important; width: 180px !important; }
+          .tdls-dashboard-main { margin-left: 12px !important; padding: 1.4em 1.1em !important; min-width: 0 !important; }
+          .tdls-support-wrap { max-width: 99vw !important; padding: 0 10px !important; }
         }
-        @media (max-width: 650px) {
-          div[style*="max-width: 1420px"], main, .container { padding: 2vw 0vw !important;}
-          div[style*="min-width: 230px"] { width: 100% !important; min-width: 0 !important; }
-          div[style*="max-width: 960px"] { min-width: 0 !important; }
-          div[style*="flex-direction: column"] > div:not(:first-child) { margin-left: 0 !important; }
+
+        /* Mobile: restructure layout (column), reduce all CTA/font sizes, guarantee no overflow */
+        @media (max-width: 768px) {
+          /* Safe-area friendly padding (iOS) */
+          .tdls-dashboard-root {
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+          }
+
+          .tdls-banner { margin: 12px 12px 0 12px !important; }
+
+          .tdls-dashboard-shell {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            border-radius: 18px !important;
+            margin: 0 auto !important;
+            overflow: hidden;
+          }
+
+          .tdls-welcome {
+            max-width: 100% !important;
+            margin: 92px auto 10px auto !important;
+            padding: 10px 12px 8px 12px !important;
+            gap: 10px !important;
+          }
+          .tdls-welcome-title { font-size: 18px !important; }
+          .tdls-welcome-chip {
+            margin-left: 0 !important;
+            font-size: 12px !important;
+            padding: 6px 10px !important;
+            border-radius: 10px !important;
+            max-width: 100% !important;
+            overflow-wrap: anywhere !important;
+          }
+          .tdls-welcome-notif {
+            width: 100% !important;
+            margin-left: 0 !important;
+            margin-bottom: 10px !important;
+            justify-content: center !important;
+            font-size: 12px !important;
+            padding: 8px 14px !important;
+          }
+          .tdls-welcome-notif span[aria-live="polite"] { font-size: 12px !important; padding: 2px 8px !important; }
+
+          .tdls-dashboard-row {
+            flex-direction: column !important;
+            padding: 0 10px 12px 10px !important;
+            gap: 10px !important;
+          }
+          .tdls-dashboard-left {
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            margin-top: 10px !important;
+            align-items: stretch !important;
+          }
+          .tdls-dd-wrap {
+            width: 100% !important;
+            margin-top: 8px !important;
+            margin-right: 0 !important;
+            padding: 0 2px !important;
+          }
+          .tdls-dd-label { font-size: 10px !important; margin-left: 2px !important; }
+          .tdls-dd-btn {
+            padding: 9px 12px !important;
+            font-size: 12px !important;
+            letter-spacing: .06em !important;
+          }
+          .tdls-dd-icon { width: 20px !important; height: 20px !important; font-size: 10px !important; }
+          .tdls-dd-list {
+            width: calc(100vw - 24px) !important;
+            min-width: 0 !important;
+            left: 0 !important;
+            border-radius: 14px !important;
+            max-height: 58vh !important;
+          }
+          .tdlc-nav-option { font-size: 13px !important; padding: 10px 12px !important; }
+
+          .tdls-dashboard-main {
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            margin-top: 6px !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            border-radius: 16px !important;
+            padding: 14px 12px !important;
+            min-height: auto !important;
+            box-shadow: 0 14px 34px rgba(15,23,42,0.10) !important;
+          }
+
+          /* Tighten typical section typography inside the content panel */
+          .tdls-dashboard-main h2 { font-size: 18px !important; }
+          .tdls-order-card { padding: 14px !important; }
+          .tdls-order-card div[style*="font-size: 17"] { font-size: 14px !important; }
+          .tdls-order-card div[style*="font-size: 14"] { font-size: 13px !important; }
+          .tdls-order-card div[style*="font-size: 13"] { font-size: 12px !important; }
+
+          /* Support bot: remove left offset and reduce vertical footprint */
+          .tdls-support-wrap { max-width: 100% !important; padding: 0 10px 20px 10px !important; }
+          .tdls-support-bot {
+            margin-left: 0 !important;
+            max-width: 100% !important;
+            padding: 14px 12px 12px 12px !important;
+            border-radius: 16px !important;
+          }
+          .tdls-support-title { font-size: 16px !important; }
+          .tdls-support-chat {
+            min-height: 140px !important;
+            max-height: 44vh !important;
+            padding: 12px 10px !important;
+          }
+          .tdls-chat-bubble { font-size: 13px !important; padding: 8px 12px !important; max-width: 96% !important; }
+          .tdls-support-form { max-width: 100% !important; gap: 8px !important; }
+          .tdls-support-input { font-size: 13px !important; padding: 9px 12px !important; }
+          .tdls-support-send { font-size: 12px !important; padding: 10px 14px !important; }
+
+          /* Notification flyout: fit within the screen */
+          .tdls-notif-panel {
+            left: 12px !important;
+            right: 12px !important;
+            top: 78px !important;
+            min-width: 0 !important;
+            width: calc(100vw - 24px) !important;
+          }
+          .tdls-notif-body { max-height: 64vh !important; padding: 12px 14px !important; }
+
+          /* Bottom area: reduce giant reserved space on mobile to avoid long blank scroll */
+          .tdls-bottom-area {
+            height: auto !important;
+            min-height: 160px !important;
+            padding-bottom: 110px !important;
+          }
+        }
+
+        /* Very short height (landscape phones): keep everything inside viewport */
+        @media (max-width: 768px) and (max-height: 520px) {
+          .tdls-welcome { margin-top: 78px !important; }
+          .tdls-support-chat { max-height: 38vh !important; }
+          .tdls-dd-list { max-height: 48vh !important; }
         }
       `}</style>
     </div>

@@ -3,11 +3,16 @@
 
 /**
  * Review (read-only, airy)
- * - Bigger fonts for item names and amounts
+ * - Bigger fonts for item names and amounts (desktop preserved)
  * - Address fields aligned to normalized keys
  * - Shows product thumbnails with decent spacing (no text starting at extreme left)
  * - Compatible with existing cart sources (/lib/cart-source, /api/cart, localStorage)
  * - No unrelated logic removed
+ *
+ * Update in this revision:
+ * - Desktop look/structure preserved.
+ * - Mobile/small screens: adaptive sizing (CTA, font, spacing), safe-area padding,
+ *   and strict no-horizontal-overflow behavior (portrait + landscape).
  */
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -59,17 +64,21 @@ export default function Review({ onContinue, shipping }) {
       const s = await getCartSnapshot();
       setCart(s);
     };
-    if (typeof window !== "undefined") window.addEventListener("cart:changed", onChange);
+    if (typeof window !== "undefined")
+      window.addEventListener("cart:changed", onChange);
 
     return () => {
-      if (typeof window !== "undefined") window.removeEventListener("cart:changed", onChange);
+      if (typeof window !== "undefined")
+        window.removeEventListener("cart:changed", onChange);
       mounted = false;
     };
   }, []);
 
   const items = cart?.items || [];
   const totals = useMemo(() => {
-    const subtotal = sum(items.map((it) => (Number(it.quantity) || 1) * (Number(it.price) || 0)));
+    const subtotal = sum(
+      items.map((it) => (Number(it.quantity) || 1) * (Number(it.price) || 0))
+    );
     const discount = Number(cart?.discount || 0);
     const tax = Number(cart?.tax || 0);
     // Shipping can be injected from server later; keep 0 if not available
@@ -90,18 +99,18 @@ export default function Review({ onContinue, shipping }) {
           <div className="panel-body">
             <div className="ship-name">{ship.name}</div>
             {ship.address1 || ship.address2 ? (
-              <div className="ship-line">{[ship.address1, ship.address2].filter(Boolean).join(", ")}</div>
+              <div className="ship-line">
+                {[ship.address1, ship.address2].filter(Boolean).join(", ")}
+              </div>
             ) : null}
-            {(ship.city || ship.state || ship.postalCode) ? (
+            {ship.city || ship.state || ship.postalCode ? (
               <div className="ship-line">
                 {[[ship.city, ship.state].filter(Boolean).join(", "), ship.postalCode]
                   .filter(Boolean)
                   .join(" • ")}
               </div>
             ) : null}
-            {ship.phone ? (
-              <div className="ship-phone">{ship.phone}</div>
-            ) : null}
+            {ship.phone ? <div className="ship-phone">{ship.phone}</div> : null}
           </div>
         </div>
       ) : null}
@@ -114,7 +123,7 @@ export default function Review({ onContinue, shipping }) {
           <div className="loading">Loading…</div>
         ) : items.length ? (
           <ul className="items">
-            {items.map((it, idx) => {
+            {items.map((it) => {
               const id = it.id || it.lineId || it.variantId || it.sku || safeUUID();
               const title = it.title || it.name || it.productTitle || "Item";
               const qty = Number(it.quantity ?? it.qty ?? 1);
@@ -175,9 +184,17 @@ export default function Review({ onContinue, shipping }) {
       </div>
 
       <style jsx>{`
+        /* Desktop preserved: do not change baseline layout/typography here. */
         .review-wrap {
           display: grid;
           gap: 24px;
+
+          /* Hard guardrails against horizontal overflow on any device. */
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          overflow-x: clip;
+          padding-bottom: 4px;
         }
 
         .panel {
@@ -185,6 +202,10 @@ export default function Review({ onContinue, shipping }) {
           border-radius: 16px;
           background: #fff;
           padding: 16px;
+
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
         }
         .no-overflow {
           overflow: hidden;
@@ -200,22 +221,26 @@ export default function Review({ onContinue, shipping }) {
           margin-top: 8px;
           color: ${TEXT};
           padding-left: 2px; /* ensure text not glued to left edge */
+          min-width: 0;
         }
 
         .ship-name {
           font-size: 15px;
           font-weight: 700;
           color: ${TEXT};
+          overflow-wrap: anywhere;
         }
         .ship-line {
           margin-top: 4px;
           font-size: 14px;
           color: ${TEXT};
+          overflow-wrap: anywhere;
         }
         .ship-phone {
           margin-top: 6px;
           font-size: 13px;
           color: ${MUTED};
+          overflow-wrap: anywhere;
         }
 
         .panel-section-title {
@@ -246,6 +271,7 @@ export default function Review({ onContinue, shipping }) {
           gap: 14px;
           padding: 16px;
           border-top: 1px solid #eef2f7;
+          min-width: 0; /* critical for grid overflow control */
         }
         .item:first-child {
           border-top: 0;
@@ -253,6 +279,7 @@ export default function Review({ onContinue, shipping }) {
 
         .thumb-wrap {
           flex: 0 0 auto;
+          min-width: 0;
         }
         .thumb {
           border-radius: 12px;
@@ -269,12 +296,16 @@ export default function Review({ onContinue, shipping }) {
           font-weight: 800;
           color: ${TEXT};
           line-height: 1.2;
+
+          /* safer wrapping on narrow screens without affecting desktop readability */
+          overflow-wrap: anywhere;
           word-break: break-word;
         }
         .item-meta {
           margin-top: 4px;
           font-size: 12px;
           color: ${MUTED};
+          overflow-wrap: anywhere;
         }
 
         .item-total {
@@ -283,6 +314,7 @@ export default function Review({ onContinue, shipping }) {
           color: ${TEXT};
           align-self: center;
           white-space: nowrap;
+          max-width: 100%;
         }
 
         .total-row {
@@ -292,6 +324,8 @@ export default function Review({ onContinue, shipping }) {
           display: flex;
           align-items: center;
           justify-content: space-between;
+          gap: 12px;
+          min-width: 0;
         }
         .total-k {
           font-size: 20px;
@@ -302,30 +336,125 @@ export default function Review({ onContinue, shipping }) {
           font-size: 20px;
           font-weight: 900;
           color: ${NAVY};
+          min-width: 0;
+        }
+        .grand-total {
+          display: inline-block;
+          max-width: 100%;
+          overflow-wrap: anywhere;
         }
 
         .cta-row {
           display: flex;
           align-items: center;
           justify-content: flex-end;
+          padding-bottom: 2px;
         }
 
-        @media (max-width: 480px) {
-          .item {
-            grid-template-columns: 72px 1fr auto;
-            gap: 12px;
-            padding: 14px;
+        /* ─────────────────────────────────────────────────────────────
+           Mobile + small devices (Android/iOS) — smaller CTAs/text, no overflow
+           Desktop/tablet look remains intact (baseline rules above).
+        ───────────────────────────────────────────────────────────── */
+        @media (max-width: 640px) {
+          .review-wrap {
+            gap: 14px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
           }
+
+          .panel {
+            border-radius: 14px;
+            padding: 12px;
+          }
+
+          .panel-section-title {
+            padding: 10px 12px;
+            margin: -12px -12px 0 -12px;
+            font-size: 12px;
+            letter-spacing: 0.06em;
+          }
+
+          .panel-head {
+            font-size: 12px;
+          }
+
+          .ship-name {
+            font-size: 14px;
+          }
+          .ship-line {
+            font-size: 13px;
+          }
+          .ship-phone {
+            font-size: 12px;
+          }
+
+          .loading {
+            padding: 16px 12px;
+            font-size: 13px;
+          }
+
+          .item {
+            grid-template-columns: 64px 1fr auto;
+            gap: 10px;
+            padding: 12px;
+          }
+
           .thumb {
-            width: 72px;
-            height: 72px;
+            width: 64px;
+            height: 64px;
             object-fit: cover;
           }
+
           .item-title {
-            font-size: 16px;
+            font-size: 14px;
+            line-height: 1.25;
+          }
+          .item-meta {
+            font-size: 11px;
           }
           .item-total {
-            font-size: 18px;
+            font-size: 14px;
+          }
+
+          .total-k,
+          .total-v {
+            font-size: 16px;
+          }
+        }
+
+        /* Ultra-small widths: stack the price under content to prevent squeeze/overflow. */
+        @media (max-width: 380px) {
+          .item {
+            grid-template-columns: 56px 1fr;
+            grid-template-rows: auto auto;
+          }
+          .thumb {
+            width: 56px;
+            height: 56px;
+          }
+          .item-total {
+            grid-column: 2 / -1;
+            justify-self: start;
+            align-self: start;
+            margin-top: 6px;
+            font-size: 14px;
+            white-space: normal;
+          }
+        }
+
+        /* Landscape phones: reduce vertical padding so the page feels compact. */
+        @media (max-width: 860px) and (orientation: landscape) {
+          .review-wrap {
+            gap: 12px;
+          }
+          .panel {
+            padding: 10px;
+          }
+          .panel-section-title {
+            padding: 8px 10px;
+            margin: -10px -10px 0 -10px;
+          }
+          .item {
+            padding: 10px;
           }
         }
       `}</style>
@@ -379,9 +508,7 @@ function normalizeSnap(s) {
   const discount = Number(s.discount || s.discountTotal || 0);
   const tax = Number(s.tax || s.taxTotal || 0);
   const shippingTotal = Number(s.shippingTotal || 0);
-  const grandTotal = Number(
-    s.grandTotal ?? subtotal - discount + tax + shippingTotal
-  );
+  const grandTotal = Number(s.grandTotal ?? subtotal - discount + tax + shippingTotal);
   return { items, subtotal, discount, tax, shippingTotal, grandTotal };
 }
 
@@ -415,16 +542,31 @@ function Row({ label, value }) {
           align-items: baseline;
           justify-content: space-between;
           padding: 4px 2px;
+          gap: 12px;
+          min-width: 0;
         }
         .k {
           font-size: 16px;
           font-weight: 700;
           color: ${TEXT};
+          overflow-wrap: anywhere;
         }
         .v {
           font-size: 18px;
           font-weight: 900;
           color: ${TEXT};
+          overflow-wrap: anywhere;
+          text-align: right;
+        }
+
+        /* Mobile-only downsizing; desktop unchanged. */
+        @media (max-width: 640px) {
+          .k {
+            font-size: 13px;
+          }
+          .v {
+            font-size: 14px;
+          }
         }
       `}</style>
     </div>
@@ -439,13 +581,47 @@ function PrimaryCTA({ children, ...props }) {
       "inset 0 1px 0 rgba(255,255,255,.25), 0 10px 24px rgba(11,28,63,.35), 0 2px 4px rgba(11,28,63,.2)",
     borderRadius: "999px",
   };
+
   return (
-    <button
-      {...props}
-      className="px-7 py-3 font-semibold transition transform active:scale-[.99] hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
-      style={style}
-    >
-      {children}
-    </button>
+    <>
+      <button
+        {...props}
+        className="cta px-7 py-3 font-semibold transition transform active:scale-[.99] hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+        style={style}
+      >
+        {children}
+      </button>
+
+      <style jsx>{`
+        /* Desktop preserved by default classes above. Mobile only overrides below. */
+        .cta {
+          -webkit-tap-highlight-color: transparent;
+          touch-action: manipulation;
+          max-width: 100%;
+        }
+
+        @media (max-width: 640px) {
+          .cta {
+            padding: 10px 16px; /* smaller CTA on compact screens */
+            font-size: 13px;
+            letter-spacing: 0.01em;
+          }
+        }
+
+        @media (max-width: 380px) {
+          .cta {
+            padding: 9px 14px;
+            font-size: 12.5px;
+          }
+        }
+
+        @media (max-width: 860px) and (orientation: landscape) {
+          .cta {
+            padding: 9px 14px;
+            font-size: 12.5px;
+          }
+        }
+      `}</style>
+    </>
   );
 }

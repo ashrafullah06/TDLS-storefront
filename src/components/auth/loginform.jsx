@@ -33,22 +33,88 @@ const MODE_PASSWORD = "password";
 const MODE_2FA = "2fa";
 
 /* ===========================
-   HELPERS (kept)
+   HELPERS (kept + improved)
    =========================== */
-const isPhoneish = (v) => /^\+?\d[\d\s\-()]*$/.test(String(v || ""));
+const isPhoneish = (v) => /^\+?\d[\d\s\-()]*$/.test(String(v || "").trim());
 const isEmailish = (v) => /\S+@\S+\.\S+/.test(String(v || ""));
+
+/**
+ * Normalize Bangladeshi mobile numbers into E.164:
+ * Accepts (examples):
+ * - 017XXXXXXXXX
+ * - +8801XXXXXXXXX
+ * - 8801XXXXXXXXX
+ * - 008801XXXXXXXXX
+ * - 08801XXXXXXXXX
+ * - 0880XXXXXXXXXXX (extra trunk 0 before 880)
+ *
+ * Returns:
+ * - +8801XXXXXXXXX (for BD mobiles) when possible; otherwise best-effort cleaned value.
+ *
+ * NOTE: This does NOT change auth business logic; it only normalizes the identifier string.
+ */
+const normalizeBdMobileToE164 = (raw) => {
+  const s0 = String(raw || "").trim();
+  if (!s0) return "";
+
+  const cleaned = s0.replace(/[^\d+]/g, "");
+  const digitsOnly = cleaned.replace(/[^\d]/g, "");
+
+  // Already E.164
+  if (cleaned.startsWith("+")) return cleaned;
+
+  // 00 prefix -> +
+  if (digitsOnly.startsWith("00")) return `+${digitsOnly.slice(2)}`;
+
+  // Some users prepend an extra '0' before 880 (e.g., 0880...)
+  if (digitsOnly.startsWith("0880")) return `+${digitsOnly.slice(1)}`; // drop first 0 => +880...
+
+  // Has country code without '+'
+  if (digitsOnly.startsWith("880")) return `+${digitsOnly}`;
+
+  // Local BD mobile (11 digits starting 01)
+  if (digitsOnly.startsWith("01") && digitsOnly.length === 11) return `+88${digitsOnly}`;
+
+  // Fallback: try libphonenumber with BD default
+  try {
+    const p = parsePhoneNumberFromString(s0, "BD");
+    if (p?.isValid()) return p.number;
+  } catch {}
+
+  // Best-effort fallback: if it's long enough digits, prefix +
+  return digitsOnly.length >= 8 ? `+${digitsOnly}` : cleaned;
+};
+
 const toE164 = (raw) => {
   try {
-    const p = parsePhoneNumberFromString(raw);
+    const s = String(raw || "").trim();
+    if (!s) return s;
+
+    const t = s.replace(/[^\d+]/g, "");
+    const d = t.replace(/[^\d]/g, "");
+
+    // BD-like detection (so desktop + mobile both accept BD formats)
+    const maybeBd =
+      d.startsWith("01") ||
+      d.startsWith("880") ||
+      d.startsWith("00880") ||
+      d.startsWith("0880") ||
+      t.startsWith("+880");
+
+    if (maybeBd) return normalizeBdMobileToE164(s);
+
+    // Otherwise preserve prior behavior.
+    const p = parsePhoneNumberFromString(s);
     return p?.isValid()
       ? p.number
-      : raw?.startsWith("+")
-      ? raw.replace(/[^\d+]/g, "")
-      : raw;
+      : s?.startsWith("+")
+      ? s.replace(/[^\d+]/g, "")
+      : s;
   } catch {
     return raw;
   }
 };
+
 const bdLike = (e164) => /^\+8801\d{9}$/.test(e164 || "");
 
 function track(event, payload = {}) {
@@ -159,6 +225,7 @@ function StatusPill({ kind, children }) {
         fontWeight: 800,
         lineHeight: 1.35,
         boxShadow: "0 10px 24px rgba(15,33,71,0.06)",
+        maxWidth: "100%",
       }}
     >
       {children}
@@ -166,7 +233,7 @@ function StatusPill({ kind, children }) {
   );
 }
 
-function SegButton({ active, disabled, children, onClick }) {
+function SegButton({ active, disabled, children, onClick, small = false }) {
   return (
     <button
       type="button"
@@ -179,9 +246,9 @@ function SegButton({ active, disabled, children, onClick }) {
           ? "linear-gradient(180deg, rgba(199,161,53,0.18) 0%, rgba(199,161,53,0.10) 100%)"
           : "rgba(255,255,255,0.98)",
         color: active ? NAVY : NAVY_FADE,
-        padding: "10px 12px",
+        padding: small ? "9px 10px" : "10px 12px",
         borderRadius: 999,
-        fontSize: 12.5,
+        fontSize: small ? 11.8 : 12.5,
         fontWeight: 900,
         letterSpacing: "0.06em",
         cursor: disabled ? "not-allowed" : "pointer",
@@ -189,7 +256,13 @@ function SegButton({ active, disabled, children, onClick }) {
         transition: "transform .12s ease, box-shadow .12s ease, border-color .12s ease",
         transform: active ? "translateY(-1px)" : "translateY(0)",
         opacity: disabled ? 0.7 : 1,
-        whiteSpace: "nowrap",
+        // Mobile overflow fixes:
+        maxWidth: "100%",
+        whiteSpace: small ? "normal" : "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        lineHeight: small ? 1.15 : 1.2,
+        textAlign: "center",
       }}
     >
       {children}
@@ -198,16 +271,12 @@ function SegButton({ active, disabled, children, onClick }) {
 }
 
 /* ===========================
-   IMPORTANT: AUTH GATE (new, additive)
-   - Do NOT trust signIn() return shape in some builds.
-   - Confirm via getSession() before proceeding to OTP.
+   IMPORTANT: AUTH GATE (additive)
    =========================== */
 async function assertSessionAuthedOrThrow({ wrongPasswordMessage = "Password incorrect." } = {}) {
   await new Promise((r) => setTimeout(r, 40));
   const s = await getSession().catch(() => null);
-  if (!s?.user) {
-    throw new Error(wrongPasswordMessage);
-  }
+  if (!s?.user) throw new Error(wrongPasswordMessage);
   return s;
 }
 
@@ -217,16 +286,34 @@ export default function LoginForm() {
   const { data: session, status } = useSession();
 
   /* ===========================
+     MOBILE/SMALL SCREEN STATE (additive; desktop layout preserved)
+     =========================== */
+  const [isSmall, setIsSmall] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 980px)");
+    const apply = () => setIsSmall(Boolean(mq.matches));
+    apply();
+    if (mq.addEventListener) mq.addEventListener("change", apply);
+    else mq.addListener(apply);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", apply);
+      else mq.removeListener(apply);
+    };
+  }, []);
+
+  /* ===========================
      STATE (kept)
      =========================== */
   const [mode, setMode] = useState(
-    () =>
-      (typeof window !== "undefined" && localStorage.getItem("login_mode")) ||
-      MODE_2FA
+    () => (typeof window !== "undefined" && localStorage.getItem("login_mode")) || MODE_2FA
   );
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+
+  // WhatsApp deactivated: default to SMS and never auto-select WhatsApp.
   const [channel, setChannel] = useState("sms");
+
   const [rememberDevice, setRememberDevice] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -237,6 +324,9 @@ export default function LoginForm() {
   const [caps, setCaps] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // WhatsApp selection warning (UI-only; does not change auth logic)
+  const [channelWarn, setChannelWarn] = useState("");
+
   /* ===========================
      DIMENSIONS (kept)
      =========================== */
@@ -244,13 +334,15 @@ export default function LoginForm() {
   const CARD_MAX = 980;
 
   const idWidth = useAutoChWidth(identifier, 26, 6, 56);
-  const pwdWidth = useAutoChWidth(password, 22, 6, 46);
+
+  // Increase usable password input width on desktop + reduce "blank veil" area before Show/Hide.
+  const pwdWidth = useAutoChWidth(password, 30, 8, 64);
 
   const needsPassword = mode === MODE_PASSWORD || mode === MODE_2FA;
   const involvesOtp = mode === MODE_OTP || mode === MODE_2FA;
 
   /* ===========================
-     REDIRECTS (kept, with internal-only safety)
+     REDIRECTS (kept)
      =========================== */
   const redirectTo = useMemo(() => {
     const dest = searchParams?.get("redirect") || "/customer/dashboard";
@@ -273,10 +365,7 @@ export default function LoginForm() {
   const redirectedRef = useRef(false);
   useEffect(() => {
     if (redirectedRef.current) return;
-
-    // If twoFactorPassed is undefined (typical for OAuth), do not block redirect.
     const twoFactorOk = session?.twoFactorPassed !== false;
-
     if (status === "authenticated" && session?.user && twoFactorOk) {
       redirectedRef.current = true;
       router.replace(redirectTo);
@@ -304,7 +393,26 @@ export default function LoginForm() {
   }, []);
 
   /* ===========================
-     CHANNEL AUTOPICK (kept)
+     CHANNEL ENFORCEMENT (WhatsApp disabled)
+     =========================== */
+  useEffect(() => {
+    // If anything tries to set WhatsApp, force SMS and show a warning.
+    if (channel === "whatsapp") {
+      setChannel("sms");
+      setUserTouchedChannel(true);
+      setChannelWarn("WhatsApp wiring under processing — try SMS.");
+      track("otp_channel_blocked_whatsapp", { surface: "loginform" });
+    }
+  }, [channel]);
+
+  useEffect(() => {
+    if (!channelWarn) return;
+    const t = setTimeout(() => setChannelWarn(""), 4200);
+    return () => clearTimeout(t);
+  }, [channelWarn]);
+
+  /* ===========================
+     CHANNEL AUTOPICK (kept; WhatsApp removed)
      =========================== */
   useEffect(() => {
     if (isEmailish(identifier)) {
@@ -312,22 +420,40 @@ export default function LoginForm() {
       return;
     }
     const e164 = toE164(identifier);
+
     if (isPhoneish(identifier) && !isEmailish(identifier)) {
+      // Never auto-select WhatsApp; keep SMS (unless user previously chose email, then correct back).
       if (!userTouchedChannel) {
-        if (bdLike(e164)) setChannel("whatsapp");
-        else if (channel === "email") setChannel("sms");
+        if (channel === "email") setChannel("sms");
+        else setChannel("sms");
+      } else {
+        // If user has touched channel and picked something invalid for phone, normalize back to SMS
+        if (channel === "email") setChannel("sms");
       }
+
+      // Optional: for BD numbers, keep SMS explicitly (no WhatsApp)
+      if (bdLike(e164) && channel !== "sms") setChannel("sms");
     }
   }, [identifier, channel, userTouchedChannel]);
 
   /* ===========================
-     VALIDATIONS (kept)
+     VALIDATIONS (kept; BD formats accepted everywhere)
      =========================== */
   const validEmail = useMemo(() => isEmailish(identifier.trim()), [identifier]);
-  const validPhone = useMemo(
-    () => /^\+\d{8,}$/.test(isPhoneish(identifier) ? toE164(identifier) : ""),
-    [identifier]
-  );
+
+  const normalizedPhone = useMemo(() => {
+    const v = String(identifier || "").trim();
+    if (!isPhoneish(v)) return "";
+    return toE164(v);
+  }, [identifier]);
+
+  const validPhone = useMemo(() => {
+    const v = String(identifier || "").trim();
+    if (!isPhoneish(v)) return false;
+    const e164 = normalizedPhone;
+    return /^\+\d{8,}$/.test(e164 || "");
+  }, [identifier, normalizedPhone]);
+
   const idValid = validEmail || validPhone;
 
   const identifierKind = useMemo(() => {
@@ -341,8 +467,9 @@ export default function LoginForm() {
     if (!involvesOtp) return "";
     if (validEmail) return "email";
     if (!validPhone) return "";
-    return channel === "email" ? "sms" : channel;
-  }, [involvesOtp, validEmail, validPhone, channel]);
+    // WhatsApp disabled: always SMS for phone OTP from this screen.
+    return "sms";
+  }, [involvesOtp, validEmail, validPhone]);
 
   /* ===========================
      API HELPERS (kept)
@@ -360,26 +487,33 @@ export default function LoginForm() {
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
-      const err = j?.error || "OTP send failed";
-      throw new Error(err);
+      const e = j?.error || "OTP send failed";
+      throw new Error(e);
     }
   }
 
   async function requestOtpWithFallback(to) {
     let preferredVia = channel;
+
     if (isEmailish(to)) {
       preferredVia = "email";
     } else if (!isPhoneish(to)) {
       throw new Error("Enter a valid email or mobile number.");
+    } else {
+      // Phone: WhatsApp is disabled; always use SMS from this UI.
+      preferredVia = "sms";
     }
+
     try {
       await requestOtp(to, preferredVia);
       track("otp_sent", { channel: preferredVia, to_hint: (to || "").slice(0, 6) + "…" });
       return preferredVia;
     } catch (e) {
+      // Keep prior fallback behavior for robustness (though WhatsApp is never selected here)
       if (preferredVia === "whatsapp" && isPhoneish(to)) {
         await requestOtp(to, "sms");
         setChannel("sms");
+        setChannelWarn("WhatsApp wiring under processing — try SMS.");
         track("otp_sent", { channel: "sms_fallback", to_hint: (to || "").slice(0, 6) + "…" });
         return "sms";
       }
@@ -388,18 +522,20 @@ export default function LoginForm() {
   }
 
   /* ===========================
-     FLOWS (kept; gating hardened)
+     FLOWS (kept; BD normalization included)
      =========================== */
   async function startOtpLayer() {
     setErr("");
     setFieldErr({ id: "", password: "" });
-    const raw = identifier?.trim();
+
+    const raw = String(identifier || "").trim();
     const id = isPhoneish(raw) ? toE164(raw) : raw;
 
     if (!id) {
       setFieldErr((p) => ({ ...p, id: "Enter email or mobile first." }));
       return;
     }
+
     setLoading(true);
     try {
       const via = await requestOtpWithFallback(id);
@@ -427,7 +563,7 @@ export default function LoginForm() {
     setErr("");
     setFieldErr({ id: "", password: "" });
 
-    const raw = identifier?.trim();
+    const raw = String(identifier || "").trim();
     const id = isPhoneish(raw) ? toE164(raw) : raw;
 
     if (!id) {
@@ -449,9 +585,7 @@ export default function LoginForm() {
         rememberDevice,
       });
 
-      if (res && typeof res === "object" && res.error) {
-        throw new Error(res.error);
-      }
+      if (res && typeof res === "object" && res.error) throw new Error(res.error);
 
       await assertSessionAuthedOrThrow({ wrongPasswordMessage: "Password incorrect." });
 
@@ -471,7 +605,7 @@ export default function LoginForm() {
     setErr("");
     setFieldErr({ id: "", password: "" });
 
-    const raw = identifier?.trim();
+    const raw = String(identifier || "").trim();
     const id = isPhoneish(raw) ? toE164(raw) : raw;
 
     if (!id) {
@@ -493,9 +627,7 @@ export default function LoginForm() {
         rememberDevice,
       });
 
-      if (res && typeof res === "object" && res.error) {
-        throw new Error(res.error);
-      }
+      if (res && typeof res === "object" && res.error) throw new Error(res.error);
 
       await assertSessionAuthedOrThrow({ wrongPasswordMessage: "Password incorrect." });
 
@@ -520,7 +652,6 @@ export default function LoginForm() {
     }
   }
 
-  // NEW: Social sign-in wrapper (additive; UI unchanged)
   async function socialSignIn(provider) {
     if (loading) return;
     setErr("");
@@ -529,10 +660,7 @@ export default function LoginForm() {
     try {
       track("social_signin_start", { provider });
       const res = await signIn(provider, { callbackUrl: redirectTo, redirect: true });
-      // Usually redirects away; if it returns with an error, show it.
-      if (res && typeof res === "object" && res.error) {
-        throw new Error(res.error);
-      }
+      if (res && typeof res === "object" && res.error) throw new Error(res.error);
     } catch (e) {
       const msg = e?.message || `Unable to sign in with ${provider}.`;
       setErr(msg);
@@ -556,7 +684,7 @@ export default function LoginForm() {
   };
 
   /* ===========================
-     STYLES (kept)
+     STYLES (kept; mobile fixes are additive)
      =========================== */
   const pageStyle = {
     background: `
@@ -567,7 +695,7 @@ export default function LoginForm() {
   };
 
   const cardShell = {
-    borderRadius: 28,
+    borderRadius: isSmall ? 22 : 28,
     border: `1px solid ${BORDER}`,
     background: "rgba(255,255,255,0.92)",
     boxShadow: "0 30px 100px rgba(15,33,71,0.18)",
@@ -578,32 +706,34 @@ export default function LoginForm() {
   const panelLeft = {
     background: `linear-gradient(180deg, rgba(15,33,71,0.96) 0%, rgba(11,25,56,0.98) 100%)`,
     color: "#fff",
-    padding: "28px 26px",
+    padding: isSmall ? "18px 16px" : "28px 26px",
     position: "relative",
   };
 
   const panelRight = {
-    padding: "28px 26px",
+    padding: isSmall ? "18px 16px" : "28px 26px",
+    minWidth: 0,
   };
 
   const labelStyle = {
     color: NAVY,
     fontWeight: 900,
-    fontSize: 12,
+    fontSize: isSmall ? 11.2 : 12,
     letterSpacing: ".18em",
     textTransform: "uppercase",
     marginBottom: 8,
   };
 
   const fieldWrap = (hasErr) => ({
-    borderRadius: 18,
+    borderRadius: isSmall ? 16 : 18,
     border: `1px solid ${hasErr ? "rgba(159,29,32,0.28)" : BORDER}`,
     background: "linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(246,248,255,1) 100%)",
-    padding: 8,
+    padding: isSmall ? 6 : 8,
     boxShadow: hasErr
       ? "inset 0 10px 24px rgba(159,29,32,0.08), 0 16px 40px rgba(15,33,71,0.08)"
       : "inset 0 10px 24px rgba(15,33,71,0.08), 0 16px 40px rgba(15,33,71,0.08)",
     transition: "box-shadow .16s ease, border-color .16s ease, transform .16s ease",
+    minWidth: 0,
   });
 
   const inputBase = {
@@ -612,46 +742,49 @@ export default function LoginForm() {
     outline: "none",
     background: "transparent",
     color: NAVY,
-    fontSize: 15,
+    fontSize: isSmall ? 14 : 15,
     fontWeight: 850,
-    padding: "12px 12px",
+    padding: isSmall ? "11px 12px" : "12px 12px",
     borderRadius: 14,
+    minHeight: isSmall ? 44 : undefined,
+    display: "block",
+    minWidth: 0,
+    WebkitTextSizeAdjust: "100%",
   };
 
-  const subtle = { color: SUBTEXT, fontSize: 13.5, lineHeight: 1.6 };
+  const subtle = { color: SUBTEXT, fontSize: isSmall ? 12.9 : 13.5, lineHeight: 1.6 };
 
   const primaryBtn = (disabled) => ({
     width: "100%",
-    height: 58,
+    height: isSmall ? 52 : 58,
     borderRadius: 999,
     border: `1px solid ${disabled ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.28)"}`,
     background: disabled
       ? "linear-gradient(180deg, rgba(15,33,71,0.70) 0%, rgba(15,33,71,0.78) 100%)"
       : "linear-gradient(180deg, rgba(27,45,100,1) 0%, rgba(15,33,71,1) 100%)",
     color: "#fff",
-    fontSize: 14.5,
+    fontSize: isSmall ? 13.2 : 14.5,
     fontWeight: 950,
     letterSpacing: ".14em",
     textTransform: "uppercase",
-    boxShadow: disabled
-      ? "0 14px 36px rgba(15,33,71,0.12)"
-      : "0 18px 60px rgba(15,33,71,0.26)",
+    boxShadow: disabled ? "0 14px 36px rgba(15,33,71,0.12)" : "0 18px 60px rgba(15,33,71,0.26)",
     cursor: disabled ? "not-allowed" : "pointer",
     transition: "transform .12s ease, box-shadow .12s ease, filter .12s ease",
   });
 
   const ghostBtn = {
-    height: 44,
+    height: isSmall ? 38 : 44,
     borderRadius: 999,
     border: `1px solid ${BORDER}`,
     background: "rgba(255,255,255,0.98)",
     color: NAVY,
-    fontSize: 12.5,
+    fontSize: isSmall ? 11.8 : 12.5,
     fontWeight: 900,
     letterSpacing: ".08em",
-    padding: "0 14px",
+    padding: isSmall ? "0 12px" : "0 14px",
     cursor: "pointer",
     boxShadow: "0 10px 22px rgba(15,33,71,0.06)",
+    maxWidth: "100%",
   };
 
   const canSubmit = useMemo(() => {
@@ -662,8 +795,7 @@ export default function LoginForm() {
     return true;
   }, [loading, idValid, mode, password]);
 
-  const primaryCtaText =
-    mode === MODE_OTP ? "Continue" : mode === MODE_PASSWORD ? "Sign In" : "Sign In";
+  const primaryCtaText = mode === MODE_OTP ? "Continue" : "Sign In";
 
   const headerSubtitle =
     mode === MODE_OTP
@@ -672,29 +804,36 @@ export default function LoginForm() {
       ? "Password-only sign in."
       : "Password + OTP for elevated security.";
 
-  const riskBannerKind =
-    risk?.level === "high" || risk?.newDevice || risk?.newIp ? "warn" : "";
+  const riskBannerKind = risk?.level === "high" || risk?.newDevice || risk?.newIp ? "warn" : "";
+
+  // Reduced reserved space to remove the "blank veil", while still preventing overlap.
+  const SHOW_BTN_W_DESKTOP = 72;
+  const SHOW_BTN_W_MOBILE = 80;
+  const RESERVED_RIGHT = (isSmall ? SHOW_BTN_W_MOBILE : SHOW_BTN_W_DESKTOP) + 18;
 
   return (
-    <main className="min-h-[100dvh] w-full" style={pageStyle}>
+    <main className="tdls-login-root min-h-[100dvh] w-full" style={pageStyle}>
       <section
         className="mx-auto relative"
         style={{
           maxWidth: PAGE_MAX_WIDTH,
-          padding: "86px 18px 78px",
+          padding: isSmall ? "18px 12px 46px" : "86px 18px 78px",
         }}
       >
-        {/* Top right utility link (kept, polished) */}
+        {/* Top right utility link (desktop: absolute; mobile: in-flow to avoid overflow) */}
         <div
-          className="absolute"
+          className="tdls-login-utility"
           style={{
-            right: 18,
-            top: 22,
+            position: isSmall ? "static" : "absolute",
+            right: isSmall ? "auto" : 18,
+            top: isSmall ? "auto" : 22,
             display: "flex",
             alignItems: "center",
             gap: 10,
             flexWrap: "wrap",
-            justifyContent: "flex-end",
+            justifyContent: isSmall ? "flex-start" : "flex-end",
+            maxWidth: "100%",
+            marginBottom: isSmall ? 12 : 0,
           }}
         >
           <a
@@ -702,11 +841,14 @@ export default function LoginForm() {
             className="rounded-full border"
             style={{
               ...ghostBtn,
-              height: 40,
+              height: isSmall ? 36 : 40,
               display: "inline-flex",
               alignItems: "center",
               gap: 10,
               textDecoration: "none",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
           >
             <IconShield size={16} color={NAVY_FADE} />
@@ -718,8 +860,11 @@ export default function LoginForm() {
             onClick={() => setShowAdvanced((v) => !v)}
             style={{
               ...ghostBtn,
-              height: 40,
+              height: isSmall ? 36 : 40,
               opacity: 0.95,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
             aria-expanded={showAdvanced ? "true" : "false"}
           >
@@ -732,7 +877,7 @@ export default function LoginForm() {
           className="mx-auto"
           style={{
             maxWidth: CARD_MAX,
-            marginTop: 12,
+            marginTop: isSmall ? 0 : 12,
             ...cardShell,
           }}
         >
@@ -740,11 +885,12 @@ export default function LoginForm() {
             className="grid tdlc-login-grid"
             style={{
               gridTemplateColumns: "1.02fr 1.38fr",
+              minWidth: 0,
             }}
           >
             {/* Left premium panel */}
             <aside style={panelLeft}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                 <span
                   aria-hidden="true"
                   style={{
@@ -753,18 +899,35 @@ export default function LoginForm() {
                     borderRadius: 999,
                     background: ACCENT,
                     boxShadow: "0 0 0 7px rgba(199,161,53,0.18)",
+                    flex: "0 0 auto",
                   }}
                 />
-                <div style={{ fontSize: 12, fontWeight: 950, letterSpacing: ".22em" }}>
-                  TDLC ACCOUNT
+                <div style={{ fontSize: 12, fontWeight: 950, letterSpacing: ".22em", minWidth: 0 }}>
+                  TDLS ACCOUNT
                 </div>
               </div>
 
-              <h1 style={{ marginTop: 16, fontSize: 30, fontWeight: 950, letterSpacing: "-0.02em", lineHeight: 1.15 }}>
+              <h1
+                style={{
+                  marginTop: 16,
+                  fontSize: isSmall ? 26 : 30,
+                  fontWeight: 950,
+                  letterSpacing: "-0.02em",
+                  lineHeight: 1.15,
+                }}
+              >
                 Sign in
               </h1>
 
-              <p style={{ marginTop: 10, color: "rgba(255,255,255,0.86)", fontSize: 14.5, lineHeight: 1.7 }}>
+              <p
+                style={{
+                  marginTop: 10,
+                  color: "rgba(255,255,255,0.86)",
+                  fontSize: isSmall ? 13.5 : 14.5,
+                  lineHeight: 1.7,
+                  maxWidth: "100%",
+                }}
+              >
                 Seamless checkout, secure sessions, and personalized releases — without friction.
               </p>
 
@@ -774,7 +937,7 @@ export default function LoginForm() {
                   borderRadius: 18,
                   border: "1px solid rgba(255,255,255,0.12)",
                   background: "rgba(255,255,255,0.06)",
-                  padding: "14px 14px",
+                  padding: isSmall ? "12px 12px" : "14px 14px",
                 }}
               >
                 <div style={{ fontSize: 12, fontWeight: 950, letterSpacing: ".18em", opacity: 0.92 }}>
@@ -792,12 +955,13 @@ export default function LoginForm() {
                       fontSize: 12.5,
                       fontWeight: 900,
                       letterSpacing: ".06em",
+                      maxWidth: "100%",
                     }}
                   >
                     {mode === MODE_OTP ? "OTP" : mode === MODE_PASSWORD ? "Password" : "Password + OTP"}
                   </span>
 
-                  <span style={{ color: "rgba(255,255,255,0.72)", fontSize: 13 }}>
+                  <span style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, maxWidth: "100%" }}>
                     {headerSubtitle}
                   </span>
                 </div>
@@ -805,9 +969,7 @@ export default function LoginForm() {
 
               {/* Steps */}
               <div style={{ marginTop: 18 }}>
-                <div style={{ fontSize: 12, fontWeight: 950, letterSpacing: ".18em", opacity: 0.92 }}>
-                  Steps
-                </div>
+                <div style={{ fontSize: 12, fontWeight: 950, letterSpacing: ".18em", opacity: 0.92 }}>Steps</div>
                 <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <span
                     style={{
@@ -858,9 +1020,10 @@ export default function LoginForm() {
                       borderRadius: 999,
                       background: "rgba(255,255,255,0.30)",
                       marginTop: 6,
+                      flex: "0 0 auto",
                     }}
                   />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     Redirect protection is enforced. You will be routed only to the intended destination.
                   </div>
                 </div>
@@ -869,8 +1032,17 @@ export default function LoginForm() {
 
             {/* Right panel: Form */}
             <section style={panelRight}>
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
-                <div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 14,
+                  flexWrap: isSmall ? "wrap" : "nowrap",
+                  minWidth: 0,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <div
                       style={{
@@ -882,15 +1054,14 @@ export default function LoginForm() {
                         display: "grid",
                         placeItems: "center",
                         boxShadow: "0 12px 26px rgba(15,33,71,0.08)",
+                        flex: "0 0 auto",
                       }}
                       aria-hidden="true"
                     >
                       <IconShield size={18} color={NAVY_FADE} />
                     </div>
-                    <div>
-                      <div style={{ color: NAVY, fontSize: 18, fontWeight: 950, lineHeight: 1.15 }}>
-                        Secure sign-in
-                      </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: NAVY, fontSize: 18, fontWeight: 950, lineHeight: 1.15 }}>Secure sign-in</div>
                       <div style={{ color: SUBTEXT, fontSize: 13.5, marginTop: 2 }}>
                         {searchParams?.get("checkout")
                           ? "Continue to checkout after verification."
@@ -900,7 +1071,7 @@ export default function LoginForm() {
                   </div>
                 </div>
 
-                <div style={{ textAlign: "right" }}>
+                <div style={{ textAlign: isSmall ? "left" : "right", minWidth: 0, width: isSmall ? "100%" : "auto" }}>
                   <div style={{ color: NAVY_FADE, fontSize: 12.5, fontWeight: 900 }}>Redirect</div>
                   <div
                     title={redirectTo}
@@ -915,7 +1086,8 @@ export default function LoginForm() {
                       color: NAVY,
                       fontSize: 12,
                       fontWeight: 900,
-                      maxWidth: 280,
+                      maxWidth: "100%",
+                      width: isSmall ? "100%" : "auto",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -927,7 +1099,6 @@ export default function LoginForm() {
                 </div>
               </div>
 
-              {/* Risk banner (kept) */}
               {(risk?.newDevice || risk?.newIp) && (
                 <div style={{ marginTop: 16 }}>
                   <StatusPill kind={riskBannerKind || "warn"}>
@@ -936,10 +1107,15 @@ export default function LoginForm() {
                 </div>
               )}
 
-              {/* Error banner (kept) */}
               {err ? (
                 <div style={{ marginTop: 14 }}>
                   <StatusPill kind="error">{err}</StatusPill>
+                </div>
+              ) : null}
+
+              {channelWarn ? (
+                <div style={{ marginTop: 12 }}>
+                  <StatusPill kind="warn">{channelWarn}</StatusPill>
                 </div>
               ) : null}
 
@@ -971,8 +1147,9 @@ export default function LoginForm() {
                   <option value={MODE_2FA}>Password + OTP (recommended)</option>
                 </select>
 
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
                   <SegButton
+                    small={isSmall}
                     active={mode === MODE_OTP}
                     disabled={loading}
                     onClick={() => {
@@ -985,6 +1162,7 @@ export default function LoginForm() {
                   </SegButton>
 
                   <SegButton
+                    small={isSmall}
                     active={mode === MODE_PASSWORD}
                     disabled={loading}
                     onClick={() => {
@@ -997,6 +1175,7 @@ export default function LoginForm() {
                   </SegButton>
 
                   <SegButton
+                    small={isSmall}
                     active={mode === MODE_2FA}
                     disabled={loading}
                     onClick={() => {
@@ -1011,7 +1190,7 @@ export default function LoginForm() {
 
                 <div style={{ marginTop: 10, ...subtle }}>
                   {mode === MODE_OTP
-                    ? "We’ll send a one-time code (WhatsApp/SMS for mobile, Email for email identifiers)."
+                    ? "We’ll send a one-time code (SMS for mobile, Email for email identifiers)."
                     : mode === MODE_PASSWORD
                     ? "Password-only sign-in. Best for trusted devices."
                     : "Recommended: password validation first, then OTP verification."}
@@ -1028,10 +1207,18 @@ export default function LoginForm() {
               >
                 {/* Identifier */}
                 <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <div style={labelStyle}>Email or Mobile</div>
 
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end", minWidth: 0 }}>
                       {identifierKind === "email" ? (
                         <span
                           style={{
@@ -1045,6 +1232,7 @@ export default function LoginForm() {
                             color: NAVY,
                             fontSize: 12,
                             fontWeight: 900,
+                            maxWidth: "100%",
                           }}
                           title="Identifier recognized as email"
                         >
@@ -1064,8 +1252,9 @@ export default function LoginForm() {
                             color: NAVY,
                             fontSize: 12,
                             fontWeight: 900,
+                            maxWidth: "100%",
                           }}
-                          title="Identifier recognized as mobile"
+                          title={`Mobile (normalized: ${normalizedPhone || "—"})`}
                         >
                           <IconPhone size={16} color={NAVY_FADE} />
                           Mobile
@@ -1083,6 +1272,7 @@ export default function LoginForm() {
                             color: ERR,
                             fontSize: 12,
                             fontWeight: 900,
+                            maxWidth: "100%",
                           }}
                           title="Identifier format looks invalid"
                         >
@@ -1103,17 +1293,14 @@ export default function LoginForm() {
                             fontSize: 12,
                             fontWeight: 950,
                             letterSpacing: "0.05em",
+                            maxWidth: "100%",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
                           }}
                           title="OTP delivery channel"
                         >
-                          OTP:{" "}
-                          <span style={{ color: NAVY, marginLeft: 6 }}>
-                            {effectiveOtpChannel === "whatsapp"
-                              ? "WhatsApp"
-                              : effectiveOtpChannel === "sms"
-                              ? "SMS"
-                              : "Email"}
-                          </span>
+                          OTP: <span style={{ color: NAVY, marginLeft: 6 }}>{effectiveOtpChannel === "sms" ? "SMS" : "Email"}</span>
                         </span>
                       ) : null}
                     </div>
@@ -1124,59 +1311,89 @@ export default function LoginForm() {
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
                       onKeyDown={onEnterKey}
-                      placeholder="you@example.com or +8801…"
+                      placeholder="you@example.com or 017… / +8801…"
                       autoComplete="username"
                       aria-invalid={Boolean(fieldErr.id)}
+                      inputMode={validEmail ? "email" : "tel"}
                       style={{
                         ...inputBase,
-                        width: idWidth,
+                        // Desktop can keep auto-ch sizing; mobile always 100% to eliminate overflow/masking.
+                        width: isSmall ? "100%" : idWidth,
                         maxWidth: "100%",
                       }}
                     />
                   </div>
 
                   {fieldErr.id ? (
-                    <div style={{ marginTop: 8, color: ERR, fontSize: 13.5, fontWeight: 800 }}>
-                      {fieldErr.id}
-                    </div>
+                    <div style={{ marginTop: 8, color: ERR, fontSize: 13.5, fontWeight: 800 }}>{fieldErr.id}</div>
                   ) : (
-                    <div style={{ marginTop: 8, ...subtle }}>
-                      We never share your contact information.
-                    </div>
+                    <div style={{ marginTop: 8, ...subtle }}>We never share your contact information.</div>
                   )}
 
                   {/* Channel selector for phone + OTP */}
                   {involvesOtp && isPhoneish(identifier) && !isEmailish(identifier) ? (
-                    <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      <span style={{ color: NAVY_FADE, fontSize: 12.5, fontWeight: 900 }}>
+                    <div
+                      style={{
+                        marginTop: 12,
+                        display: "flex",
+                        gap: 10,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        minWidth: 0,
+                      }}
+                    >
+                      <span style={{ color: NAVY_FADE, fontSize: isSmall ? 12.1 : 12.5, fontWeight: 900 }}>
                         Send code via
                       </span>
 
-                      <SegButton
-                        active={(channel === "whatsapp" || (bdLike(toE164(identifier)) && !userTouchedChannel)) && channel !== "sms"}
-                        disabled={loading}
+                      {/* WhatsApp option visible but blocked: never selectable, never auto-selected */}
+                      <button
+                        type="button"
                         onClick={() => {
-                          setChannel("whatsapp");
+                          setChannel("sms");
                           setUserTouchedChannel(true);
+                          setChannelWarn("WhatsApp wiring under processing — try SMS.");
+                          track("otp_channel_attempt_whatsapp", { surface: "loginform" });
                         }}
+                        style={{
+                          border: `1px solid ${BORDER}`,
+                          background: "rgba(255,255,255,0.96)",
+                          color: NAVY_FADE,
+                          padding: isSmall ? "9px 10px" : "10px 12px",
+                          borderRadius: 999,
+                          fontSize: isSmall ? 11.8 : 12.5,
+                          fontWeight: 900,
+                          letterSpacing: "0.06em",
+                          boxShadow: "0 10px 22px rgba(15,33,71,0.06)",
+                          opacity: 0.55,
+                          cursor: "not-allowed",
+                          maxWidth: "100%",
+                          whiteSpace: isSmall ? "normal" : "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          lineHeight: isSmall ? 1.15 : 1.2,
+                          textAlign: "center",
+                        }}
+                        aria-label="WhatsApp (under processing)"
+                        disabled={loading}
                       >
                         WhatsApp
-                      </SegButton>
+                      </button>
 
                       <SegButton
+                        small={isSmall}
                         active={channel === "sms"}
                         disabled={loading}
                         onClick={() => {
                           setChannel("sms");
                           setUserTouchedChannel(true);
+                          setChannelWarn("");
                         }}
                       >
                         SMS
                       </SegButton>
 
-                      <span style={{ ...subtle, marginLeft: 2 }}>
-                        WhatsApp is auto-preferred for BD numbers.
-                      </span>
+                      <span style={{ ...subtle, marginLeft: 2 }}>WhatsApp is under processing. SMS is recommended.</span>
                     </div>
                   ) : null}
                 </div>
@@ -1184,20 +1401,29 @@ export default function LoginForm() {
                 {/* Password */}
                 {needsPassword ? (
                   <div style={{ marginTop: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                      }}
+                    >
                       <div style={labelStyle}>Password</div>
 
                       <a
                         href="/forgot-password"
                         style={{
                           color: NAVY,
-                          fontSize: 12.5,
+                          fontSize: isSmall ? 12 : 12.5,
                           fontWeight: 950,
                           letterSpacing: "0.08em",
                           textTransform: "uppercase",
                           textDecoration: "underline",
                           textUnderlineOffset: 3,
                           opacity: 0.92,
+                          whiteSpace: "nowrap",
                         }}
                       >
                         Forgot?
@@ -1205,7 +1431,7 @@ export default function LoginForm() {
                     </div>
 
                     <div style={{ marginTop: 8, ...fieldWrap(Boolean(fieldErr.password)) }}>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", minWidth: 0 }}>
                         <input
                           type={showPwd ? "text" : "password"}
                           value={password}
@@ -1219,9 +1445,11 @@ export default function LoginForm() {
                           placeholder="Your password"
                           style={{
                             ...inputBase,
-                            width: pwdWidth,
+                            // Wider on desktop to prevent "veil" clipping, still fully safe on small screens.
+                            width: isSmall ? "100%" : pwdWidth,
                             maxWidth: "100%",
-                            paddingRight: 86,
+                            // Reduce blank area before the Show/Hide control, while still preventing overlap.
+                            paddingRight: RESERVED_RIGHT,
                           }}
                         />
 
@@ -1235,15 +1463,17 @@ export default function LoginForm() {
                             right: 8,
                             top: "50%",
                             transform: "translateY(-50%)",
-                            height: 38,
+                            height: isSmall ? 34 : 38,
                             borderRadius: 999,
                             border: `1px solid ${BORDER}`,
                             background: "rgba(255,255,255,0.96)",
                             color: NAVY_FADE,
-                            fontSize: 12,
+                            fontSize: isSmall ? 11.5 : 12,
                             fontWeight: 950,
-                            padding: "0 12px",
+                            padding: isSmall ? "0 10px" : "0 12px",
                             cursor: loading ? "not-allowed" : "pointer",
+                            whiteSpace: "nowrap",
+                            maxWidth: isSmall ? "46%" : "auto",
                           }}
                         >
                           {showPwd ? "Hide" : "Show"}
@@ -1252,19 +1482,13 @@ export default function LoginForm() {
                     </div>
 
                     {caps ? (
-                      <div style={{ marginTop: 8, color: WARN, fontSize: 13.5, fontWeight: 800 }}>
-                        Caps Lock is ON
-                      </div>
+                      <div style={{ marginTop: 8, color: WARN, fontSize: 13.5, fontWeight: 800 }}>Caps Lock is ON</div>
                     ) : null}
 
                     {fieldErr.password ? (
-                      <div style={{ marginTop: 8, color: ERR, fontSize: 13.5, fontWeight: 800 }}>
-                        {fieldErr.password}
-                      </div>
+                      <div style={{ marginTop: 8, color: ERR, fontSize: 13.5, fontWeight: 800 }}>{fieldErr.password}</div>
                     ) : (
-                      <div style={{ marginTop: 8, ...subtle }}>
-                        Strong passwords keep your account secure.
-                      </div>
+                      <div style={{ marginTop: 8, ...subtle }}>Strong passwords keep your account secure.</div>
                     )}
                   </div>
                 ) : null}
@@ -1276,28 +1500,30 @@ export default function LoginForm() {
                     borderRadius: 18,
                     border: `1px solid ${BORDER}`,
                     background: "rgba(255,255,255,0.92)",
-                    padding: "12px 12px",
+                    padding: isSmall ? "10px 10px" : "12px 12px",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
                     gap: 12,
                     boxShadow: "0 12px 26px rgba(15,33,71,0.06)",
+                    flexWrap: isSmall ? "wrap" : "nowrap",
+                    minWidth: 0,
                   }}
                 >
-                  <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
+                  <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer", minWidth: 0 }}>
                     <input
                       type="checkbox"
                       checked={rememberDevice}
                       onChange={(e) => setRememberDevice(e.target.checked)}
                       disabled={loading}
-                      style={{ width: 16, height: 16, accentColor: NAVY }}
+                      style={{ width: 16, height: 16, accentColor: NAVY, flex: "0 0 auto" }}
                     />
-                    <span style={{ color: NAVY, fontSize: 14, fontWeight: 900 }}>
+                    <span style={{ color: NAVY, fontSize: isSmall ? 13.4 : 14, fontWeight: 900 }}>
                       Trust this device for 30 days
                     </span>
                   </label>
 
-                  <span style={{ color: SUBTEXT, fontSize: 13, fontWeight: 700 }}>
+                  <span style={{ color: SUBTEXT, fontSize: isSmall ? 12.4 : 13, fontWeight: 700 }}>
                     Reduces OTP prompts on known devices
                   </span>
                 </div>
@@ -1310,14 +1536,20 @@ export default function LoginForm() {
                       borderRadius: 18,
                       border: `1px solid ${BORDER}`,
                       background: "rgba(255,255,255,0.92)",
-                      padding: "12px 12px",
+                      padding: isSmall ? "10px 10px" : "12px 12px",
                       boxShadow: "0 12px 26px rgba(15,33,71,0.06)",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                      <div style={{ color: NAVY, fontWeight: 950, letterSpacing: ".10em", fontSize: 12.5 }}>
-                        ADVANCED
-                      </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div style={{ color: NAVY, fontWeight: 950, letterSpacing: ".10em", fontSize: 12.5 }}>ADVANCED</div>
                       <span style={{ color: NAVY_FADE, fontSize: 12.5, fontWeight: 800 }}>
                         Risk level: <span style={{ color: NAVY }}>{risk?.level || "low"}</span>
                       </span>
@@ -1359,6 +1591,10 @@ export default function LoginForm() {
                           color: NAVY_FADE,
                           fontSize: 12.5,
                           fontWeight: 900,
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
                         }}
                         title="Where you will land after successful sign-in"
                       >
@@ -1405,7 +1641,7 @@ export default function LoginForm() {
                   </button>
 
                   <div style={{ marginTop: 14, textAlign: "center" }}>
-                    <div style={{ color: NAVY, fontSize: 14.5, fontWeight: 800 }}>
+                    <div style={{ color: NAVY, fontSize: isSmall ? 14 : 14.5, fontWeight: 800 }}>
                       Need a customer account?{" "}
                       <a
                         href={signupHref}
@@ -1419,8 +1655,8 @@ export default function LoginForm() {
                         Sign up
                       </a>
                     </div>
-                    <div style={{ marginTop: 6, color: SUBTEXT, fontSize: 13.5 }}>
-                      Staff & admins: use the TDLC Control Center login shared with your team lead.
+                    <div style={{ marginTop: 6, color: SUBTEXT, fontSize: isSmall ? 13 : 13.5 }}>
+                      Staff & admins: use the TDLS Control Center login shared with your team lead.
                     </div>
                   </div>
                 </div>
@@ -1430,7 +1666,7 @@ export default function LoginForm() {
               <div style={{ marginTop: 22 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, color: SUBTEXT, marginBottom: 12 }}>
                   <div style={{ flex: 1, height: 1, background: BORDER }} />
-                  <span style={{ fontSize: 13.5, fontWeight: 800 }}>or continue with</span>
+                  <span style={{ fontSize: isSmall ? 13 : 13.5, fontWeight: 800 }}>or continue with</span>
                   <div style={{ flex: 1, height: 1, background: BORDER }} />
                 </div>
 
@@ -1439,16 +1675,17 @@ export default function LoginForm() {
                     type="button"
                     onClick={() => socialSignIn("google")}
                     style={{
-                      height: 50,
+                      height: isSmall ? 46 : 50,
                       borderRadius: 999,
                       border: `1px solid ${BORDER}`,
                       background: "rgba(255,255,255,0.98)",
                       color: NAVY,
-                      fontSize: 14,
+                      fontSize: isSmall ? 13.2 : 14,
                       fontWeight: 900,
                       boxShadow: "0 10px 22px rgba(15,33,71,0.06)",
                       cursor: "pointer",
                       transition: "transform .12s ease, box-shadow .12s ease, filter .12s ease",
+                      minWidth: 0,
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.transform = "translateY(-1px)";
@@ -1470,16 +1707,17 @@ export default function LoginForm() {
                     type="button"
                     onClick={() => socialSignIn("facebook")}
                     style={{
-                      height: 50,
+                      height: isSmall ? 46 : 50,
                       borderRadius: 999,
                       border: `1px solid ${BORDER}`,
                       background: "rgba(255,255,255,0.98)",
                       color: NAVY,
-                      fontSize: 14,
+                      fontSize: isSmall ? 13.2 : 14,
                       fontWeight: 900,
                       boxShadow: "0 10px 22px rgba(15,33,71,0.06)",
                       cursor: "pointer",
                       transition: "transform .12s ease, box-shadow .12s ease, filter .12s ease",
+                      minWidth: 0,
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.transform = "translateY(-1px)";
@@ -1500,22 +1738,44 @@ export default function LoginForm() {
               </div>
 
               <div style={{ marginTop: 18, ...subtle }}>
-                By signing in, you agree to TDLC’s standard policies on session security and account protection.
+                By signing in, you agree to TDLS’s standard policies on session security and account protection.
               </div>
             </section>
           </div>
         </div>
 
-        {/* SINGLE styled-jsx block to avoid nested styled-jsx issues */}
+        {/* SINGLE styled-jsx block */}
         <style jsx global>{`
           @keyframes tdlcSpin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+            from {
+              transform: rotate(0deg);
+            }
+            to {
+              transform: rotate(360deg);
+            }
           }
 
+          /* Scope overflow protection to this page only */
+          .tdls-login-root {
+            overflow-x: clip;
+          }
+          .tdls-login-root * {
+            box-sizing: border-box;
+            min-width: 0;
+          }
+
+          /* Mobile layout only (desktop unchanged) */
           @media (max-width: 980px) {
             .tdlc-login-grid {
               grid-template-columns: 1fr !important;
+              min-width: 0;
+            }
+          }
+
+          /* Extra-small devices: prevent any stray horizontal overflow */
+          @media (max-width: 420px) {
+            .tdls-login-root .tdls-login-utility {
+              gap: 8px;
             }
           }
         `}</style>

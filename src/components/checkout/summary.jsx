@@ -78,7 +78,8 @@ export default function Summary({
   // FIX: refresh only when itemsSig changes (debounced), instead of only on mount.
   useEffect(() => {
     let alive = true;
-    const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const ac =
+      typeof AbortController !== "undefined" ? new AbortController() : null;
 
     const t = setTimeout(async () => {
       try {
@@ -645,9 +646,7 @@ export default function Summary({
                         </div>
                       ) : null}
                     </div>
-                    <div className="item-amt">
-                      {money(lineTotal, currency)}
-                    </div>
+                    <div className="item-amt">{money(lineTotal, currency)}</div>
                   </li>
                 );
               })}
@@ -935,6 +934,7 @@ export default function Summary({
           }
         }
 
+        /* Existing mobile adjustments (kept) */
         @media (max-width: 480px) {
           .item-row {
             grid-template-columns: 56px 1fr auto;
@@ -944,6 +944,144 @@ export default function Summary({
           }
           .grand-total {
             font-size: 24px;
+          }
+        }
+
+        /* Mobile hardening (ONLY under breakpoints) — desktop remains unchanged */
+        @media (max-width: 640px) {
+          .card-head {
+            padding: 14px 14px;
+          }
+          .card-body {
+            padding: 12px;
+          }
+
+          .panel-title {
+            padding: 9px 12px;
+            font-size: 11px;
+          }
+
+          .item-row {
+            grid-template-columns: 52px minmax(0, 1fr) auto;
+            gap: 12px;
+            padding: 10px 12px;
+            align-items: flex-start;
+          }
+          .thumb {
+            width: 52px;
+            height: 52px;
+          }
+          .item-title {
+            font-size: 15px;
+            line-height: 1.25;
+          }
+          .item-amt {
+            font-size: 13px;
+          }
+
+          .meta-grid {
+            grid-template-columns: 74px 1fr;
+            gap: 5px 10px;
+          }
+          .meta-grid dt {
+            font-size: 11px;
+          }
+          .meta-grid dd {
+            font-size: 11px;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+          }
+
+          .item-meta {
+            font-size: 11px;
+          }
+
+          .addr-card {
+            padding: 14px 14px 14px 40px;
+          }
+          .addr-card::before {
+            left: 10px;
+            top: 10px;
+            bottom: 10px;
+            width: 5px;
+          }
+          .addr-head {
+            gap: 12px;
+          }
+          .addr-title,
+          .addr-title-strong {
+            font-size: 12px;
+          }
+          .addr-name-strong {
+            font-size: 18px;
+          }
+          .addr-name-normal {
+            font-size: 15px;
+          }
+          .addr-lines-strong,
+          .addr-lines-normal {
+            font-size: 13px;
+          }
+          .addr-meta {
+            font-size: 12px;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+          }
+          .addr-line {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+          }
+
+          .grand-total {
+            font-size: 22px;
+          }
+
+          .cta-primary {
+            padding: 10px 14px;
+            font-size: 14px;
+            line-height: 1.2;
+            min-height: 44px;
+          }
+
+          .hint {
+            font-size: 12px;
+            gap: 10px;
+          }
+        }
+
+        /* Ultra-narrow devices */
+        @media (max-width: 360px) {
+          .item-row {
+            grid-template-columns: 48px minmax(0, 1fr) auto;
+            gap: 10px;
+            padding: 10px 10px;
+          }
+          .thumb {
+            width: 48px;
+            height: 48px;
+          }
+          .meta-grid {
+            grid-template-columns: 1fr;
+            gap: 4px 0;
+          }
+          .grand-total {
+            font-size: 21px;
+          }
+        }
+
+        /* Landscape phones (short height) */
+        @media (max-height: 420px) and (max-width: 900px) {
+          .card-body {
+            padding: 10px;
+          }
+          .item-row {
+            padding: 9px 10px;
+          }
+          .panel-title {
+            padding: 8px 10px;
+          }
+          .cta-primary {
+            margin-top: 14px;
           }
         }
       `}</style>
@@ -1001,8 +1139,6 @@ function addressesEqual(a, b) {
   // If IDs match, it's definitely the same record.
   if (a.id && b.id && String(a.id) === String(b.id)) return true;
 
-  // FIX: compare physical address content; do NOT block COD because
-  // phone/email/name differ or because IDs differ.
   const norm = (x) =>
     [
       x.line1 || x.address1,

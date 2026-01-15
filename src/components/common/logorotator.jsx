@@ -1,5 +1,4 @@
 // src/components/common/logorotator.jsx
-
 "use client";
 
 import React, { useEffect, useRef } from "react";
@@ -145,10 +144,12 @@ const LogoRotator = React.memo(function LogoRotator() {
       const ms = inPhase ? FADE_IN_MS : FADE_OUT_MS;
 
       // Micro blur on exit makes the flip look more expensive
+      // IMPORTANT FIX: keep filter + webkitFilter identical to avoid compositor ghost/double artifacts
       const baseFilter = buildBaseFilter();
       const blur = inPhase ? " blur(0px)" : " blur(0.35px)";
-      img.style.filter = baseFilter;
-      img.style.webkitFilter = baseFilter + blur;
+      const combined = baseFilter + blur;
+      img.style.filter = combined;
+      img.style.webkitFilter = combined;
 
       img.style.transition = [
         `opacity ${ms}ms cubic-bezier(0.22,1,0.36,1)`,
@@ -158,8 +159,9 @@ const LogoRotator = React.memo(function LogoRotator() {
       ].join(", ");
       img.style.willChange = "opacity, transform, filter";
 
+      // IMPORTANT FIX: do not keep sheen visible continuously (prevents dark/black shading overlay)
       if (sheen) {
-        sheen.style.opacity = inPhase && !reducedRef.current ? "1" : "0";
+        if (!inPhase || reducedRef.current) sheen.style.opacity = "0";
       }
     };
 
@@ -177,11 +179,23 @@ const LogoRotator = React.memo(function LogoRotator() {
       const sweep = sheen.querySelector('[data-sheen-sweep="1"]');
       if (!sweep) return;
 
+      // IMPORTANT FIX: show sheen only during sweep, otherwise keep it hidden (prevents shading/ghost look)
+      sheen.style.opacity = "1";
+
       sweep.style.animation = "none";
       // Force reflow to restart animation
       // eslint-disable-next-line no-unused-expressions
       sweep.getBoundingClientRect();
       sweep.style.animation = `tdlcSheen ${SHEEN_MS}ms cubic-bezier(0.22,1,0.36,1) both`;
+
+      // Hide right after sweep ends (small buffer for compositor)
+      try {
+        if (sheen.__hideT) clearTimeout(sheen.__hideT);
+        sheen.__hideT = setTimeout(() => {
+          if (!sheen) return;
+          sheen.style.opacity = "0";
+        }, SHEEN_MS + 90);
+      } catch {}
     };
 
     const glowOn = () => {
@@ -189,22 +203,25 @@ const LogoRotator = React.memo(function LogoRotator() {
       const glowHex = GLOW_COLORS[indexRef.current] || "#e7b84e";
       const glowFilter = buildGlowFilter(glowHex);
 
-      img.style.filter = glowFilter;
-
-      // Keep blur behavior consistent with phase
+      // IMPORTANT FIX: keep filter + webkitFilter identical to avoid compositor ghost/double artifacts
       const isOut = img.style.opacity === "0";
       const blur = isOut ? " blur(0.35px)" : " blur(0px)";
-      img.style.webkitFilter = glowFilter + blur;
+      const combined = glowFilter + blur;
+
+      img.style.filter = combined;
+      img.style.webkitFilter = combined;
 
       if (tGlowRef.current) clearTimeout(tGlowRef.current);
       tGlowRef.current = setTimeout(() => {
         if (!img) return;
         const base = buildBaseFilter();
-        img.style.filter = base;
 
         const stillOut = img.style.opacity === "0";
         const b2 = stillOut ? " blur(0.35px)" : " blur(0px)";
-        img.style.webkitFilter = base + b2;
+        const combined2 = base + b2;
+
+        img.style.filter = combined2;
+        img.style.webkitFilter = combined2;
       }, GLOW_MS);
     };
 
@@ -264,7 +281,7 @@ const LogoRotator = React.memo(function LogoRotator() {
           height: "150px",
           zIndex: 2,
           pointerEvents: "none",
-          opacity: 1,
+          opacity: 0, // IMPORTANT FIX: was 1 (caused static overlay shading/ghosting)
           transition: "opacity 240ms ease",
           WebkitMaskImage:
             "radial-gradient(closest-side, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.55) 62%, rgba(0,0,0,0.0) 82%)",
@@ -299,8 +316,8 @@ const LogoRotator = React.memo(function LogoRotator() {
           zIndex: 1,
           opacity: 1,
           transform: "perspective(1100px) rotateY(0deg) translateZ(0px) scale(1)",
-          filter: buildBaseFilter(),
-          WebkitFilter: buildBaseFilter(),
+          filter: buildBaseFilter() + " blur(0px)", // IMPORTANT FIX: match filter pipeline baseline
+          WebkitFilter: buildBaseFilter() + " blur(0px)", // IMPORTANT FIX: keep identical to avoid ghosting
           willChange: "opacity, transform, filter",
         }}
       />

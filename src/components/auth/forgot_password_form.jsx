@@ -141,227 +141,306 @@ export default function ForgotPasswordForm() {
   }
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 520 }}>
-      <h1
-        className="text-[28px] font-bold"
-        style={{ color: NAVY, marginBottom: 10 }}
-      >
-        Reset your password
-      </h1>
+    <div className="fp-wrap">
+      <div className="fp-shell mx-auto" style={{ maxWidth: 520 }}>
+        <h1
+          className="fp-title text-[28px] font-bold"
+          style={{ color: NAVY, marginBottom: 10 }}
+        >
+          Reset your password
+        </h1>
 
-      {!done && (
-        <p className="text-[15px]" style={{ color: SUBTEXT, marginBottom: 20 }}>
-          {step === 1
-            ? "Enter your email or mobile number. We’ll send a one-time code to verify."
-            : `We sent a 6-digit code via ${via}. Enter it and set a new password.`}
-        </p>
-      )}
-
-      {/* Step 1: request code */}
-      {!done && step === 1 && (
-        <>
-          <label
-            className="block text-[13px] font-semibold uppercase"
-            style={{ color: NAVY, marginBottom: 8 }}
+        {!done && (
+          <p
+            className="fp-sub text-[15px]"
+            style={{ color: SUBTEXT, marginBottom: 20 }}
           >
-            Email or Mobile
-          </label>
-          <input
-            value={identifier}
-            onChange={(e) => setIdentifier(e.target.value)}
-            placeholder="you@example.com or +8801…"
-            className="w-full text-[16px] rounded-full"
-            style={{
-              height: 54,
-              padding: "0 18px",
-              border: `1.5px solid ${BORDER}`,
-              boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
-            }}
-            aria-invalid={!idShapeValid && identifier.length > 0}
-          />
-          {!idShapeValid && identifier.length > 0 && (
-            <p className="mt-2 text-[13px]" style={{ color: "#9f1d20" }}>
-              That doesn’t look like a valid email or phone number.
-            </p>
-          )}
-          <button
-            disabled={busy}
-            onClick={requestReset}
-            className="w-full mt-4 text-white font-semibold rounded-full"
-            style={{ height: 52, background: "#0f2147" }}
-          >
-            {busy ? "Sending…" : "Send reset code"}
-          </button>
-        </>
-      )}
-
-      {/* Step 2: verify + new password */}
-      {!done && step === 2 && (
-        <>
-          <label
-            className="block text-[13px] font-semibold uppercase"
-            style={{ color: NAVY, marginBottom: 8 }}
-          >
-            6-digit code
-          </label>
-          <input
-            value={code}
-            onChange={(e) =>
-              setCode(e.target.value.replace(/[^\d]/g, "").slice(0, 6))
-            }
-            placeholder="Enter code"
-            className="w-full text-[16px] rounded-2xl text-center tracking-[0.5em]"
-            style={{
-              height: 54,
-              padding: "0 18px",
-              border: `1.5px solid ${BORDER}`,
-              boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
-            }}
-          />
-          <p className="text-[13px] mt-2" style={{ color: SUBTEXT }}>
-            Code expires in ~{Math.round(ttl / 60)} minute(s).
+            {step === 1
+              ? "Enter your email or mobile number. We’ll send a one-time code to verify."
+              : `We sent a 6-digit code via ${via}. Enter it and set a new password.`}
           </p>
+        )}
 
-          <div className="mt-5" />
-
-          <label
-            className="block text-[13px] font-semibold uppercase"
-            style={{ color: NAVY, marginBottom: 8 }}
-          >
-            New password
-          </label>
-          <div className="relative">
+        {/* Step 1: request code */}
+        {!done && step === 1 && (
+          <>
+            <label
+              className="block text-[13px] font-semibold uppercase"
+              style={{ color: NAVY, marginBottom: 8 }}
+            >
+              Email or Mobile
+            </label>
             <input
-              type={showPwd ? "text" : "password"}
-              value={pwd}
-              onChange={(e) => setPwd(e.target.value)}
-              placeholder="At least 8 characters"
-              className="w-full text-[16px] rounded-full pr-12"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              placeholder="you@example.com or +8801…"
+              className="fp-input w-full text-[16px] rounded-full"
               style={{
                 height: 54,
                 padding: "0 18px",
                 border: `1.5px solid ${BORDER}`,
                 boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
               }}
-              autoComplete="new-password"
+              aria-invalid={!idShapeValid && identifier.length > 0}
             />
-            <button
-              type="button"
-              onClick={() => setShowPwd((v) => !v)}
-              aria-pressed={showPwd}
-              aria-label={showPwd ? "Hide password" : "Show password"}
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[13px]"
-              style={{ color: SUBTEXT }}
-            >
-              {showPwd ? "Hide" : "Show"}
-            </button>
-          </div>
-
-          <label
-            className="block text-[13px] font-semibold uppercase mt-4"
-            style={{ color: NAVY, marginBottom: 8 }}
-          >
-            Confirm password
-          </label>
-          <div className="relative">
-            <input
-              type={showConfirm ? "text" : "password"}
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Repeat password"
-              className="w-full text-[16px] rounded-full pr-12"
-              style={{
-                height: 54,
-                padding: "0 18px",
-                border: `1.5px solid ${BORDER}`,
-                boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
-              }}
-              autoComplete="new-password"
-            />
-            <button
-              type="button"
-              onClick={() => setShowConfirm((v) => !v)}
-              aria-pressed={showConfirm}
-              aria-label={showConfirm ? "Hide password" : "Show password"}
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[13px]"
-              style={{ color: SUBTEXT }}
-            >
-              {showConfirm ? "Hide" : "Show"}
-            </button>
-          </div>
-
-          <button
-            disabled={busy}
-            onClick={resetPassword}
-            className="w-full mt-5 text-white font-semibold rounded-full"
-            style={{ height: 52, background: "#0f2147" }}
-          >
-            {busy ? "Resetting…" : "Reset password"}
-          </button>
-        </>
-      )}
-
-      {/* Success state */}
-      {done && (
-        <div
-          className="rounded-2xl px-4 py-4 mt-3"
-          style={{
-            border: "1px solid #c7f0d8",
-            background: "#effaf3",
-            color: "#136b3a",
-          }}
-          role="status"
-          aria-live="polite"
-        >
-          <div className="flex items-start gap-3">
-            <div
-              className="flex items-center justify-center rounded-full"
-              style={{
-                width: 28,
-                height: 28,
-                background: "#20c977",
-                color: "white",
-                fontWeight: 800,
-              }}
-              aria-hidden="true"
-            >
-              ✓
-            </div>
-            <div>
-              <p className="font-semibold">Password updated successfully.</p>
-              <p className="text-[14px]" style={{ color: "#246e4e" }}>
-                You can now sign in with your new password.
+            {!idShapeValid && identifier.length > 0 && (
+              <p className="mt-2 text-[13px]" style={{ color: "#9f1d20" }}>
+                That doesn’t look like a valid email or phone number.
               </p>
-              <a
-                href="/login"
-                className="inline-flex items-center mt-3 rounded-full px-4 py-2 text-[14px] font-semibold"
+            )}
+            <button
+              disabled={busy}
+              onClick={requestReset}
+              className="fp-cta w-full mt-4 font-semibold rounded-full"
+              style={{
+                height: 52,
+                background: NAVY, // deep navy background stays as-is
+                color: "#fff", // CTA text explicitly white (never same as background)
+                boxShadow: "0 10px 22px rgba(15,33,71,.18)",
+              }}
+            >
+              {busy ? "Sending…" : "Send reset code"}
+            </button>
+          </>
+        )}
+
+        {/* Step 2: verify + new password */}
+        {!done && step === 2 && (
+          <>
+            <label
+              className="block text-[13px] font-semibold uppercase"
+              style={{ color: NAVY, marginBottom: 8 }}
+            >
+              6-digit code
+            </label>
+            <input
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/[^\d]/g, "").slice(0, 6))
+              }
+              placeholder="Enter code"
+              className="fp-code w-full text-[16px] rounded-2xl text-center tracking-[0.5em]"
+              style={{
+                height: 54,
+                padding: "0 18px",
+                border: `1.5px solid ${BORDER}`,
+                boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
+              }}
+            />
+            <p className="text-[13px] mt-2" style={{ color: SUBTEXT }}>
+              Code expires in ~{Math.round(ttl / 60)} minute(s).
+            </p>
+
+            <div className="mt-5" />
+
+            <label
+              className="block text-[13px] font-semibold uppercase"
+              style={{ color: NAVY, marginBottom: 8 }}
+            >
+              New password
+            </label>
+            <div className="relative">
+              <input
+                type={showPwd ? "text" : "password"}
+                value={pwd}
+                onChange={(e) => setPwd(e.target.value)}
+                placeholder="At least 8 characters"
+                className="fp-input w-full text-[16px] rounded-full pr-12"
                 style={{
-                  background: NAVY,
-                  color: "#fff",
-                  boxShadow: "0 6px 18px rgba(15,33,71,.12)",
+                  height: 54,
+                  padding: "0 18px",
+                  border: `1.5px solid ${BORDER}`,
+                  boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
                 }}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPwd((v) => !v)}
+                aria-pressed={showPwd}
+                aria-label={showPwd ? "Hide password" : "Show password"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[13px]"
+                style={{ color: SUBTEXT }}
               >
-                Go to Sign in
-              </a>
+                {showPwd ? "Hide" : "Show"}
+              </button>
+            </div>
+
+            <label
+              className="block text-[13px] font-semibold uppercase mt-4"
+              style={{ color: NAVY, marginBottom: 8 }}
+            >
+              Confirm password
+            </label>
+            <div className="relative">
+              <input
+                type={showConfirm ? "text" : "password"}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="Repeat password"
+                className="fp-input w-full text-[16px] rounded-full pr-12"
+                style={{
+                  height: 54,
+                  padding: "0 18px",
+                  border: `1.5px solid ${BORDER}`,
+                  boxShadow: "inset 0 8px 18px rgba(15,33,71,.06)",
+                }}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirm((v) => !v)}
+                aria-pressed={showConfirm}
+                aria-label={showConfirm ? "Hide password" : "Show password"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[13px]"
+                style={{ color: SUBTEXT }}
+              >
+                {showConfirm ? "Hide" : "Show"}
+              </button>
+            </div>
+
+            <button
+              disabled={busy}
+              onClick={resetPassword}
+              className="fp-cta w-full mt-5 font-semibold rounded-full"
+              style={{
+                height: 52,
+                background: NAVY, // deep navy background stays as-is
+                color: "#fff", // CTA text explicitly white
+                boxShadow: "0 10px 22px rgba(15,33,71,.18)",
+              }}
+            >
+              {busy ? "Resetting…" : "Reset password"}
+            </button>
+          </>
+        )}
+
+        {/* Success state */}
+        {done && (
+          <div
+            className="rounded-2xl px-4 py-4 mt-3"
+            style={{
+              border: "1px solid #c7f0d8",
+              background: "#effaf3",
+              color: "#136b3a",
+            }}
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className="flex items-center justify-center rounded-full"
+                style={{
+                  width: 28,
+                  height: 28,
+                  background: "#20c977",
+                  color: "white",
+                  fontWeight: 800,
+                }}
+                aria-hidden="true"
+              >
+                ✓
+              </div>
+              <div>
+                <p className="font-semibold">Password updated successfully.</p>
+                <p className="text-[14px]" style={{ color: "#246e4e" }}>
+                  You can now sign in with your new password.
+                </p>
+                <a
+                  href="/login"
+                  className="fp-linkcta inline-flex items-center mt-3 rounded-full px-4 py-2 text-[14px] font-semibold"
+                  style={{
+                    background: NAVY, // deep navy background stays as-is
+                    color: "#fff", // CTA text explicitly white
+                    boxShadow: "0 6px 18px rgba(15,33,71,.12)",
+                  }}
+                >
+                  Go to Sign in
+                </a>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Error bubble */}
-      {err && !done && (
-        <div
-          className="mt-4 rounded-2xl px-4 py-3 text-[14px]"
-          style={{
-            color: "#9f1d20",
-            background: "#fff5f5",
-            border: "1px solid #ffdada",
-          }}
-          role="alert"
-        >
-          {err}
-        </div>
-      )}
+        {/* Error bubble */}
+        {err && !done && (
+          <div
+            className="mt-4 rounded-2xl px-4 py-3 text-[14px]"
+            style={{
+              color: "#9f1d20",
+              background: "#fff5f5",
+              border: "1px solid #ffdada",
+            }}
+            role="alert"
+          >
+            {err}
+          </div>
+        )}
+      </div>
+
+      {/* Mobile-only adaptive rules (desktop remains unchanged) */}
+      <style jsx>{`
+        .fp-wrap {
+          /* Safe-area only (light touch; desktop unaffected) */
+          padding-top: max(12px, env(safe-area-inset-top));
+          padding-bottom: max(12px, env(safe-area-inset-bottom));
+        }
+
+        /* Phone / small devices */
+        @media (max-width: 640px) {
+          .fp-shell {
+            /* premium margins without edge-clipping */
+            padding-left: 14px;
+            padding-right: 14px;
+
+            /* prevent being hidden under fixed Navbar + BottomFloatingBar */
+            padding-top: calc(env(safe-area-inset-top) + 92px);
+            padding-bottom: calc(env(safe-area-inset-bottom) + 90px);
+          }
+
+          .fp-title {
+            font-size: 22px !important;
+            line-height: 1.18 !important;
+            margin-bottom: 8px !important;
+          }
+
+          .fp-sub {
+            font-size: 13px !important;
+            margin-bottom: 14px !important;
+          }
+
+          .fp-input {
+            height: 46px !important;
+            font-size: 15px !important;
+            padding: 0 14px !important;
+          }
+
+          .fp-code {
+            height: 46px !important;
+            font-size: 15px !important;
+            /* reduce spacing so 6 digits never overflow on narrow screens */
+            letter-spacing: 0.32em !important;
+          }
+
+          .fp-cta {
+            height: 46px !important;
+            font-size: 14px !important;
+          }
+
+          .fp-linkcta {
+            font-size: 13px !important;
+            padding: 10px 14px !important;
+          }
+        }
+
+        /* Landscape phones / very short height */
+        @media (max-width: 896px) and (max-height: 520px) {
+          .fp-shell {
+            padding-top: calc(env(safe-area-inset-top) + 76px);
+            padding-bottom: calc(env(safe-area-inset-bottom) + 76px);
+          }
+        }
+      `}</style>
     </div>
   );
 }

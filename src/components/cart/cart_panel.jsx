@@ -15,7 +15,7 @@ const BORDER = "#E0E4F2";
 const NAVBAR_BASE_TOP = 96; // your existing safe distance
 const HALF_INCH = 48; // ~0.5 inch in px
 const NAVBAR_SAFE_TOP = NAVBAR_BASE_TOP + HALF_INCH; // shifted down by 0.5"
-const BOTTOM_SAFE = 96; // keep clear from bottomfloatingbar
+const BOTTOM_SAFE = 96; // keep clear from bottomfloatingbar (mobile too)
 
 function money(n) {
   const v = Number(n ?? 0);
@@ -184,9 +184,7 @@ export default function CartPanel() {
   const subtotal = useMemo(() => {
     if (totals?.subtotal != null) return Number(totals.subtotal);
     return items.reduce(
-      (sum, it) =>
-        sum +
-        Number(it.quantity || 0) * Number(it.unitPrice ?? it.price ?? 0),
+      (sum, it) => sum + Number(it.quantity || 0) * Number(it.unitPrice ?? it.price ?? 0),
       0
     );
   }, [items, totals]);
@@ -321,9 +319,7 @@ export default function CartPanel() {
             <div className="tdlcCartMeta">
               {empty
                 ? "No items added yet."
-                : `${totalQty} item${totalQty === 1 ? "" : "s"} · ${money(
-                    subtotal
-                  )}`}
+                : `${totalQty} item${totalQty === 1 ? "" : "s"} · ${money(subtotal)}`}
             </div>
           </div>
 
@@ -341,16 +337,10 @@ export default function CartPanel() {
           ) : empty ? (
             <div className="tdlcStateBlock">
               <div className="tdlcStateTitle">Your cart is empty</div>
-              <div className="tdlcStateSub">
-                Add your first TDLC piece and come back here.
-              </div>
+              <div className="tdlcStateSub">Add your first TDLC piece and come back here.</div>
 
               <div className="tdlcInlineActions">
-                <button
-                  type="button"
-                  className="tdlcGhostBtn"
-                  onClick={onContinueShopping}
-                >
+                <button type="button" className="tdlcGhostBtn" onClick={onContinueShopping}>
                   Continue Shopping
                 </button>
               </div>
@@ -363,10 +353,7 @@ export default function CartPanel() {
                 const line = qty * unit;
 
                 return (
-                  <li
-                    key={it.id || it.lineId || `cart-item-${idx}`}
-                    className="tdlcItem"
-                  >
+                  <li key={it.id || it.lineId || `cart-item-${idx}`} className="tdlcItem">
                     <div className="tdlcThumb">
                       {it.thumbnail || it.image ? (
                         <img
@@ -382,9 +369,7 @@ export default function CartPanel() {
 
                     <div className="tdlcItemInfo">
                       <div className="tdlcItemTop">
-                        <div className="tdlcItemTitle">
-                          {it.title || "Untitled product"}
-                        </div>
+                        <div className="tdlcItemTitle">{it.title || "Untitled product"}</div>
                       </div>
 
                       <div className="tdlcItemMeta">
@@ -426,32 +411,19 @@ export default function CartPanel() {
             <div className="tdlcTotalsLabel">Subtotal</div>
             <div className="tdlcTotalsValue">{money(subtotal)}</div>
           </div>
-          <div className="tdlcTotalsHint">
-            Taxes & shipping will be calculated on checkout.
-          </div>
+          <div className="tdlcTotalsHint">Taxes & shipping will be calculated on checkout.</div>
 
           <div className="tdlcCtaRow">
-            <button
-              type="button"
-              onClick={onViewCart}
-              className="tdlcOutlineBtn"
-            >
+            <button type="button" onClick={onViewCart} className="tdlcOutlineBtn">
               View Cart
             </button>
 
-            <button
-              type="button"
-              onClick={onCheckout}
-              disabled={empty || loading}
-              className="tdlcPrimaryBtn"
-            >
+            <button type="button" onClick={onCheckout} disabled={empty || loading} className="tdlcPrimaryBtn">
               Checkout
             </button>
           </div>
 
-          <div className="tdlcFootnote">
-            Secure checkout. Mode selection happens on the checkout page.
-          </div>
+          <div className="tdlcFootnote">Secure checkout. Mode selection happens on the checkout page.</div>
         </div>
 
         {/* styles */}
@@ -460,11 +432,7 @@ export default function CartPanel() {
             position: fixed;
             inset: 0;
             z-index: 11900;
-            background: radial-gradient(
-              circle at 20% 0%,
-              rgba(2, 6, 23, 0.52),
-              rgba(2, 6, 23, 0.62)
-            );
+            background: radial-gradient(circle at 20% 0%, rgba(2, 6, 23, 0.52), rgba(2, 6, 23, 0.62));
             opacity: 0;
             pointer-events: none;
             transition: opacity 220ms ease;
@@ -481,16 +449,10 @@ export default function CartPanel() {
             flex-direction: column;
             overflow: hidden;
             border: 1px solid rgba(224, 228, 242, 0.75);
-            background: linear-gradient(
-              145deg,
-              rgba(255, 255, 255, 0.92),
-              rgba(240, 244, 255, 0.98)
-            );
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(240, 244, 255, 0.98));
             backdrop-filter: blur(14px);
-            box-shadow: 0 28px 80px rgba(15, 33, 71, 0.34),
-              0 0 0 1px rgba(226, 232, 240, 0.65);
-            transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1),
-              opacity 240ms ease;
+            box-shadow: 0 28px 80px rgba(15, 33, 71, 0.34), 0 0 0 1px rgba(226, 232, 240, 0.65);
+            transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 240ms ease;
             opacity: 0;
             pointer-events: none;
           }
@@ -511,14 +473,22 @@ export default function CartPanel() {
             transform: translateX(0);
           }
 
-          /* Bottom sheet variant (mobile) */
+          /* Bottom sheet variant (mobile)
+             Fix: lift the entire sheet above BottomFloatingBar + iOS safe-area.
+             This prevents the panel/footer/CTA from being hidden underneath the bar. */
           .tdlcCartPanel[data-variant="sheet"] {
+            --tdlc-sheet-bottom: calc(var(--tdlc-bottom-safe) + env(safe-area-inset-bottom, 0px));
+
             left: 0;
             right: 0;
-            bottom: 0;
+            bottom: var(--tdlc-sheet-bottom);
             top: auto;
             width: 100vw;
-            height: min(82vh, 720px);
+
+            /* keep premium proportions while guaranteeing no overflow */
+            height: min(82vh, calc(100dvh - var(--tdlc-sheet-bottom) - 10px));
+            height: min(82vh, calc(100vh - var(--tdlc-sheet-bottom) - 10px));
+
             border-radius: 26px 26px 0 0;
             transform: translateY(110%);
           }
@@ -538,11 +508,7 @@ export default function CartPanel() {
           .tdlcCartHeader {
             position: relative;
             padding: 14px 16px 12px;
-            background: radial-gradient(
-              circle at top left,
-              rgba(229, 231, 255, 0.95),
-              rgba(248, 250, 252, 0.98)
-            );
+            background: radial-gradient(circle at top left, rgba(229, 231, 255, 0.95), rgba(248, 250, 252, 0.98));
             border-bottom: 1px solid rgba(224, 228, 242, 0.95);
           }
 
@@ -580,8 +546,7 @@ export default function CartPanel() {
             font-weight: 900;
             cursor: pointer;
             box-shadow: 0 12px 26px rgba(2, 6, 23, 0.12);
-            transition: transform 120ms ease, box-shadow 120ms ease,
-              border-color 120ms ease;
+            transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
           }
           .tdlcCloseBtn:hover {
             transform: translateY(-1px);
@@ -647,11 +612,7 @@ export default function CartPanel() {
             padding: 18px 12px;
             border: 1px solid rgba(224, 228, 242, 0.9);
             border-radius: 20px;
-            background: linear-gradient(
-              135deg,
-              rgba(255, 255, 255, 0.98),
-              rgba(239, 246, 255, 0.98)
-            );
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 246, 255, 0.98));
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
           }
           .tdlcStateTitle {
@@ -690,14 +651,9 @@ export default function CartPanel() {
             padding: 10px;
             border-radius: 20px;
             border: 1px solid rgba(148, 163, 184, 0.35);
-            background: linear-gradient(
-              140deg,
-              rgba(249, 250, 251, 1),
-              rgba(239, 246, 255, 1)
-            );
+            background: linear-gradient(140deg, rgba(249, 250, 251, 1), rgba(239, 246, 255, 1));
             box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
-            transition: transform 140ms ease, box-shadow 140ms ease,
-              border-color 140ms ease;
+            transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
           }
           .tdlcItem:hover {
             transform: translateY(-1px);
@@ -787,23 +743,14 @@ export default function CartPanel() {
           .tdlcCartFooter {
             padding: 12px 14px 14px;
             border-top: 1px solid rgba(224, 228, 242, 0.85);
-            background: radial-gradient(
-              circle at top left,
-              #020617,
-              #020617 45%,
-              #111827 100%
-            );
+            background: radial-gradient(circle at top left, #020617, #020617 45%, #111827 100%);
             color: #e5e7eb;
           }
           .tdlcFooterLine {
             height: 3px;
             border-radius: 999px;
             margin-bottom: 10px;
-            background: linear-gradient(
-              90deg,
-              rgba(250, 204, 21, 0.85),
-              rgba(166, 124, 55, 0.7)
-            );
+            background: linear-gradient(90deg, rgba(250, 204, 21, 0.85), rgba(166, 124, 55, 0.7));
             box-shadow: 0 0 14px rgba(250, 204, 21, 0.45);
           }
 
@@ -873,8 +820,7 @@ export default function CartPanel() {
             text-transform: uppercase;
             cursor: pointer;
             box-shadow: 0 14px 34px rgba(250, 204, 21, 0.46);
-            transition: transform 120ms ease, box-shadow 120ms ease,
-              opacity 120ms ease;
+            transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
           }
           .tdlcPrimaryBtn:hover {
             transform: translateY(-1px);
@@ -908,6 +854,69 @@ export default function CartPanel() {
             font-size: 11px;
             color: rgba(229, 231, 235, 0.7);
             line-height: 1.35;
+          }
+
+          /* Mobile tightening: keep premium look but reduce visual scale on small screens */
+          @media (max-width: 520px) {
+            .tdlcCartHeader {
+              padding: 12px 14px 10px;
+            }
+            .tdlcCloseBtn {
+              width: 34px;
+              height: 34px;
+            }
+            .tdlcCartTitle {
+              font-size: 15px;
+            }
+            .tdlcCartMeta {
+              font-size: 11.5px;
+            }
+
+            .tdlcCartBody {
+              padding: 10px 10px 8px;
+            }
+
+            .tdlcItem {
+              grid-template-columns: 70px 1fr;
+              padding: 9px;
+              border-radius: 18px;
+            }
+            .tdlcThumb {
+              width: 70px;
+              height: 86px;
+              border-radius: 16px;
+            }
+            .tdlcItemTitle {
+              font-size: 12.5px;
+            }
+            .tdlcItemMeta {
+              font-size: 10.5px;
+            }
+            .tdlcItemQty,
+            .tdlcItemLine {
+              font-size: 11.5px;
+            }
+
+            .tdlcCartFooter {
+              padding: 10px 12px 12px;
+            }
+            .tdlcTotalsValue {
+              font-size: 15px;
+            }
+            .tdlcOutlineBtn,
+            .tdlcPrimaryBtn {
+              height: 38px;
+              font-size: 11.5px;
+              letter-spacing: 0.11em;
+            }
+          }
+
+          /* Landscape phones: keep height stable and non-overflow */
+          @media (max-height: 420px) and (max-width: 920px) {
+            .tdlcCartPanel[data-variant="sheet"] {
+              height: min(78vh, calc(100dvh - var(--tdlc-sheet-bottom) - 8px));
+              height: min(78vh, calc(100vh - var(--tdlc-sheet-bottom) - 8px));
+            }
           }
         `}</style>
       </aside>
