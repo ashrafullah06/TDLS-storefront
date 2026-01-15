@@ -10,18 +10,19 @@ const NAVY_GRAD = "linear-gradient(135deg,#162a4d 0%,#0b1633 100%)";
 const GREY_BORDER = "#E4E7EE";
 
 /* ========= EASY-TO-TUNE SPACING TOKENS ========= */
+/** Desktop kept intact; mobile padding reduced to avoid overflow on 320px/landscape */
 const PAGE_PADDING_X = "px-4 md:px-8";
-const PAGE_PADDING_Y = "py-10";
+const PAGE_PADDING_Y = "py-8 sm:py-10";
 
-const CARD_PADDING_X = "px-7 md:px-10 lg:px-12";
-const CARD_PADDING_Y_TOP = "pt-8";
-const CARD_PADDING_Y_BOTTOM = "pb-10";
+const CARD_PADDING_X = "px-5 sm:px-7 md:px-10 lg:px-12";
+const CARD_PADDING_Y_TOP = "pt-7 sm:pt-8";
+const CARD_PADDING_Y_BOTTOM = "pb-8 sm:pb-10";
 
 const CTA_TO_HELPER_GAP = "pt-4";
 const CTA_BLOCK_MARGIN_TOP = "mt-1";
 const CTA_BLOCK_MARGIN_BOTTOM = "mb-1";
 
-const RESEND_ROW_GAP = "gap-2";
+const RESEND_ROW_GAP = "gap-2 sm:gap-3";
 /* =============================================== */
 
 /* ---------- OTP TTL (HARD LOCK PER FLOW) ---------- */
@@ -534,7 +535,7 @@ async function signInViaBasePath(providerId, params, basePath) {
   // Auth.js typically returns json when json=true
   const j = await r.json().catch(() => ({}));
   return {
-    ok: !!(r.ok && (j?.ok !== false) && !j?.error),
+    ok: !!(r.ok && j?.ok !== false && !j?.error),
     error: j?.error || (r.ok ? null : "Sign-in failed"),
     url: j?.url || callbackUrl || null,
     status: r.status,
@@ -809,7 +810,7 @@ export default function OtpForm(props) {
 
       void reason;
     },
-    [to, via, purpose, isAdminFlow]
+    [to, via, purpose, isAdminFlow, sessionId]
   );
 
   useEffect(() => {
@@ -1014,7 +1015,10 @@ export default function OtpForm(props) {
         idempotencyKey: opts?.forceNew ? `${activeKey}|${Date.now()}` : activeKey,
       };
 
-      const out = await postJsonWithFallback(requestEndpoints, payload, { fallbackOn5xx: false, signal: sendAbortRef.current?.signal });
+      const out = await postJsonWithFallback(requestEndpoints, payload, {
+        fallbackOn5xx: false,
+        signal: sendAbortRef.current?.signal,
+      });
 
       if (!out.ok) {
         // If OTP was already issued in the previous step (e.g., login requested OTP then routed here),
@@ -1088,7 +1092,10 @@ export default function OtpForm(props) {
       setOtp("");
       setErr("");
       setExpires(0);
-      try { endReasonRef.current = ""; prevExpiresRef.current = 0; } catch {}
+      try {
+        endReasonRef.current = "";
+        prevExpiresRef.current = 0;
+      } catch {}
       setResendEligible(false);
       autoVerifyRef.current = true;
 
@@ -1132,7 +1139,7 @@ export default function OtpForm(props) {
       bootstrapOtp(true, { forceNew: !!forceNewOnce });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, via, purpose, isAdminFlow]);
+  }, [to, via, purpose, isAdminFlow, sessionId, FLOW_TTL_MAX, sentAlready]);
 
   /**
    * NEW-OTP RE-ARM (critical):
@@ -1504,11 +1511,11 @@ export default function OtpForm(props) {
                   </span>
                 )}
 
-                <h1 className="text-[22px] md:text-[24px] font-semibold leading-snug tracking-tight text-[rgba(239,242,255,0.96)]">
+                <h1 className="text-[21px] sm:text-[22px] md:text-[24px] font-semibold leading-snug tracking-tight text-[rgba(239,242,255,0.96)]">
                   {context.title || "Enter the 6-digit code"}
                 </h1>
 
-                <p className="text-xs md:text-[13px] text-[rgba(209,213,255,0.94)] leading-relaxed">
+                <p className="text-xs md:text-[13px] text-[rgba(209,213,255,0.94)] leading-relaxed break-words">
                   {mask ? (
                     <>
                       We sent a 6-digit code to <span className="font-semibold text-white">{mask}</span> via{" "}
@@ -1535,7 +1542,8 @@ export default function OtpForm(props) {
 
               <div className="space-y-4">
                 <div className="flex justify-center">
-                  <div className="flex justify-between gap-3 w-full max-w-[360px]">
+                  {/* Mobile-safe sizing: fits 320px and landscape without overflow. Desktop unchanged. */}
+                  <div className="flex justify-between gap-2 sm:gap-3 w-full max-w-[300px] sm:max-w-[360px]">
                     {Array.from({ length: 6 }).map((_, idx) => (
                       <input
                         key={idx}
@@ -1549,8 +1557,9 @@ export default function OtpForm(props) {
                         onChange={(e) => handleDigitChange(idx, e.target.value)}
                         onKeyDown={(e) => handleDigitKeyDown(idx, e)}
                         onPaste={handlePaste}
-                        className="flex-1 max-w-[48px] aspect-square rounded-[12px] text-center text-[20px] font-semibold outline-none"
+                        className="shrink-0 w-[38px] h-[38px] sm:w-[44px] sm:h-[44px] md:w-[48px] md:h-[48px] rounded-[12px] text-center text-[18px] sm:text-[20px] font-semibold outline-none"
                         style={{
+                          touchAction: "manipulation",
                           backgroundColor: "#f9fafb",
                           border: digits[idx] ? "2px solid rgba(30,64,175,0.9)" : `1.5px solid ${GREY_BORDER}`,
                           color: NAVY,
@@ -1561,7 +1570,9 @@ export default function OtpForm(props) {
                   </div>
                 </div>
 
-                <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between ${RESEND_ROW_GAP} w-full max-w-[360px] mx-auto`}>
+                <div
+                  className={`flex flex-col sm:flex-row sm:items-center sm:justify-between ${RESEND_ROW_GAP} w-full max-w-[360px] mx-auto`}
+                >
                   <p className="text-[11px] text-slate-300/85 leading-snug">Didn&apos;t get a code?</p>
                   <button
                     type="button"
@@ -1569,6 +1580,7 @@ export default function OtpForm(props) {
                     disabled={!canResend}
                     className="inline-flex items-center justify-center rounded-2xl px-4 py-[9px] text-[12px] md:text-[13px] font-medium text-center whitespace-nowrap transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-[1px] hover:shadow-md"
                     style={{
+                      touchAction: "manipulation",
                       backgroundColor: "#f9fafb",
                       color: NAVY,
                       border: `1.5px solid ${GREY_BORDER}`,
@@ -1580,7 +1592,7 @@ export default function OtpForm(props) {
 
                 {err && (
                   <div
-                    className="rounded-2xl px-4 py-3 text-[12.5px] max-w-[480px]"
+                    className="rounded-2xl px-4 py-3 text-[12.5px] max-w-[480px] mx-auto"
                     style={{
                       color: "#9f1d20",
                       background: "#fff5f5",
@@ -1594,7 +1606,7 @@ export default function OtpForm(props) {
                 )}
               </div>
 
-              <div className={`max-w-[420px] ${CTA_BLOCK_MARGIN_TOP} ${CTA_BLOCK_MARGIN_BOTTOM}`}>
+              <div className={`max-w-[420px] mx-auto w-full ${CTA_BLOCK_MARGIN_TOP} ${CTA_BLOCK_MARGIN_BOTTOM}`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1604,6 +1616,7 @@ export default function OtpForm(props) {
                   disabled={!canVerify}
                   className="w-full inline-flex items-center justify-center rounded-[999px] px-8 py-[13px] md:py-[14px] text-[15px] md:text-[16px] font-semibold tracking-[0.03em] text-slate-950 transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
                   style={{
+                    touchAction: "manipulation",
                     backgroundImage: "linear-gradient(135deg,#fde68a 0%,#fbbf24 40%,#d97706 100%)",
                     boxShadow: canVerify ? "0 14px 32px rgba(0,0,0,0.7)" : "0 10px 24px rgba(0,0,0,0.45)",
                   }}
@@ -1614,7 +1627,8 @@ export default function OtpForm(props) {
                 <button
                   type="button"
                   onClick={handleClose}
-                  className="mt-3 w-full inline-flex items-center justify-center rounded-[999px] border border-[#fbbf24] bg-transparent px-8 py-[11px] text-[13px] font-semibold text-[#fbbf24] hover:bg-[#fbbf24] hover:text-slate-950 transition-all duration-150"
+                  className="mt-3 w-full inline-flex items-center justify-center rounded-[999px] border border-[#fbbf24] bg-transparent px-8 py-[11px] text-[12px] sm:text-[13px] font-semibold text-[#fbbf24] hover:bg-[#fbbf24] hover:text-slate-950 transition-all duration-150"
+                  style={{ touchAction: "manipulation" }}
                 >
                   Close
                 </button>
