@@ -1517,8 +1517,12 @@ export default function Slidingmenubar({ open, onClose }) {
         >
           <div style={{ minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <Pill tone="gold" size={headerIsMobile ? "sm" : "md"}>{tierName}</Pill>
-              <Pill tone="ink" size={headerIsMobile ? "sm" : "md"}>{filteredProducts.length}</Pill>
+              <Pill tone="gold" size={headerIsMobile ? "sm" : "md"}>
+                {tierName}
+              </Pill>
+              <Pill tone="ink" size={headerIsMobile ? "sm" : "md"}>
+                {filteredProducts.length}
+              </Pill>
               {flyAudienceSlug ? <Pill size={headerIsMobile ? "sm" : "md"}>{titleizeSlug(flyAudienceSlug)}</Pill> : null}
               {flyCategorySlug ? <Pill size={headerIsMobile ? "sm" : "md"}>{titleizeSlug(flyCategorySlug)}</Pill> : null}
             </div>
@@ -1629,7 +1633,9 @@ export default function Slidingmenubar({ open, onClose }) {
                       >
                         Suggestions
                       </div>
-                      <Pill tone="ink" size="sm">{suggestions.length}</Pill>
+                      <Pill tone="ink" size="sm">
+                        {suggestions.length}
+                      </Pill>
                     </div>
 
                     <div style={{ maxHeight: 340, overflow: "auto", padding: 8 }}>
@@ -2145,10 +2151,10 @@ export default function Slidingmenubar({ open, onClose }) {
                       border: "1px solid rgba(0,0,0,0.08)",
                       background: "linear-gradient(135deg, rgba(255,255,255,0.92) 55%, rgba(247,243,231,0.92) 100%)",
                       boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
-                      padding: "10px 10px",
+                      padding: "8px 10px",
                       display: "flex",
                       flexDirection: "column",
-                      gap: 8,
+                      gap: 7,
                       minWidth: 0,
                     }}
                   >
@@ -2315,103 +2321,135 @@ export default function Slidingmenubar({ open, onClose }) {
                       minWidth: 0,
                     }}
                   >
-                    <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 10 }}>
-                      {filteredProducts.length ? (
-                        // ✅ Mobile: single-column list + 2-line clamp to show names clearly
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr",
-                            gap: 8,
-                            alignItems: "start",
-                          }}
-                        >
-                          {filteredProducts.map((p) => (
-                            <Link
-                              key={p.slug}
-                              href={`/product/${p.slug}`}
-                              onClick={handleClose}
-                              title={p.name}
+                    {/* ✅ Mobile list: add breathing space above + below (inside scroll), keep everything else intact */}
+                    <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 0 }}>
+                      <div
+                        style={{
+                          paddingTop: 12,
+                          paddingLeft: 10,
+                          paddingRight: 10,
+                          paddingBottom: `calc(18px + env(safe-area-inset-bottom, 0px))`,
+                          minHeight: 0,
+                        }}
+                      >
+                        {/* empty space above the list */}
+                        <div aria-hidden="true" style={{ height: 10 }} />
+
+                        {filteredProducts.length ? (
+                          <>
+                            {/* ✅ Mobile: single-column list + 2-line clamp to show names clearly */}
+                            <div
                               style={{
-                                textDecoration: "none",
-                                borderRadius: 14,
-                                padding: "10px 10px",
-                                border: "1px solid rgba(0,0,0,0.06)",
-                                background: "rgba(255,255,255,0.82)",
-                                boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
-                                color: "#0c2340",
-                                display: "flex",
-                                alignItems: "flex-start",
-                                justifyContent: "space-between",
-                                gap: 10,
-                                minHeight: 50,
-                                minWidth: 0,
+                                display: "grid",
+                                gridTemplateColumns: "1fr",
+                                gap: 8,
+                                alignItems: "start",
                               }}
                             >
-                              <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-                                <div
+                              {filteredProducts.map((p) => (
+                                <Link
+                                  key={p.slug}
+                                  href={`/product/${p.slug}`}
+                                  onClick={handleClose}
+                                  title={p.name}
                                   style={{
-                                    fontWeight: 900,
-                                    letterSpacing: ".04em",
-                                    textTransform: "uppercase",
-                                    fontSize: 11,
-                                    lineHeight: 1.25,
-                                    display: "-webkit-box",
-                                    WebkitBoxOrient: "vertical",
-                                    WebkitLineClamp: 2,
-                                    overflow: "hidden",
+                                    textDecoration: "none",
+                                    borderRadius: 14,
+                                    padding: "10px 10px",
+                                    border: "1px solid rgba(0,0,0,0.06)",
+                                    background: "rgba(255,255,255,0.82)",
+                                    boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
+                                    color: "#0c2340",
+                                    display: "flex",
+                                    alignItems: "flex-start",
+                                    justifyContent: "space-between",
+                                    gap: 10,
+                                    minHeight: 50,
+                                    minWidth: 0,
+                                    contentVisibility: "auto",
+                                    containIntrinsicSize: "60px",
                                   }}
                                 >
-                                  {p.name}
-                                </div>
-                                <div
-                                  style={{
-                                    fontSize: 9,
-                                    fontWeight: 800,
-                                    color: "rgba(12,35,64,0.60)",
-                                    whiteSpace: "nowrap",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                  }}
-                                >
-                                  {p.slug}
-                                </div>
-                              </div>
+                                  <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                                    <div
+                                      style={{
+                                        fontWeight: 900,
+                                        letterSpacing: ".04em",
+                                        textTransform: "uppercase",
+                                        fontSize: 11,
+                                        lineHeight: 1.25,
+                                        display: "-webkit-box",
+                                        WebkitBoxOrient: "vertical",
+                                        WebkitLineClamp: 2,
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {p.name}
+                                    </div>
+                                    <div
+                                      style={{
+                                        fontSize: 9,
+                                        fontWeight: 800,
+                                        color: "rgba(12,35,64,0.60)",
+                                        whiteSpace: "nowrap",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                      }}
+                                    >
+                                      {p.slug}
+                                    </div>
+                                  </div>
 
-                              <span
-                                style={{
-                                  flexShrink: 0,
-                                  padding: "5px 8px",
-                                  borderRadius: 999,
-                                  border: "1px solid rgba(12,35,64,0.14)",
-                                  background: "rgba(12,35,64,0.06)",
-                                  fontWeight: 900,
-                                  fontSize: 9,
-                                  letterSpacing: ".10em",
-                                  textTransform: "uppercase",
-                                  marginTop: 1,
-                                }}
-                              >
-                                Open
-                              </span>
-                            </Link>
-                          ))}
-                        </div>
-                      ) : (
-                        <div style={{ padding: 12 }}>
-                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
-                            No pieces match these filters right now.
+                                  <span
+                                    style={{
+                                      flexShrink: 0,
+                                      padding: "5px 8px",
+                                      borderRadius: 999,
+                                      border: "1px solid rgba(12,35,64,0.14)",
+                                      background: "rgba(12,35,64,0.06)",
+                                      fontWeight: 900,
+                                      fontSize: 9,
+                                      letterSpacing: ".10em",
+                                      textTransform: "uppercase",
+                                      marginTop: 1,
+                                    }}
+                                  >
+                                    Open
+                                  </span>
+                                </Link>
+                              ))}
+                            </div>
+
+                            {/* empty space below the list */}
+                            <div aria-hidden="true" style={{ height: 14 }} />
+
+                            {/* tip moved inside scroll (keeps UI but frees persistent vertical space) */}
+                            <div
+                              style={{
+                                color: "rgba(12,35,64,0.55)",
+                                fontWeight: 800,
+                                fontSize: 11,
+                                letterSpacing: ".02em",
+                              }}
+                            >
+                              Tip: Use the switcher above to jump sections instantly.
+                            </div>
+
+                            {/* extra breathing room at the very bottom */}
+                            <div aria-hidden="true" style={{ height: 10 }} />
+                          </>
+                        ) : (
+                          <div style={{ padding: 12 }}>
+                            <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
+                              No pieces match these filters right now.
+                            </div>
+                            <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
+                              Try a different audience/category, clear refine, or clear search.
+                            </div>
                           </div>
-                          <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
-                            Try a different audience/category, clear refine, or clear search.
-                          </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
-
-                  <div style={{ marginTop: 2, color: "rgba(12,35,64,0.55)", fontWeight: 800, fontSize: 11, letterSpacing: ".02em" }}>
-                    Tip: Use the switcher above to jump sections instantly.
                   </div>
                 </div>
               ) : null}

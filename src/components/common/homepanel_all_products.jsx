@@ -1,3 +1,4 @@
+//src/components/common/homepanel_all_products.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -85,7 +86,9 @@ async function fetchCategoriesClient() {
 
 async function fetchAudienceCategoriesClient() {
   const payload =
-    (await fetchFromStrapi("/audience-categories?populate=*&pagination[pageSize]=500")) ||
+    (await fetchFromStrapi(
+      "/audience-categories?populate=*&pagination[pageSize]=500"
+    )) ||
     (await fetchFromStrapi("/audience-categories?populate=*")) ||
     (await fetchFromStrapi("/audience-categories"));
 
@@ -129,19 +132,40 @@ function pickSlugs(obj) {
         .filter(Boolean)
         .map(normSlug);
     }
-    const one = d?.attributes?.slug || d?.slug || d?.attributes?.name || d?.name || null;
+    const one =
+      d?.attributes?.slug || d?.slug || d?.attributes?.name || d?.name || null;
     return one ? [normSlug(one)] : [];
   }
 
-  const one = obj?.attributes?.slug || obj?.slug || obj?.attributes?.name || obj?.name || null;
+  const one =
+    obj?.attributes?.slug || obj?.slug || obj?.attributes?.name || obj?.name || null;
   return one ? [normSlug(one)] : [];
 }
 
 const FIELD_ALIASES = {
-  audience_categories: ["audience_categories", "audience_category", "audiences", "audience", "audienceCategories"],
-  categories: ["categories", "category", "product_categories", "product_category", "categories_slugs", "category_slugs"],
+  audience_categories: [
+    "audience_categories",
+    "audience_category",
+    "audiences",
+    "audience",
+    "audienceCategories",
+  ],
+  categories: [
+    "categories",
+    "category",
+    "product_categories",
+    "product_category",
+    "categories_slugs",
+    "category_slugs",
+  ],
   sub_categories: ["sub_categories", "sub_category", "subCategories", "subcategory", "subCategory"],
-  super_categories: ["super_categories", "super_category", "superCategories", "supercategory", "superCategory"],
+  super_categories: [
+    "super_categories",
+    "super_category",
+    "superCategories",
+    "supercategory",
+    "superCategory",
+  ],
   age_groups: ["age_groups", "age_group", "ageGroups", "ageGroup"],
   gender_groups: ["gender_groups", "gender_group", "genderGroups", "genderGroup"],
 };
@@ -590,7 +614,7 @@ function toLiteProduct(p) {
   };
 }
 
-/* ===================== MAIN COMPONENT (NO extra portal/overlay) ===================== */
+/* ===================== MAIN COMPONENT ===================== */
 export default function HomePanelAllProducts({ onAfterNavigate }) {
   const [active, setActive] = useState(null); // { key, label }
   const [subOptions, setSubOptions] = useState([]);
@@ -603,6 +627,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
   const optionsCacheRef = useRef(new Map());
   const [isMobile, setIsMobile] = useState(false);
+
+  // Mobile UX: show audience list first, then a dedicated "options" pane
+  const [mobilePane, setMobilePane] = useState("audience"); // "audience" | "options"
+  const rightPaneRef = useRef(null);
 
   // detect mobile
   useEffect(() => {
@@ -796,14 +824,40 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, ageGroups, categoriesList, audienceCategories, barItems]);
 
+  // keep mobile pane consistent when switching breakpoint
+  useEffect(() => {
+    if (!isMobile) {
+      setMobilePane("audience");
+      return;
+    }
+    if (active?.key) setMobilePane("options");
+    else setMobilePane("audience");
+  }, [isMobile, active?.key]);
+
   const toggleAudience = (item) => {
     if (!item?.key) return;
-    if (active?.key === item.key) return; // keep open; no “collapse” here (avoids jumpy UX)
+
+    if (active?.key === item.key) {
+      if (isMobile) setMobilePane("options");
+      return;
+    }
+
     setActive(item);
     try {
       window.localStorage.setItem(LS_LAST_KEY, String(item.key));
     } catch {}
-    setSubOptions(computeOptions(item.key));
+
+    const next = computeOptions(item.key);
+    setSubOptions(next);
+
+    if (isMobile) {
+      setMobilePane("options");
+      window.requestAnimationFrame(() => {
+        try {
+          rightPaneRef.current?.scrollTo?.({ top: 0, behavior: "smooth" });
+        } catch {}
+      });
+    }
   };
 
   const activeHref = active?.key ? `/collections/${normSlug(active.key)}` : "/collections";
@@ -811,8 +865,19 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   return (
     <>
       <style>{`
+        :root{
+          --hpFly-radius: 18px;
+          --hpFly-shadow: 0 18px 44px rgba(6,10,24,.12);
+          --hpFly-maxw: 1240px;           /* bigger flyout */
+          --hpFly-leftw: 280px;           /* more room for labels */
+          --hpFly-minh: 480px;            /* bigger canvas */
+          --hpFly-maxh: min(80vh, 820px); /* no overflow */
+        }
+
         .hpFly-root{
           width: 100%;
+          max-width: var(--hpFly-maxw);
+          margin: 0 auto;
           display: flex;
           flex-direction: column;
           gap: 10px;
@@ -826,7 +891,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           gap: 10px;
           padding: 12px 12px 10px;
           border: 1px solid rgba(231,227,218,.9);
-          border-radius: 18px;
+          border-radius: var(--hpFly-radius);
           background: linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.84) 100%);
           box-shadow: 0 16px 38px rgba(6,10,24,.10);
         }
@@ -875,17 +940,18 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
         .hpFly-wrap{
           border: 1px solid rgba(231,227,218,.92);
-          border-radius: 18px;
+          border-radius: var(--hpFly-radius);
           background: linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.86) 100%);
-          box-shadow: 0 18px 44px rgba(6,10,24,.12);
+          box-shadow: var(--hpFly-shadow);
           overflow: hidden;
         }
 
+        /* Bigger, more usable canvas */
         .hpFly-grid{
           display: grid;
-          grid-template-columns: 230px 1fr;
-          min-height: 380px;
-          max-height: 62vh;
+          grid-template-columns: var(--hpFly-leftw) 1fr;
+          min-height: var(--hpFly-minh);
+          max-height: var(--hpFly-maxh);
         }
 
         .hpFly-left{
@@ -895,15 +961,19 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           overflow: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
+          touch-action: pan-y;
         }
         .hpFly-left::-webkit-scrollbar{ width: 0px; height: 0px; }
 
         .hpFly-right{
-          padding: 10px;
-          overflow: auto;
+          padding: 12px;
+          overflow-y: auto;
+          overflow-x: hidden; /* prevent edge cutting / horizontal scroll */
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
+          touch-action: pan-y;
           background: rgba(255,255,255,.80);
+          min-width: 0; /* critical for long labels */
         }
         .hpFly-right::-webkit-scrollbar{ width: 0px; height: 0px; }
 
@@ -935,6 +1005,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           color: ${NEUTRAL_TEXT};
           transition: background .16s ease, border-color .16s ease, transform .10s ease, color .16s ease;
           min-height: var(--tap-target-min, 44px);
+          touch-action: manipulation;
         }
         .hpFly-audBtn[data-active="true"]{
           border-color: rgba(189,160,77,.95);
@@ -963,30 +1034,139 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           padding: 16px 12px;
           border: 1px dashed rgba(231,227,218,.95);
           border-radius: 16px;
-          background: rgba(255,254,249,.92);
+          background: rgba(255,255,255,.92);
+        }
+
+        /* --- Force horizontal readable names; allow 2-line wrap; prevent vertical letter stacking --- */
+        .hpFly-right *{
+          writing-mode: horizontal-tb !important;
+          text-orientation: mixed !important;
+          white-space: normal !important;
+          word-break: keep-all !important;
+          overflow-wrap: anywhere !important;
+          hyphens: auto;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        /* ---------- Mobile: 2-step navigation (Audience -> Options) ---------- */
+        .hpFly-mobileShell{
+          display: flex;
+          flex-direction: column;
+          min-height: var(--hpFly-minh);
+          max-height: min(86vh, 860px);
+        }
+
+        .hpFly-mobileHeader{
+          position: sticky;
+          top: 0;
+          z-index: 5;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 10px 10px;
+          border-bottom: 1px solid rgba(231,227,218,.88);
+          background: linear-gradient(180deg, rgba(255,255,255,.96) 0%, rgba(255,255,255,.90) 100%);
+          backdrop-filter: blur(10px);
+        }
+
+        .hpFly-backBtn{
+          flex: 0 0 auto;
+          border: 1px solid rgba(231,227,218,.92);
+          background: rgba(250,249,246,.96);
+          border-radius: 999px;
+          padding: 9px 12px;
+          font-family: ${SYS_FONT};
+          font-weight: 900;
+          font-size: 11px;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          color: ${HOVER_TEXT};
+          cursor: pointer;
+          touch-action: manipulation;
+          white-space: nowrap;
+        }
+
+        .hpFly-mobileTitle{
+          min-width: 0;
+          flex: 1 1 auto;
+          text-align: center;
+          font-family: ${LUX_FONT};
+          font-weight: 900;
+          letter-spacing: .08em;
+          text-transform: uppercase;
+          font-size: .96rem;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .hpFly-chipRow{
+          display: flex;
+          gap: 8px;
+          overflow-x: auto;
+          overflow-y: hidden;
+          padding: 10px 10px 8px;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: none;
+        }
+        .hpFly-chipRow::-webkit-scrollbar{ width: 0px; height: 0px; }
+
+        .hpFly-chip{
+          flex: 0 0 auto;
+          border: 1px solid rgba(231,227,218,.92);
+          background: ${PEARL_WHITE};
+          border-radius: 999px;
+          padding: 10px 12px;
+          font-family: ${SYS_FONT};
+          font-weight: 900;
+          font-size: 11px;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          color: ${NEUTRAL_TEXT};
+          cursor: pointer;
+          max-width: 74vw;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          touch-action: manipulation;
+        }
+        .hpFly-chip[data-active="true"]{
+          border-color: rgba(189,160,77,.95);
+          color: ${ACCENT};
+          background: linear-gradient(180deg, rgba(255,255,255,.96) 0%, rgba(248,246,238,.96) 100%);
+          box-shadow: 0 10px 22px rgba(201,176,101,.14);
+        }
+
+        .hpFly-mobileBody{
+          flex: 1 1 auto;
+          overflow: auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+          padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+          overflow-x: hidden;
+          touch-action: pan-y;
+        }
+
+        .hpFly-mobileHint{
+          font-family: ${SYS_FONT};
+          font-weight: 900;
+          font-size: 10px;
+          letter-spacing: .18em;
+          text-transform: uppercase;
+          opacity: .72;
+          padding: 10px 12px 6px;
         }
 
         @media (max-width: 768px){
-          .hpFly-grid{
-            grid-template-columns: 1fr;
-            min-height: 320px;
-            max-height: 62vh;
-          }
-          .hpFly-left{
-            border-right: none;
-            border-bottom: 1px solid rgba(231,227,218,.88);
-            padding: 10px;
-          }
-          .hpFly-stack{
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-          }
-          .hpFly-audBtn{
-            text-align: center;
-            padding: 9px 8px;
-            font-size: .96rem;
-          }
+          .hpFly-grid{ display: none; }
+          .hpFly-top{ border-radius: 16px; }
+          .hpFly-link{ padding: 9px 10px; font-size: 10.5px; }
+        }
+
+        @media (min-width: 769px){
+          .hpFly-mobileShell{ display: none; }
         }
 
         @media (prefers-reduced-motion: reduce){
@@ -1013,11 +1193,130 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
             if (!a) return;
             const href = String(a.getAttribute("href") || "");
             if (!href.startsWith("/")) return;
-            // let Next/Link handle navigation first, then close panel/flyout safely
             window.setTimeout(() => onAfterNavigate?.(), 0);
           }}
         >
-          <div className="hpFly-grid">
+          {/* =============== MOBILE: 2-step navigation (prevents hidden options) =============== */}
+          <div className="hpFly-mobileShell" aria-label="Collections flyout (mobile)">
+            {mobilePane === "audience" ? (
+              <>
+                <div className="hpFly-mobileHeader">
+                  <div className="hpFly-mobileTitle">Choose Collection</div>
+                  <button
+                    type="button"
+                    className="hpFly-backBtn"
+                    onClick={() => onAfterNavigate?.()}
+                    aria-label="Close"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="hpFly-mobileBody">
+                  <div className="hpFly-mobileHint">Tap a collection to view categories</div>
+
+                  <div
+                    className="hpFly-stack"
+                    style={{
+                      padding: 10,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                      gap: 8,
+                    }}
+                  >
+                    {(barItems || []).map((item) => {
+                      const isActive = active?.key === item.key;
+                      return (
+                        <button
+                          key={item.key}
+                          type="button"
+                          className="hpFly-audBtn"
+                          data-active={isActive ? "true" : "false"}
+                          aria-pressed={isActive}
+                          onClick={() => toggleAudience(item)}
+                          style={{ textAlign: "center" }}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {fetchError ? (
+                    <div style={{ padding: 10 }}>
+                      <div className="hpFly-empty">We’ll be back shortly.</div>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="hpFly-mobileHeader">
+                  <button
+                    type="button"
+                    className="hpFly-backBtn"
+                    onClick={() => setMobilePane("audience")}
+                    aria-label="Back to collections"
+                  >
+                    ← Back
+                  </button>
+
+                  <div className="hpFly-mobileTitle">{active?.label || "Options"}</div>
+
+                  <button
+                    type="button"
+                    className="hpFly-backBtn"
+                    onClick={() => onAfterNavigate?.()}
+                    aria-label="Close"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="hpFly-chipRow" aria-label="Quick collection switch">
+                  {(barItems || []).map((item) => {
+                    const isActive = active?.key === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        className="hpFly-chip"
+                        data-active={isActive ? "true" : "false"}
+                        aria-pressed={isActive}
+                        onClick={() => toggleAudience(item)}
+                        title={item.label}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="hpFly-mobileBody hpFly-right" ref={rightPaneRef}>
+                  <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 2px 10px" }}>
+                    <Link className="hpFly-link" href={activeHref} prefetch>
+                      See all ↗
+                    </Link>
+                  </div>
+
+                  {fetchError ? (
+                    <div className="hpFly-empty">We’ll be back shortly.</div>
+                  ) : active?.key ? (
+                    subOptions?.length ? (
+                      <MenuFlyout options={subOptions} />
+                    ) : (
+                      <div className="hpFly-empty">No options found.</div>
+                    )
+                  ) : (
+                    <div className="hpFly-empty">Select a collection to view categories.</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* =============== DESKTOP/TABLET: split layout preserved =============== */}
+          <div className="hpFly-grid" aria-label="Collections flyout (desktop)">
             <div className="hpFly-left">
               <div className="hpFly-kicker">Choose</div>
 

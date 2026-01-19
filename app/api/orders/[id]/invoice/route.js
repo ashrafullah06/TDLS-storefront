@@ -1,4 +1,3 @@
-// PATH: app/api/orders/[id]/invoice/route.js
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -30,13 +29,29 @@ function money(n, currency = "BDT") {
   return `${sym}${x.toFixed(2)}`;
 }
 
+function encodeRFC5987ValueChars(str) {
+  // filename* needs RFC5987 encoding
+  return encodeURIComponent(str)
+    .replace(/['()]/g, escape)
+    .replace(/\*/g, "%2A")
+    .replace(/%(7C|60|5E)/g, (m) => m.toLowerCase());
+}
+
 function textResponse(body, status = 200, filename = "invoice.txt") {
+  const safeName = String(filename || "invoice.txt").replace(/[\r\n"]/g, "");
+  const encoded = encodeRFC5987ValueChars(safeName);
+
   return new NextResponse(body, {
     status,
     headers: {
       "content-type": "text/plain; charset=utf-8",
-      "content-disposition": `attachment; filename="${filename}"`,
-      "cache-control": "no-store",
+      // strong download behavior across browsers (incl iOS/Safari)
+      "content-disposition": `attachment; filename="${safeName}"; filename*=UTF-8''${encoded}`,
+      "x-content-type-options": "nosniff",
+      // hard no-cache for receipts (prevents stale or blocked downloads)
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      pragma: "no-cache",
+      expires: "0",
     },
   });
 }
@@ -98,6 +113,60 @@ const firstNonEmpty = (...vals) => {
   return "";
 };
 
+function normEmail(v) {
+  return String(v || "")
+    .trim()
+    .toLowerCase();
+}
+
+function normPhone(v) {
+  // digits-only compare (Bangladesh formats, +880, etc.)
+  return String(v || "").replace(/\D/g, "");
+}
+
+function looksHighEntropyId(id) {
+  const s = String(id || "");
+  // cuid/uuid are typically long; this blocks short numeric ids
+  if (s.length >= 20) return true;
+  if (s.includes("-") && s.length >= 18) return true;
+  return false;
+}
+
+function safeDateParts(d) {
+  if (!d || !(d instanceof Date) || Number.isNaN(d.getTime())) {
+    return { dateStr: "—", timeStr: "—" };
+  }
+
+  const dateOpts = { year: "numeric", month: "short", day: "numeric" };
+  const timeOpts = { hour: "2-digit", minute: "2-digit" };
+
+  // Try en-BD; fall back safely (Intl on some servers can be limited)
+  let dateStr = "—";
+  let timeStr = "—";
+
+  try {
+    dateStr = d.toLocaleDateString("en-BD", dateOpts);
+  } catch {
+    try {
+      dateStr = d.toLocaleDateString("en-GB", dateOpts);
+    } catch {
+      dateStr = d.toISOString().slice(0, 10);
+    }
+  }
+
+  try {
+    timeStr = d.toLocaleTimeString("en-BD", timeOpts);
+  } catch {
+    try {
+      timeStr = d.toLocaleTimeString("en-GB", timeOpts);
+    } catch {
+      timeStr = d.toISOString().slice(11, 16);
+    }
+  }
+
+  return { dateStr, timeStr };
+}
+
 /**
  * Derive size & color from variant.optionValues when metadata is empty
  * (same idea as in /api/cart/items).
@@ -131,11 +200,154 @@ function deriveSizeColorFromVariantOptions(variant) {
   return out;
 }
 
+/* ---------- Guest access helpers ---------- */
+
+function getReqAccessKey(req) {
+  try {
+    const u = new URL(req.url);
+    const q = u.searchParams;
+
+    const qp =
+      q.get("key") ||
+      q.get("k") ||
+      q.get("token") ||
+      q.get("t") ||
+      q.get("receipt") ||
+      q.get("receipt_key") ||
+      q.get("receiptKey") ||
+      q.get("access_key") ||
+      q.get("accessKey") ||
+      "";
+
+    const hp =
+      req.headers.get("x-order-receipt-key") ||
+      req.headers.get("x-receipt-key") ||
+      req.headers.get("x-guest-order-key") ||
+      req.headers.get("x-access-key") ||
+      "";
+
+    const out = String(qp || hp || "").trim();
+    return out || "";
+  } catch {
+    return "";
+  }
+}
+
+function collectOrderAccessKeys(order) {
+  const keys = [];
+
+  // common scalar fields (safe to probe; if absent => undefined)
+  const candidates = [
+    order?.receiptKey,
+    order?.receipt_key,
+    order?.invoiceToken,
+    order?.invoice_token,
+    order?.receiptToken,
+    order?.receipt_token,
+    order?.publicToken,
+    order?.public_token,
+    order?.accessToken,
+    order?.access_token,
+    order?.checkoutToken,
+    order?.checkout_token,
+    order?.guestToken,
+    order?.guest_token,
+    order?.guestKey,
+    order?.guest_key,
+  ];
+
+  candidates.forEach((v) => {
+    const s = String(v || "").trim();
+    if (s) keys.push(s);
+  });
+
+  // metadata keys (very common for guest flows)
+  const md = order?.metadata && typeof order.metadata === "object" ? order.metadata : null;
+  if (md) {
+    const mdCandidates = [
+      md.receiptKey,
+      md.receipt_key,
+      md.invoiceToken,
+      md.invoice_token,
+      md.receiptToken,
+      md.receipt_token,
+      md.publicToken,
+      md.public_token,
+      md.accessToken,
+      md.access_token,
+      md.checkoutToken,
+      md.checkout_token,
+      md.guestToken,
+      md.guest_token,
+      md.guestKey,
+      md.guest_key,
+    ];
+    mdCandidates.forEach((v) => {
+      const s = String(v || "").trim();
+      if (s) keys.push(s);
+    });
+  }
+
+  // de-dup
+  return Array.from(new Set(keys));
+}
+
+function guestIdentityMatch(req, order) {
+  const u = new URL(req.url);
+  const q = u.searchParams;
+
+  const qOrderNumber = String(q.get("orderNumber") || q.get("order_number") || "").trim();
+  const qEmail = normEmail(q.get("email") || "");
+  const qPhone = normPhone(q.get("phone") || q.get("mobile") || "");
+
+  const orderNumber = String(order?.orderNumber || "").trim();
+  const id = String(order?.id || "").trim();
+
+  const orderNumberMatch =
+    (qOrderNumber && orderNumber && qOrderNumber === orderNumber) ||
+    (qOrderNumber && id && qOrderNumber === id);
+
+  if (!orderNumberMatch) return false;
+
+  const ship = order?.shippingAddress || null;
+  const bill = order?.billingAddress || null;
+
+  const storedEmail = normEmail(
+    firstNonEmpty(
+      order?.user?.email,
+      order?.email,
+      order?.customerEmail,
+      ship?.email,
+      bill?.email
+    )
+  );
+
+  const storedPhone = normPhone(
+    firstNonEmpty(
+      order?.user?.phone,
+      order?.phone,
+      order?.customerPhone,
+      ship?.phone,
+      bill?.phone
+    )
+  );
+
+  const emailOk = storedEmail && qEmail && storedEmail === qEmail;
+  const phoneOk = storedPhone && qPhone && storedPhone === qPhone;
+
+  // If we have something to compare, require a match
+  if (storedEmail || storedPhone) return Boolean(emailOk || phoneOk);
+
+  // Final conservative fallback: allow only if id is high entropy and order is truly guest-like
+  const isGuestLike = !order?.userId && !order?.user;
+  return isGuestLike && looksHighEntropyId(id);
+}
+
 /* ---------- GET /api/orders/[id]/invoice ---------- */
 
 export async function GET(req, { params }) {
   try {
-    const session = await auth();
+    const session = await auth().catch(() => null);
     const userId = session?.user?.id || null;
     const roles = session?.user?.roles || session?.roles || [];
 
@@ -174,25 +386,29 @@ export async function GET(req, { params }) {
 
     if (!order) return textResponse("NOT_FOUND", 404, "error.txt");
 
-    // only owner or admin can download
-    if (!userId || (order.userId !== userId && !isAdmin(roles))) {
+    // owner/admin can always download
+    const authedOk =
+      userId && (order.userId === userId || isAdmin(roles));
+
+    // guest download path: key/token OR identity match (orderNumber + email/phone)
+    let guestOk = false;
+    if (!authedOk) {
+      const reqKey = getReqAccessKey(req);
+      if (reqKey) {
+        const orderKeys = collectOrderAccessKeys(order);
+        guestOk = orderKeys.includes(reqKey);
+      }
+      if (!guestOk) {
+        guestOk = guestIdentityMatch(req, order);
+      }
+    }
+
+    if (!authedOk && !guestOk) {
       return textResponse("FORBIDDEN", 403, "error.txt");
     }
 
     const createdAt = order.createdAt ? new Date(order.createdAt) : null;
-    const dateStr = createdAt
-      ? createdAt.toLocaleDateString("en-BD", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        })
-      : "—";
-    const timeStr = createdAt
-      ? createdAt.toLocaleTimeString("en-BD", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : "—";
+    const { dateStr, timeStr } = safeDateParts(createdAt);
 
     const subtotal = toNum(order.subtotal, 0);
     const shippingTotal = toNum(order.shippingTotal, 0);
@@ -210,6 +426,33 @@ export async function GET(req, { params }) {
     const mode = computePaymentMode(order);
     const currency = order.currency || "BDT";
 
+    const ship = order.shippingAddress || null;
+    const bill = order.billingAddress || null;
+
+    const customerName = firstNonEmpty(
+      order.user?.name,
+      ship?.name,
+      bill?.name,
+      order.customerName,
+      order.name
+    ) || "—";
+
+    const customerEmail = firstNonEmpty(
+      order.user?.email,
+      order.email,
+      order.customerEmail,
+      ship?.email,
+      bill?.email
+    ) || "—";
+
+    const customerPhone = firstNonEmpty(
+      order.user?.phone,
+      order.phone,
+      order.customerPhone,
+      ship?.phone,
+      bill?.phone
+    ) || "—";
+
     const lines = [];
 
     lines.push("THE DNA LAB CLOTHING");
@@ -221,12 +464,11 @@ export async function GET(req, { params }) {
     lines.push(`Status  : ${order.status || "—"}`);
     lines.push(`Currency: ${currency}`);
     lines.push("");
-    lines.push(`Customer: ${order.user?.name || "—"}`);
-    lines.push(`Email   : ${order.user?.email || "—"}`);
-    lines.push(`Phone   : ${order.user?.phone || "—"}`);
+    lines.push(`Customer: ${customerName}`);
+    lines.push(`Email   : ${customerEmail}`);
+    lines.push(`Phone   : ${customerPhone}`);
     lines.push("");
 
-    const ship = order.shippingAddress;
     if (ship) {
       lines.push("Shipping Address:");
       if (ship.name) lines.push(`  ${ship.name}`);
@@ -241,7 +483,6 @@ export async function GET(req, { params }) {
       lines.push("");
     }
 
-    const bill = order.billingAddress;
     if (bill) {
       lines.push("Billing Address:");
       if (bill.name) lines.push(`  ${bill.name}`);
@@ -292,16 +533,17 @@ export async function GET(req, { params }) {
       );
 
       // base / original unit price used to compute discount
-      const baseUnit = toNum(
-        it.baseAmount ??
-          it.compareAtPrice ??
-          it.originalUnitPrice ??
-          md.baseAmount ??
-          md.compareAt ??
-          md.compareAtPrice ??
-          md.originalUnitPrice,
-        0
-      ) || unitPrice; // fallback to unitPrice if nothing stored
+      const baseUnit =
+        toNum(
+          it.baseAmount ??
+            it.compareAtPrice ??
+            it.originalUnitPrice ??
+            md.baseAmount ??
+            md.compareAt ??
+            md.compareAtPrice ??
+            md.originalUnitPrice,
+          0
+        ) || unitPrice; // fallback to unitPrice if nothing stored
 
       const lineTotal = toNum(
         it.total ?? it.subtotal ?? qty * unitPrice,
@@ -497,9 +739,10 @@ export async function GET(req, { params }) {
     lines.push("============================================================");
 
     const body = lines.join("\n");
-    const filename = `invoice-${
-      order.orderNumber || order.id
-    }.txt`.replace(/[^A-Za-z0-9_.-]/g, "_");
+    const filename = `invoice-${order.orderNumber || order.id}.txt`.replace(
+      /[^A-Za-z0-9_.-]/g,
+      "_"
+    );
 
     return textResponse(body, 200, filename);
   } catch (err) {
