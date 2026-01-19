@@ -377,7 +377,9 @@ function prettyKind(kind) {
 /* ───────── server component ───────── */
 
 export default async function ReceiptPage({ params }) {
-  const id = String(params?.id || "");
+  // ✅ FIX: Next.js dynamic params must be awaited before property access
+  const p = await params;
+  const id = String(p?.id || "");
   if (!id) return notFound();
 
   const order = await prisma.order.findUnique({
@@ -454,10 +456,10 @@ export default async function ReceiptPage({ params }) {
         <CartClearOnReceipt />
 
         <div className="mx-auto w-full max-w-[720px] px-5 print:max-w-[740px] print:px-4">
-          <div id="tdlc-receipt-print" className="receipt">
+          <div id="tdls-receipt-print" className="receipt">
             <div className="rx-head">
               <div className="brand">
-                <div className="logo">TDLC</div>
+                <div className="logo">TDLS</div>
                 <div className="tag">Premium Order Receipt</div>
                 <div className="tag tiny">
                   Products: {productsCount} • Items: {itemsCount}
@@ -725,7 +727,7 @@ export default async function ReceiptPage({ params }) {
             <div className="foot">
               <div className="note">
                 <b>Delivery &amp; Security:</b> Inspect packaging upon delivery. Never share OTPs or sensitive
-                information. Official communications come only from verified TDLC channels.
+                information. Official communications come only from verified TDLS channels.
               </div>
 
               <div className="actions no-print">
@@ -807,8 +809,8 @@ export default async function ReceiptPage({ params }) {
             #receipt-main{padding-top:0 !important;padding-bottom:0 !important;background:#fff !important}
             .no-print{display:none !important}
             body *{visibility:hidden !important}
-            #tdlc-receipt-print, #tdlc-receipt-print *{visibility:visible !important}
-            #tdlc-receipt-print{position:absolute;left:0;top:0;width:100%}
+            #tdls-receipt-print, #tdls-receipt-print *{visibility:visible !important}
+            #tdls-receipt-print{position:absolute;left:0;top:0;width:100%}
             .receipt{box-shadow:none !important;border:0 !important}
             hr.cut, hr.dash{opacity:.9}
             html, body{background:#fff !important}

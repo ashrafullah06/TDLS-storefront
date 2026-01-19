@@ -154,17 +154,38 @@ async function fetchFromStrapi(path) {
 
     if (!res.ok) return null;
     const raw = await res.json().catch(() => null);
-    return raw?.ok ? raw.data : raw;
+
+    // keep original intent, but tolerate proxy shapes
+    if (raw?.ok && raw.data != null) return raw.data;
+    return raw;
   } catch {
     return null;
   }
+}
+
+// ✅ SAFETY: unwrap Strapi lists no matter how the proxy wraps the payload
+function unwrapStrapiList(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+
+  // common Strapi shape: { data: [...] }
+  if (Array.isArray(payload?.data)) return payload.data;
+
+  // sometimes proxy returns { data: { data: [...] } }
+  if (payload?.data && Array.isArray(payload.data?.data)) return payload.data.data;
+
+  // sometimes proxy returns { ok:true, data:[...] } already handled, but keep safe:
+  if (payload?.ok && Array.isArray(payload?.data)) return payload.data;
+  if (payload?.ok && payload?.data && Array.isArray(payload.data?.data)) return payload.data.data;
+
+  return [];
 }
 
 async function fetchAudienceCategoriesWithProducts() {
   const payload = await fetchFromStrapi(
     "/audience-categories?pagination[pageSize]=500&populate[products][populate]=*&populate[tiers][populate]=*&populate[brand_tiers][populate]=*&populate[collection_tiers][populate]=*&populate[events_products_collections][populate]=*&populate[product_collections][populate]=*"
   );
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const rows = unwrapStrapiList(payload);
   return rows.map(normalizeEntity).filter(Boolean);
 }
 
@@ -172,7 +193,7 @@ async function fetchProductsForIndex() {
   const payload = await fetchFromStrapi(
     "/products?pagination[pageSize]=1000&populate=*&populate[tiers]=*&populate[brand_tiers]=*&populate[collection_tiers]=*&populate[categories]=*&populate[audience_categories]=*&populate[sub_categories]=*&populate[gender_groups]=*&populate[age_groups]=*&populate[events_products_collections]=*&populate[product_collections]=*"
   );
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const rows = unwrapStrapiList(payload);
   return rows.map(normalizeEntity).filter(Boolean);
 }
 
@@ -701,7 +722,20 @@ if (typeof window !== "undefined") {
 
 /* ------------------------------- Component -------------------------------- */
 
-function CompactRowButton({ active, title, subLeft, badge, onClick, onNavigateHref, onNavigate, isDesktop, dense }) {
+function CompactRowButton({
+  active,
+  title,
+  subLeft,
+  badge,
+  onClick,
+  onNavigateHref,
+  onNavigate,
+  isDesktop,
+  dense,
+  onMouseEnter,
+  onMouseLeave,
+  onFocus,
+}) {
   const baseStyle = {
     display: "flex",
     alignItems: "center",
@@ -724,7 +758,15 @@ function CompactRowButton({ active, title, subLeft, badge, onClick, onNavigateHr
 
   if (isDesktop && onNavigateHref) {
     return (
-      <Link href={onNavigateHref} prefetch onClick={onNavigate} style={baseStyle}>
+      <Link
+        href={onNavigateHref}
+        prefetch
+        onClick={onNavigate}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        onFocus={onFocus}
+        style={baseStyle}
+      >
         <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
           <div
             style={{
@@ -783,6 +825,9 @@ function CompactRowButton({ active, title, subLeft, badge, onClick, onNavigateHr
     <button
       type="button"
       onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onFocus={onFocus}
       style={baseStyle}
       aria-pressed={active}
     >
@@ -919,6 +964,39 @@ export default function Slidingmenubar({ open, onClose }) {
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
   const clickShieldHeight = panelTop + TOP_CLICK_SHIELD_EXTRA;
+
+  // ✅ Desktop hover selection: not hypersensitive (small delay)
+  const hoverTimersRef = useRef({ aud: null, cat: null });
+  const scheduleHoverSelect = useCallback((kind, slug) => {
+    if (typeof window === "undefined") return;
+    const ms = 110; // subtle delay prevents hypersensitivity
+    const key = kind === "aud" ? "aud" : "cat";
+
+    if (hoverTimersRef.current[key]) window.clearTimeout(hoverTimersRef.current[key]);
+    hoverTimersRef.current[key] = window.setTimeout(() => {
+      if (kind === "aud") {
+        setHoverAudienceSlug(slug);
+        setHoverCategorySlug(""); // ✅ safety: reset category when audience changes
+      } else {
+        setHoverCategorySlug(slug);
+      }
+    }, ms);
+  }, []);
+
+  const cancelHoverSelect = useCallback((kind) => {
+    if (typeof window === "undefined") return;
+    const key = kind === "aud" ? "aud" : "cat";
+    if (hoverTimersRef.current[key]) window.clearTimeout(hoverTimersRef.current[key]);
+    hoverTimersRef.current[key] = null;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window === "undefined") return;
+      if (hoverTimersRef.current.aud) window.clearTimeout(hoverTimersRef.current.aud);
+      if (hoverTimersRef.current.cat) window.clearTimeout(hoverTimersRef.current.cat);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1156,8 +1234,14 @@ export default function Slidingmenubar({ open, onClose }) {
     return audiencesForTier.filter((a) => a.name.toLowerCase().includes(qq) || a.slug.includes(qq));
   }, [q, audiencesForTier]);
 
-  const mobileSelectedAudienceSlug = hoverAudienceSlug || filteredAudiences?.[0]?.slug || "";
-  const flyAudienceSlug = isDesktop ? (hoverAudienceSlug || filteredAudiences?.[0]?.slug || "") : mobileSelectedAudienceSlug;
+  // ✅ SAFETY: ensure selected audience slug always exists
+  const flyAudienceSlug = useMemo(() => {
+    const list = (filteredAudiences && filteredAudiences.length ? filteredAudiences : audiencesForTier) || [];
+    const first = list?.[0]?.slug || "";
+    const candidate = hoverAudienceSlug || first;
+    if (!candidate) return "";
+    return list.some((x) => x.slug === candidate) ? candidate : first;
+  }, [hoverAudienceSlug, filteredAudiences, audiencesForTier]);
 
   const flyAudience = useMemo(() => {
     if (!flyAudienceSlug) return null;
@@ -1175,8 +1259,14 @@ export default function Slidingmenubar({ open, onClose }) {
     return categories.filter((c) => c.name.toLowerCase().includes(qq) || c.slug.includes(qq));
   }, [q, categories]);
 
-  const mobileSelectedCategorySlug = hoverCategorySlug || filteredCategories?.[0]?.slug || "";
-  const flyCategorySlug = isDesktop ? (hoverCategorySlug || filteredCategories?.[0]?.slug || "") : mobileSelectedCategorySlug;
+  // ✅ SAFETY: ensure selected category slug always exists
+  const flyCategorySlug = useMemo(() => {
+    const list = (filteredCategories && filteredCategories.length ? filteredCategories : categories) || [];
+    const first = list?.[0]?.slug || "";
+    const candidate = hoverCategorySlug || first;
+    if (!candidate) return "";
+    return list.some((x) => x.slug === candidate) ? candidate : first;
+  }, [hoverCategorySlug, filteredCategories, categories]);
 
   const filters = useMemo(
     () => ({ subCategory: selectedSubCategory, genderGroup: selectedGenderGroup, ageGroup: selectedAgeGroup }),
@@ -1699,6 +1789,10 @@ export default function Slidingmenubar({ open, onClose }) {
                       onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: a.slug })}
                       onNavigate={handleClose}
                       onClick={() => {}}
+                      // ✅ Desktop: select on hover/focus (no click navigation change)
+                      onMouseEnter={() => scheduleHoverSelect("aud", a.slug)}
+                      onMouseLeave={() => cancelHoverSelect("aud")}
+                      onFocus={() => scheduleHoverSelect("aud", a.slug)}
                     />
                   ))}
                 </ScrollBody>
@@ -1724,6 +1818,10 @@ export default function Slidingmenubar({ open, onClose }) {
                       onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug })}
                       onNavigate={handleClose}
                       onClick={() => {}}
+                      // ✅ Desktop: select on hover/focus (no click navigation change)
+                      onMouseEnter={() => scheduleHoverSelect("cat", c.slug)}
+                      onMouseLeave={() => cancelHoverSelect("cat")}
+                      onFocus={() => scheduleHoverSelect("cat", c.slug)}
                     />
                   ))}
                 </ScrollBody>
@@ -2219,10 +2317,11 @@ export default function Slidingmenubar({ open, onClose }) {
                   >
                     <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 10 }}>
                       {filteredProducts.length ? (
+                        // ✅ Mobile: single-column list + 2-line clamp to show names clearly
                         <div
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "repeat(auto-fill, minmax(min(160px, 100%), 1fr))",
+                            gridTemplateColumns: "1fr",
                             gap: 8,
                             alignItems: "start",
                           }}
@@ -2242,24 +2341,25 @@ export default function Slidingmenubar({ open, onClose }) {
                                 boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
                                 color: "#0c2340",
                                 display: "flex",
-                                alignItems: "center",
+                                alignItems: "flex-start",
                                 justifyContent: "space-between",
                                 gap: 10,
                                 minHeight: 50,
                                 minWidth: 0,
                               }}
                             >
-                              <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                              <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
                                 <div
                                   style={{
                                     fontWeight: 900,
-                                    letterSpacing: ".06em",
+                                    letterSpacing: ".04em",
                                     textTransform: "uppercase",
-                                    whiteSpace: "nowrap",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
                                     fontSize: 11,
-                                    lineHeight: 1.15,
+                                    lineHeight: 1.25,
+                                    display: "-webkit-box",
+                                    WebkitBoxOrient: "vertical",
+                                    WebkitLineClamp: 2,
+                                    overflow: "hidden",
                                   }}
                                 >
                                   {p.name}
@@ -2289,6 +2389,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                   fontSize: 9,
                                   letterSpacing: ".10em",
                                   textTransform: "uppercase",
+                                  marginTop: 1,
                                 }}
                               >
                                 Open

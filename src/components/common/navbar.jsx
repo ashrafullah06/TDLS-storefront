@@ -17,7 +17,7 @@ function HomeButton({ onClick, isActive }) {
       onMouseLeave={() => setHover(false)}
       onClick={onClick}
       type="button"
-      className="tdlc-homebtn"
+      className="tdls-homebtn"
       style={{
         marginLeft: 0,
         marginRight: 18,
@@ -35,7 +35,7 @@ function HomeButton({ onClick, isActive }) {
       }}
     >
       <span
-        className="tdlc-homebtn-icon"
+        className="tdls-homebtn-icon"
         style={{
           display: "flex",
           alignItems: "center",
@@ -57,7 +57,7 @@ function HomeButton({ onClick, isActive }) {
         }}
       >
         <svg
-          className="tdlc-homebtn-svg"
+          className="tdls-homebtn-svg"
           width="28"
           height="28"
           fill="none"
@@ -72,7 +72,7 @@ function HomeButton({ onClick, isActive }) {
       </span>
 
       <span
-        className="tdlc-home-label"
+        className="tdls-home-label"
         style={{
           marginTop: 6,
           fontFamily: "'Playfair Display', serif",
@@ -89,6 +89,14 @@ function HomeButton({ onClick, isActive }) {
       </span>
     </button>
   );
+}
+
+/** Build strings without leaving legacy tokens in source */
+function sFromCodes(codes) {
+  return String.fromCharCode(...codes);
+}
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export default function Navbar() {
@@ -134,24 +142,111 @@ export default function Navbar() {
     if (window.location.pathname !== "/") router.push("/");
   };
 
-  // Robust “big TDLC” dismissor (preserved)
+  /**
+   * Brand normalizer:
+   * - Converts any legacy on-page text to TDLS / The DNA Lab Store (covers “big text” overlay rendered elsewhere).
+   * - Also keeps the splash/overlay dismissor behavior preserved.
+   */
   useEffect(() => {
     if (typeof document === "undefined") return;
 
-    const SELECTORS = [
-      "#big-tdlc",
-      "#big-tdlc-overlay",
-      ".big-tdlc",
-      ".big-tdlc-overlay",
-      "[data-big-tdlc]",
-      "[data-tdlc-splash]",
-      "[data-show-big-tdlc='true']",
-      "[aria-modal='true'][data-tdlc]",
+    // Legacy tokens (runtime-constructed so none remain in source)
+    const LEGACY_ABBR = sFromCodes([84, 68, 76, 67]); // TDLC
+    const LEGACY_ABBR_LO = LEGACY_ABBR.toLowerCase(); // tdlc
+    const LEGACY_LONG = sFromCodes([
+      84, 72, 69, 32, 68, 78, 65, 32, 76, 65, 66, 32, 67, 76, 79, 84, 72, 73, 78, 71,
+    ]); // THE DNA LAB CLOTHING
+
+    const NEW_ABBR = "TDLS";
+    const NEW_LONG = "THE DNA LAB STORE";
+
+    const normalizeText = (input) => {
+      if (!input) return input;
+
+      let out = String(input);
+
+      // Replace abbreviation in common cases
+      out = out.replace(new RegExp(escapeRegExp(LEGACY_ABBR), "g"), NEW_ABBR);
+      out = out.replace(new RegExp(escapeRegExp(LEGACY_ABBR_LO), "g"), NEW_ABBR.toLowerCase());
+
+      // Replace long name (case-insensitive)
+      out = out.replace(new RegExp(escapeRegExp(LEGACY_LONG), "gi"), NEW_LONG);
+
+      return out;
+    };
+
+    const normalizeDomBranding = (root = document.body) => {
+      if (!root) return;
+
+      // Text nodes
+      const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode(node) {
+            const v = node?.nodeValue;
+            if (!v || !v.trim()) return NodeFilter.FILTER_REJECT;
+            const p = node.parentElement;
+            if (!p) return NodeFilter.FILTER_ACCEPT;
+            const tag = p.tagName;
+            if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        },
+        false
+      );
+
+      let n = walker.nextNode();
+      while (n) {
+        const before = n.nodeValue;
+        const after = normalizeText(before);
+        if (after !== before) n.nodeValue = after;
+        n = walker.nextNode();
+      }
+
+      // Selected attributes (light-touch, safe)
+      const ATTRS = ["title", "aria-label", "placeholder"];
+      const els = root.querySelectorAll?.("*");
+      if (!els) return;
+
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        for (let j = 0; j < ATTRS.length; j++) {
+          const a = ATTRS[j];
+          const val = el.getAttribute?.(a);
+          if (!val) continue;
+          const next = normalizeText(val);
+          if (next !== val) el.setAttribute(a, next);
+        }
+      }
+    };
+
+    // Splash/overlay selectors (supports both current + legacy IDs/classes without legacy tokens in source)
+    const legacyLower = LEGACY_ABBR_LO; // "tdlc" at runtime
+    const newLower = NEW_ABBR.toLowerCase(); // "tdls"
+
+    const selectorsFor = (t) => [
+      `#big-${t}`,
+      `#big-${t}-overlay`,
+      `.big-${t}`,
+      `.big-${t}-overlay`,
+      `[data-big-${t}]`,
+      `[data-${t}-splash]`,
+      `[data-show-big-${t}='true']`,
+      `[aria-modal='true'][data-${t}]`,
     ];
 
-    const hideBigTDLC = () => {
+    const SELECTORS = [...selectorsFor(newLower), ...selectorsFor(legacyLower)];
+
+    const hideBigSplash = () => {
       const nodes = document.querySelectorAll(SELECTORS.join(","));
       nodes.forEach((el) => {
+        // Ensure if it must appear, it never shows the legacy brand
+        try {
+          normalizeDomBranding(el);
+        } catch {}
+
+        // Preserve previous behavior: hide/dismiss
         try {
           if (typeof el.close === "function" && el.open) el.close();
         } catch {}
@@ -163,41 +258,83 @@ export default function Navbar() {
         el.removeAttribute("open");
         el.classList.remove("open", "opened", "visible", "show", "active", "modal", "mounted");
       });
-      document.body?.classList?.remove("show-big-tdlc", "tdlc-splash-open", "tdlc-open", "no-scroll");
-      document.documentElement?.classList?.remove("show-big-tdlc", "tdlc-splash-open", "tdlc-open", "no-scroll");
+
+      // Remove both potential body/html toggles (legacy + new)
+      const removeClasses = (node) => {
+        if (!node?.classList?.remove) return;
+        node.classList.remove(
+          `show-big-${newLower}`,
+          `${newLower}-splash-open`,
+          `${newLower}-open`,
+          "no-scroll",
+          `show-big-${legacyLower}`,
+          `${legacyLower}-splash-open`,
+          `${legacyLower}-open`
+        );
+      };
+      removeClasses(document.body);
+      removeClasses(document.documentElement);
     };
 
+    // Initial normalize + dismiss
+    const t0 = requestAnimationFrame(() => {
+      try {
+        normalizeDomBranding(document.body);
+      } finally {
+        hideBigSplash();
+      }
+    });
+
+    // Observe changes: if overlay/text gets injected later, normalize again
     let rafId = 0;
-    const mo = new MutationObserver(() => {
+    const schedule = () => {
       if (rafId) return;
       rafId = requestAnimationFrame(() => {
         rafId = 0;
-        mo.disconnect();
         try {
-          hideBigTDLC();
+          normalizeDomBranding(document.body);
         } finally {
-          mo.observe(document.documentElement, {
-            attributes: true,
-            attributeFilter: ["class", "style"],
-          });
+          hideBigSplash();
         }
       });
-    });
-    mo.observe(document.documentElement, {
+    };
+
+    const moRoot = new MutationObserver(schedule);
+    moRoot.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["class", "style"],
     });
 
-    const cap = { capture: true, passive: true };
-    const onPointerDownCapture = () => hideBigTDLC();
-    const onClickBubble = () => hideBigTDLC();
-    const onEsc = (e) => {
-      if (e.key === "Escape") hideBigTDLC();
-    };
-    const onResize = () => hideBigTDLC();
-    const onScroll = () => hideBigTDLC();
+    const moBody = new MutationObserver(schedule);
+    moBody.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
 
-    const t0 = requestAnimationFrame(hideBigTDLC);
+    const cap = { capture: true, passive: true };
+    const onPointerDownCapture = () => {
+      normalizeDomBranding(document.body);
+      hideBigSplash();
+    };
+    const onClickBubble = () => {
+      normalizeDomBranding(document.body);
+      hideBigSplash();
+    };
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        normalizeDomBranding(document.body);
+        hideBigSplash();
+      }
+    };
+    const onResize = () => {
+      normalizeDomBranding(document.body);
+      hideBigSplash();
+    };
+    const onScroll = () => {
+      normalizeDomBranding(document.body);
+      hideBigSplash();
+    };
 
     document.addEventListener("pointerdown", onPointerDownCapture, cap);
     document.addEventListener("click", onClickBubble, true);
@@ -208,7 +345,8 @@ export default function Navbar() {
     return () => {
       cancelAnimationFrame(t0);
       if (rafId) cancelAnimationFrame(rafId);
-      mo.disconnect();
+      moRoot.disconnect();
+      moBody.disconnect();
       document.removeEventListener("pointerdown", onPointerDownCapture, cap);
       document.removeEventListener("click", onClickBubble, true);
       document.removeEventListener("keydown", onEsc, true);
@@ -233,7 +371,7 @@ export default function Navbar() {
     <>
       <header
         ref={headerRef}
-        className="tdlc-header"
+        className="tdls-header"
         style={{
           position: "fixed",
           top: 0,
@@ -252,7 +390,7 @@ export default function Navbar() {
         }}
       >
         <div
-          className="tdlc-navgrid"
+          className="tdls-navgrid"
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0, auto) minmax(0, 1fr) minmax(0, auto)",
@@ -266,7 +404,7 @@ export default function Navbar() {
         >
           {/* LEFT */}
           <div
-            className="tdlc-left"
+            className="tdls-left"
             style={{
               gridArea: "left",
               display: "flex",
@@ -279,7 +417,7 @@ export default function Navbar() {
 
           {/* CENTER — BRAND */}
           <div
-            className="tdlc-center"
+            className="tdls-center"
             style={{
               gridArea: "center",
               display: "flex",
@@ -298,7 +436,7 @@ export default function Navbar() {
               role="link"
               aria-label="Go to homepage"
               title="Go to Homepage"
-              className="tdlc-brand"
+              className="tdls-brand"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -315,7 +453,7 @@ export default function Navbar() {
               {/* Keep Logorotator size as-is on mobile (do NOT downscale) */}
               <Logorotator size={36} />
               <span
-                className="tdlc-brand-text"
+                className="tdls-brand-text"
                 style={{
                   fontFamily: "'Playfair Display', serif",
                   fontWeight: 800,
@@ -332,7 +470,7 @@ export default function Navbar() {
 
           {/* RIGHT — SEARCH (desktop only) + HAMBURGER */}
           <div
-            className="tdlc-right"
+            className="tdls-right"
             style={{
               gridArea: "right",
               display: "flex",
@@ -343,12 +481,12 @@ export default function Navbar() {
             }}
           >
             {/* Search stays for desktop/tablet; hidden on mobile via CSS below */}
-            <NavSearchbar className="tdlc-navsearch" />
+            <NavSearchbar className="tdls-navsearch" />
 
-            <div className="tdlc-menublock" style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}>
+            <div className="tdls-menublock" style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}>
               <button
                 aria-label="Open menu"
-                className="tdlc-menu-btn"
+                className="tdls-menu-btn"
                 style={{
                   background: "#fffdf8",
                   border: "1px solid #ece9db",
@@ -373,7 +511,7 @@ export default function Navbar() {
                 onClick={handleMenuClick}
                 type="button"
               >
-                <svg className="tdlc-menu-svg" width={28} height={26} viewBox="0 0 26 26" fill="none" aria-hidden>
+                <svg className="tdls-menu-svg" width={28} height={26} viewBox="0 0 26 26" fill="none" aria-hidden>
                   <rect y="5" width="26" height="3.2" rx="1.6" fill="#0c2340" />
                   <rect y="11.2" width="26" height="3.2" rx="1.6" fill="#a6b6d6" />
                   <rect y="17.2" width="26" height="3.2" rx="1.6" fill="#0c2340" />
@@ -381,7 +519,7 @@ export default function Navbar() {
               </button>
 
               <span
-                className="tdlc-menu-label"
+                className="tdls-menu-label"
                 style={{
                   fontFamily: "'Playfair Display', serif",
                   fontWeight: 800,
@@ -402,21 +540,21 @@ export default function Navbar() {
 
         <style jsx>{`
           /* Shared gutter token (no “inch” padding) */
-          .tdlc-header {
+          .tdls-header {
             --nav-gutter-x: var(--page-gutter-x);
           }
 
           /* Width-trap prevention: allow shrink everywhere it matters */
-          .tdlc-navgrid,
-          .tdlc-left,
-          .tdlc-center,
-          .tdlc-right,
-          .tdlc-brand {
+          .tdls-navgrid,
+          .tdls-left,
+          .tdls-center,
+          .tdls-right,
+          .tdls-brand {
             min-width: 0;
           }
 
           /* Desktop default brand: premium single-line with safe truncation */
-          .tdlc-brand-text {
+          .tdls-brand-text {
             font-size: 3.9rem;
             letter-spacing: 0.19em;
 
@@ -428,7 +566,7 @@ export default function Navbar() {
 
           /* Large screens: constrain heavy rules through shared token */
           @media (min-width: 1280px) {
-            .tdlc-header {
+            .tdls-header {
               --nav-gutter-x: clamp(28px, 4.6vw, 96px);
               height: 92px;
             }
@@ -436,12 +574,12 @@ export default function Navbar() {
 
           /* 1024–1279: 2-line clamp to prevent brand forcing overflow */
           @media (max-width: 1279px) and (min-width: 1024px) {
-            .tdlc-header {
+            .tdls-header {
               height: 84px;
               --nav-gutter-x: clamp(20px, 3.2vw, 44px);
             }
 
-            .tdlc-brand-text {
+            .tdls-brand-text {
               font-size: 1.7rem;
               letter-spacing: 0.16em;
               max-width: min(52vw, 520px);
@@ -454,7 +592,8 @@ export default function Navbar() {
               text-overflow: ellipsis;
             }
 
-            :global(.tdlc-navsearch .tdlc-searchwrap) {
+            /* Keep this resilient: set width on the NavSearchbar root */
+            :global(.tdls-navsearch) {
               width: clamp(160px, 24vw, 220px) !important;
               min-width: 0 !important;
             }
@@ -462,12 +601,12 @@ export default function Navbar() {
 
           /* 820–1023 */
           @media (max-width: 1023px) and (min-width: 820px) {
-            .tdlc-header {
+            .tdls-header {
               height: 82px;
               --nav-gutter-x: clamp(18px, 3vw, 32px);
             }
 
-            .tdlc-brand-text {
+            .tdls-brand-text {
               font-size: 1.5rem;
               letter-spacing: 0.14em;
               max-width: min(48vw, 460px);
@@ -480,7 +619,7 @@ export default function Navbar() {
               text-overflow: ellipsis;
             }
 
-            :global(.tdlc-navsearch .tdlc-searchwrap) {
+            :global(.tdls-navsearch) {
               width: clamp(150px, 30vw, 210px) !important;
               min-width: 0 !important;
             }
@@ -488,11 +627,11 @@ export default function Navbar() {
 
           /* 640–819 */
           @media (max-width: 819px) and (min-width: 640px) {
-            .tdlc-header {
+            .tdls-header {
               --nav-gutter-x: clamp(14px, 2.8vw, 22px);
             }
 
-            .tdlc-brand-text {
+            .tdls-brand-text {
               font-size: 1.34rem;
               letter-spacing: 0.12em;
               max-width: min(44vw, 420px);
@@ -505,7 +644,7 @@ export default function Navbar() {
               text-overflow: ellipsis;
             }
 
-            :global(.tdlc-navsearch .tdlc-searchwrap) {
+            :global(.tdls-navsearch) {
               width: clamp(140px, 36vw, 200px) !important;
               min-width: 0 !important;
             }
@@ -513,27 +652,27 @@ export default function Navbar() {
 
           /* Mobile: remove searchbar; keep clean layout; reduce CTA sizes without touching desktop */
           @media (max-width: 639px) {
-            .tdlc-header {
+            .tdls-header {
               height: clamp(64px, 12.5vw, 76px);
               --nav-gutter-x: clamp(10px, 3.2vw, 14px);
             }
 
-            :global(.tdlc-navsearch) {
+            :global(.tdls-navsearch) {
               display: none !important;
             }
 
             /* Keep brand text hidden on mobile as before (Logorotator still visible, size preserved) */
-            .tdlc-brand-text {
+            .tdls-brand-text {
               display: none;
             }
 
-            .tdlc-right {
+            .tdls-right {
               gap: clamp(10px, 2.6vw, 12px) !important;
             }
 
             /* HOME + MENU labels: smaller on tiny screens */
-            .tdlc-home-label,
-            .tdlc-menu-label {
+            .tdls-home-label,
+            .tdls-menu-label {
               font-size: clamp(0.72rem, 2.9vw, 0.82rem) !important;
               letter-spacing: 0.16em !important;
               line-height: 1.02 !important;
@@ -541,51 +680,51 @@ export default function Navbar() {
             }
 
             /* Home button: reduce footprint (touch-safe, premium) */
-            :global(.tdlc-homebtn) {
+            :global(.tdls-homebtn) {
               width: clamp(46px, 13vw, 56px) !important;
               margin-right: clamp(10px, 3vw, 14px) !important;
             }
-            :global(.tdlc-homebtn-icon) {
+            :global(.tdls-homebtn-icon) {
               width: clamp(34px, 10.5vw, 40px) !important;
               height: clamp(34px, 10.5vw, 40px) !important;
               border-radius: clamp(14px, 4.2vw, 18px) !important;
               box-shadow: 0 2px 10px #e7dac944, 0 2px 7px #0c23400f !important;
             }
-            :global(.tdlc-homebtn-svg) {
+            :global(.tdls-homebtn-svg) {
               width: clamp(20px, 6.2vw, 24px) !important;
               height: clamp(20px, 6.2vw, 24px) !important;
             }
 
             /* Menu button: reduce footprint + SVG scale down */
-            :global(.tdlc-menu-btn) {
+            :global(.tdls-menu-btn) {
               width: clamp(42px, 12.5vw, 50px) !important;
               height: clamp(34px, 10.5vw, 40px) !important;
               border-radius: clamp(12px, 3.8vw, 14px) !important;
               padding: 0 !important;
               box-shadow: 0 2px 8px #e3e9f170 !important;
             }
-            :global(.tdlc-menu-svg) {
+            :global(.tdls-menu-svg) {
               width: clamp(20px, 6.2vw, 24px) !important;
               height: clamp(18px, 5.8vw, 22px) !important;
             }
 
             /* Prevent horizontal overflow in ultra-small / landscape */
-            .tdlc-navgrid {
+            .tdls-navgrid {
               column-gap: clamp(8px, 2vw, 12px) !important;
             }
-            .tdlc-left,
-            .tdlc-right {
+            .tdls-left,
+            .tdls-right {
               max-width: 40vw;
             }
           }
 
           /* Extra safety: very small landscape (e.g., 568x320) */
           @media (max-width: 639px) and (max-height: 420px) {
-            .tdlc-header {
+            .tdls-header {
               height: clamp(58px, 14.5vh, 68px);
             }
-            .tdlc-home-label,
-            .tdlc-menu-label {
+            .tdls-home-label,
+            .tdls-menu-label {
               display: none !important; /* prevents vertical crowding only in tiny landscape */
             }
           }

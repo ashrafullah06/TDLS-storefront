@@ -544,9 +544,27 @@ const deriveUnitMetrics = (p) => {
 };
 
 /* ---------------- component ---------------- */
-export default function AllProductsClient({ products }) {
+export default function AllProductsClient({ products, siteBaseUrl }) {
   const router = useRouter();
   const cart = use_cart?.();
+
+  /* ---------------- Hydration-safe base URL ----------------
+     - Server render: uses siteBaseUrl if provided, otherwise empty string
+     - Client first render: still empty (matches SSR), then useEffect sets origin
+     This avoids SSR/CSR drift if origin is referenced downstream. */
+  const [clientOrigin, setClientOrigin] = useState("");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const o = (window.location?.origin || "").replace(/\/+$/, "");
+      setClientOrigin(o);
+    } catch {}
+  }, []);
+
+  const resolvedBaseUrl = useMemo(() => {
+    const s = (siteBaseUrl || clientOrigin || "").toString().replace(/\/+$/, "");
+    return s;
+  }, [siteBaseUrl, clientOrigin]);
 
   // responsive flags (client-only) to keep desktop unchanged
   const [isMobile, setIsMobile] = useState(false);
@@ -828,7 +846,11 @@ export default function AllProductsClient({ products }) {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  const scrollToTop = useCallback(() => window.scrollTo({ top: 0, behavior: "smooth" }), []);
+
+  const scrollToTop = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   const toggleSet = (setObj, value, setState) => {
     const next = new Set(setObj);
@@ -1428,11 +1450,10 @@ export default function AllProductsClient({ products }) {
         contain: "layout paint", // ✅ reduces reflow “jerk” on open/close
       },
 
-      // smoother + no snap: longer curve + stable maxHeight + hidden overflow
       inlinePanel: {
         maxHeight: filtersVisible
           ? mobile
-            ? "calc(100dvh - var(--nav-h, 88px) - 170px)" // ✅ slightly more compact vertically
+            ? "calc(100dvh - var(--nav-h, 88px) - 170px)"
             : "calc(100dvh - var(--nav-h, 88px) - 190px)"
           : 0,
         opacity: filtersVisible ? 1 : 0,
@@ -1448,7 +1469,7 @@ export default function AllProductsClient({ products }) {
         alignItems: "center",
         justifyContent: "space-between",
         gap: 10,
-        padding: mobile ? "9px 10px" : "12px 12px", // ✅ less vertical space
+        padding: mobile ? "9px 10px" : "12px 12px",
         borderBottom: "1px solid rgba(15,33,71,.10)",
         background: "linear-gradient(135deg,#ffffff,#f6f7fb)",
         maxWidth: "100%",
@@ -1465,16 +1486,15 @@ export default function AllProductsClient({ products }) {
       },
 
       inlineBody: {
-        padding: mobile ? "8px 8px" : "10px 10px", // ✅ less vertical space
+        padding: mobile ? "8px 8px" : "10px 10px",
         overflowY: "auto",
-        overflowX: "hidden", // ✅ stop any body-wide horizontal overflow
+        overflowX: "hidden",
         WebkitOverflowScrolling: "touch",
         maxHeight: mobile
-          ? "calc(100dvh - var(--nav-h, 88px) - 170px - 50px - 58px)" // header+footer smaller
+          ? "calc(100dvh - var(--nav-h, 88px) - 170px - 50px - 58px)"
           : "calc(100dvh - var(--nav-h, 88px) - 190px - 56px - 66px)",
       },
 
-      // Premium horizontal filter rail — safe on any width (incl. landscape)
       rail: {
         width: "100%",
         maxWidth: "100%",
@@ -1495,15 +1515,15 @@ export default function AllProductsClient({ products }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 8,
-        flexWrap: "wrap", // ✅ allows safe wrap inside group on ultra-small widths
+        flexWrap: "wrap",
         rowGap: 6,
-        padding: mobile ? "6px 8px" : "8px 12px", // ✅ tighter
+        padding: mobile ? "6px 8px" : "8px 12px",
         borderRadius: 14,
         border: "1px solid rgba(15,33,71,.12)",
         background: "linear-gradient(135deg,#ffffff,#f9fafb)",
         boxShadow: "0 10px 22px rgba(15,33,71,.07)",
-        minWidth: mobile ? 180 : 240, // ✅ smaller baseline
-        maxWidth: mobile ? "min(84vw, 320px)" : "min(78vw, 420px)", // ✅ never forces page overflow
+        minWidth: mobile ? 180 : 240,
+        maxWidth: mobile ? "min(84vw, 320px)" : "min(78vw, 420px)",
         boxSizing: "border-box",
       },
       railGroupWide: {
@@ -1520,7 +1540,7 @@ export default function AllProductsClient({ products }) {
         flex: "0 0 auto",
       },
       railControl: {
-        height: mobile ? 30 : 34, // ✅ tighter
+        height: mobile ? 30 : 34,
         borderRadius: 12,
         border: "1px solid #cfd6e9",
         padding: "0 10px",
@@ -1529,7 +1549,7 @@ export default function AllProductsClient({ products }) {
         color: "#0f2147",
         fontFeatureSettings: "'tnum' 1",
         fontSize: mobile ? 12 : 13,
-        minWidth: 0, // ✅ critical for flex overflow safety
+        minWidth: 0,
         flex: "1 1 140px",
         maxWidth: "100%",
         boxSizing: "border-box",
@@ -1544,12 +1564,12 @@ export default function AllProductsClient({ products }) {
       railChipsBlock: {
         width: "100%",
         maxWidth: "100%",
-        marginTop: mobile ? 8 : 10, // ✅ slightly tighter
+        marginTop: mobile ? 8 : 10,
         borderRadius: 16,
         border: "1px solid rgba(15,33,71,.10)",
         background: "linear-gradient(180deg,#ffffff,#f6f7fb)",
         boxShadow: "0 14px 30px rgba(15,33,71,.08)",
-        padding: mobile ? "8px 8px" : "10px 10px", // ✅ tighter
+        padding: mobile ? "8px 8px" : "10px 10px",
         overflow: "hidden",
       },
       railChipsTitleRow: {
@@ -1582,7 +1602,7 @@ export default function AllProductsClient({ products }) {
       inlineFooter: {
         position: "sticky",
         bottom: 0,
-        padding: mobile ? "8px 8px" : "10px 10px", // ✅ tighter
+        padding: mobile ? "8px 8px" : "10px 10px",
         borderTop: "1px solid rgba(15,33,71,.10)",
         background: "linear-gradient(135deg,#ffffff,#f6f7fb)",
         display: "flex",
@@ -1798,6 +1818,7 @@ export default function AllProductsClient({ products }) {
   }, [facets.priceMin, facets.priceMax]);
 
   const copyShareLink = () => {
+    if (typeof window === "undefined") return;
     try {
       navigator.clipboard.writeText(window.location.href);
     } catch {}
@@ -2117,7 +2138,8 @@ export default function AllProductsClient({ products }) {
               </button>
               <div style={{ minWidth: 0 }}>
                 <h1 style={S.title}>All Products</h1>
-                <div style={S.subtitle}>CURATED BY THE DNA LAB CLOTHING</div>
+                {/* TDLS branding only (no full form) */}
+                <div style={S.subtitle}>CURATED BY TDLS</div>
               </div>
             </div>
           </div>
@@ -2433,6 +2455,7 @@ export default function AllProductsClient({ products }) {
                 <li key={p.id ?? p.slug ?? p?.attributes?.slug ?? `idx-${idx}`}>
                   <ProductCard
                     product={p}
+                    siteBaseUrl={resolvedBaseUrl}
                     onQuickView={(prod) => {
                       setQvProduct(prod || p);
                       setQvOpen(true);
@@ -2477,6 +2500,7 @@ export default function AllProductsClient({ products }) {
                   <li key={`sugg-${p.id ?? p.slug ?? p?.attributes?.slug ?? idx}`}>
                     <ProductCard
                       product={p}
+                      siteBaseUrl={resolvedBaseUrl}
                       onQuickView={(prod) => {
                         setQvProduct(prod || p);
                         setQvOpen(true);
@@ -2495,6 +2519,7 @@ export default function AllProductsClient({ products }) {
         <QuickView
           open={qvOpen}
           product={qvProduct}
+          siteBaseUrl={resolvedBaseUrl}
           onClose={() => {
             setQvOpen(false);
             setQvProduct(null);

@@ -1,3 +1,4 @@
+//my-project/src/components/homepage/homepage-client.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -835,15 +836,15 @@ function planRows(groups) {
 
 /* ========================= Main ========================= */
 export default function HomepageClient({ homepage: initialHomepage = null, error: initialError = null }) {
-  const [showBigTDLC, setShowBigTDLC] = useState(true);
+  const [showBigTDLS, setShowBigTDLS] = useState(true);
   useEffect(() => {
-    const onScroll = () => setShowBigTDLC(window.scrollY === 0);
+    const onScroll = () => setShowBigTDLS(window.scrollY === 0);
     window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  const handleHideTDLC = () => {
-    if (showBigTDLC) setShowBigTDLC(false);
+  const handleHideTDLS = () => {
+    if (showBigTDLS) setShowBigTDLS(false);
   };
 
   const [homepage, setHomepage] = useState(initialHomepage);
@@ -887,7 +888,7 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
   return (
     <div
       className="relative min-h-screen w-full bg-white"
-      onClick={handleHideTDLC}
+      onClick={handleHideTDLS}
       style={{
         /* Ensure content never hides behind bottom bar on tiny devices */
         paddingBottom: "calc(var(--bottom-bar-h, 64px) + var(--safe-bottom) + 18px)",
@@ -898,7 +899,7 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
           /* Mobile-safe hero height system (centralized) */
           --hero-h: clamp(var(--hero-min-h, 320px), 78svh, var(--hero-max-h, 980px));
 
-          --tdlc-bar-h: var(--tdlc-bar-h, 64px);
+          --tdls-bar-h: var(--tdls-bar-h, 64px);
 
           /* Desktop gap preserved; mobile overrides come from variables.css */
           --hero-section-gap: var(--stack-gap, 56px);
@@ -915,6 +916,85 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
         @media (max-height: 480px) {
           :root { --hero-h: clamp(220px, 74svh, var(--hero-max-h, 520px)); }
         }
+
+        /* ===================== Big TDLS (more lively, same logic) ===================== */
+        .tdls-bigmark-outer{
+          isolation: isolate;
+        }
+        .tdls-bigmark-outer::before{
+          content:"";
+          position:absolute;
+          inset:-24%;
+          background:
+            radial-gradient(closest-side at 28% 44%, rgba(6,16,59,.18), rgba(6,16,59,0) 62%),
+            radial-gradient(closest-side at 64% 60%, rgba(249,246,232,.22), rgba(249,246,232,0) 62%),
+            radial-gradient(closest-side at 52% 36%, rgba(230,230,230,.16), rgba(230,230,230,0) 66%);
+          filter: blur(22px);
+          opacity: .70;
+          transform: translate3d(-6%, -2%, 0) scale(1.02);
+          animation: tdlsAurora 6.8s ease-in-out infinite;
+          z-index: 0;
+          pointer-events: none;
+        }
+        .tdls-bigmark-outer::after{
+          content:"";
+          position:absolute;
+          inset:-40% -18%;
+          background: linear-gradient(
+            110deg,
+            rgba(255,255,255,0) 0%,
+            rgba(255,255,255,.24) 16%,
+            rgba(255,255,255,0) 36%,
+            rgba(255,255,255,.18) 52%,
+            rgba(255,255,255,0) 72%,
+            rgba(255,255,255,0) 100%
+          );
+          opacity: .45;
+          transform: translateX(-70%) rotate(10deg);
+          animation: tdlsSheenSweep 3.9s linear infinite;
+          mix-blend-mode: screen;
+          z-index: 1;
+          pointer-events: none;
+        }
+        .tdls-bigmark-inner{
+          position: relative;
+          z-index: 2;
+          display: inline-block;
+          will-change: transform, filter;
+          animation:
+            tdlsReveal 520ms cubic-bezier(.16,1,.3,1) 1,
+            tdlsFloat 7.2s ease-in-out infinite,
+            tdlsGlow 4.6s ease-in-out infinite;
+        }
+
+        @keyframes tdlsReveal{
+          0% { opacity: 0; transform: translate3d(0, 14px, 0) scale(.985); filter: blur(1.2px); }
+          100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0px); }
+        }
+        @keyframes tdlsFloat{
+          0%,100% { transform: translate3d(0, 0, 0) scale(1); }
+          50% { transform: translate3d(0, -10px, 0) scale(1.015); }
+        }
+        @keyframes tdlsGlow{
+          0%,100% { filter: drop-shadow(0 14px 34px rgba(249,246,232,.10)) drop-shadow(0 6px 24px rgba(6,16,59,.10)); }
+          50% { filter: drop-shadow(0 18px 42px rgba(249,246,232,.16)) drop-shadow(0 8px 30px rgba(6,16,59,.14)); }
+        }
+        @keyframes tdlsAurora{
+          0%,100% { transform: translate3d(-6%, -2%, 0) scale(1.02); }
+          50% { transform: translate3d(7%, 3%, 0) scale(1.08); }
+        }
+        @keyframes tdlsSheenSweep{
+          0% { transform: translateX(-72%) rotate(10deg); }
+          100% { transform: translateX(72%) rotate(10deg); }
+        }
+
+        @media (prefers-reduced-motion: reduce){
+          .tdls-bigmark-outer::before,
+          .tdls-bigmark-outer::after,
+          .tdls-bigmark-inner{
+            animation: none !important;
+          }
+        }
       `}</style>
 
       <Head>
@@ -922,8 +1002,9 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
         {firstHeroImage ? <link rel="preload" as="image" href={firstHeroImage} fetchPriority="high" /> : null}
       </Head>
 
-      {showBigTDLC && (
+      {showBigTDLS && (
         <div
+          className="tdls-bigmark-outer"
           style={{
             position: "fixed",
             top: "50%",
@@ -949,7 +1030,7 @@ export default function HomepageClient({ homepage: initialHomepage = null, error
             overflow: "hidden",
           }}
         >
-          TDLC
+          <div className="tdls-bigmark-inner">TDLS</div>
         </div>
       )}
 

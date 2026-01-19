@@ -1,16 +1,16 @@
 // FILE: app/api/auth/request-otp/route.js
-// PURPOSE: ultra-fast response. Do NOT await the SMS/Email/WhatsApp provider.
-// - Responds immediately after DB writes (typically < 200–600ms once DB is warm).
-// - Kicks off OTP delivery in the background (best-effort) with a hard timeout.
+// PURPOSE: electric-fast AND reliable OTP delivery.
+// - Responds only after the SMS/Email/WhatsApp provider call is CONFIRMED (accepted) within a hard timeout.
+// - If provider send FAILS or TIMES OUT -> OTP is immediately consumed/expired (never remains active).
+// - Reuse behavior remains: if an active OTP exists, we return it and do NOT re-send.
 // - Keeps existing purpose normalization + Bangladesh phone normalization.
 // - Concurrency-safe per user+purpose via pg advisory lock.
 // - Multi-user ready: each request is isolated; locks are per user+purpose only.
 //
-// IMPORTANT PERF FIXES (2026-01-04):
-// - Email user lookup uses findUnique (indexed equality) instead of ILIKE to avoid slow scans.
-// - Client "expire/cancel" action is handled with a single UPDATE (no user lookup + no rate-limit) for instant close behavior.
-// - Upstash rate-limit is guarded with a very small max-latency budget (default 150ms). If RL is slow/unavailable, we pass.
-// - Lock contention polling is capped aggressively (<= 120ms) to keep click-and-fire responses.
+// IMPORTANT PERF NOTES:
+// - We still keep RL fast-or-pass (budgeted).
+// - DB + provider call are the only critical path for "new OTP" creation.
+// - Default send timeout is capped to preserve a "blink-of-eye" UX.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -360,7 +360,7 @@ async function auditOtpEvent(event) {
 }
 
 function auditOtpEventAsync(event) {
-  // Fire-and-forget audit to keep request latency near-zero.
+  // Fire-and-forget audit to keep request latency low.
   // Never blocks the OTP response path.
   try {
     setImmediate(() => {
@@ -435,6 +435,12 @@ function withTimeout(promise, ms, label = "OTP_TIMEOUT") {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
 }
 
+function clampInt(n, lo, hi) {
+  const x = Number.parseInt(String(n), 10);
+  if (!Number.isFinite(x)) return lo;
+  return Math.max(lo, Math.min(hi, x));
+}
+
 /**
  * Guard the *rate-limit* call with a small time budget to preserve "click and fire".
  * If the RL store is slow/unavailable, we pass (best-effort).
@@ -448,7 +454,12 @@ async function rateLimitFastOrPass(args) {
   }
 }
 
-function backgroundSend({
+/**
+ * Single source of truth:
+ * - Success = provider accepted the send (no throw, no timeout, not explicit false).
+ * - Failure = timeout or throw or explicit false.
+ */
+async function sendOtpAndConfirm({
   otpId,
   channel,
   purpose,
@@ -462,71 +473,78 @@ function backgroundSend({
   ua,
   sendTimeoutMs,
 }) {
-  setImmediate(async () => {
-    try {
-      let ok = false;
+  const identifier = email || phoneDigits || phoneE164 || "";
 
-      if (channel === "EMAIL") {
-        ok = await withTimeout(
-          sendOtpEmail({ to: email, code, ttlSeconds, purpose, brand }),
-          sendTimeoutMs,
-          "EMAIL_SEND_TIMEOUT"
-        ).catch(() => false);
-      } else if (channel === "SMS") {
-        ok = await withTimeout(
-          sendOtpSms({ to: phoneDigits, code, ttlSeconds, purpose, brand }),
-          sendTimeoutMs,
-          "SMS_SEND_TIMEOUT"
-        ).catch(() => false);
-      } else if (channel === "WHATSAPP") {
-        ok = await withTimeout(
-          sendOtpWhatsApp({ to: phoneE164, code, ttlSeconds, purpose, brand }),
-          sendTimeoutMs,
-          "WHATSAPP_SEND_TIMEOUT"
-        ).catch(() => false);
-      }
+  try {
+    let res;
 
-      if (!ok) {
-        // IMPORTANT (email reliability): do NOT invalidate the OTP on delivery failure/timeout.
-        // Providers can be slow; a late email should still contain a valid code.
-        auditOtpEventAsync({
-          scope: "global",
-          event: "send_failed",
-          purpose,
-          identifier: email || phoneDigits || phoneE164 || "",
-          channel,
-          ip,
-          ua,
-          otpId,
-        });
-        return;
-      }
-
-      auditOtpEventAsync({
-        scope: "global",
-        event: "sent",
-        purpose,
-        identifier: email || phoneDigits || phoneE164 || "",
-        channel,
-        ip,
-        ua,
-        otpId,
-      });
-    } catch {
-      // IMPORTANT (email reliability): do NOT invalidate the OTP on delivery exceptions.
-      // A delayed provider response should not make a later-arriving code unusable.
-      auditOtpEventAsync({
-        scope: "global",
-        event: "send_error",
-        purpose,
-        identifier: email || phoneDigits || phoneE164 || "",
-        channel,
-        ip,
-        ua,
-        otpId,
-      });
+    if (channel === "EMAIL") {
+      res = await withTimeout(
+        sendOtpEmail({ to: email, code, ttlSeconds, purpose, brand }),
+        sendTimeoutMs,
+        "EMAIL_SEND_TIMEOUT"
+      );
+    } else if (channel === "SMS") {
+      res = await withTimeout(
+        sendOtpSms({ to: phoneDigits, code, ttlSeconds, purpose, brand }),
+        sendTimeoutMs,
+        "SMS_SEND_TIMEOUT"
+      );
+    } else if (channel === "WHATSAPP") {
+      res = await withTimeout(
+        sendOtpWhatsApp({ to: phoneE164, code, ttlSeconds, purpose, brand }),
+        sendTimeoutMs,
+        "WHATSAPP_SEND_TIMEOUT"
+      );
+    } else {
+      return { ok: false, reason: "CHANNEL_UNSUPPORTED" };
     }
-  });
+
+    // Pragmatic provider contract handling:
+    // - If the sender returns explicit false -> treat as failed.
+    // - If it returns void/undefined/object -> treat as accepted.
+    const ok = res !== false;
+
+    auditOtpEventAsync({
+      scope: "global",
+      event: ok ? "sent" : "send_failed",
+      purpose,
+      identifier,
+      channel,
+      ip,
+      ua,
+      otpId,
+    });
+
+    return { ok: !!ok, reason: ok ? null : "SEND_FAILED" };
+  } catch (e) {
+    const msg = String(e?.message || "");
+    const isTimeout = /_SEND_TIMEOUT|OTP_TIMEOUT/i.test(msg);
+
+    auditOtpEventAsync({
+      scope: "global",
+      event: isTimeout ? "send_timeout" : "send_error",
+      purpose,
+      identifier,
+      channel,
+      ip,
+      ua,
+      otpId,
+      meta: { message: msg.slice(0, 220) },
+    });
+
+    return { ok: false, reason: isTimeout ? "SEND_TIMEOUT" : "SEND_ERROR" };
+  }
+}
+
+async function consumeOtpNow(otpId) {
+  const now = new Date();
+  try {
+    await prisma.otpCode.update({
+      where: { id: otpId },
+      data: { consumedAt: now, expiresAt: now },
+    });
+  } catch {}
 }
 
 /* ---------------------------- main handler ---------------------------- */
@@ -660,7 +678,13 @@ export async function POST(req) {
     }
 
     const resendCooldownSeconds = Math.max(0, Number.parseInt(process.env.OTP_RESEND_COOLDOWN_SECONDS || "0", 10));
-    const SEND_TIMEOUT_MS = Math.max(800, Number.parseInt(process.env.OTP_SEND_TIMEOUT_MS || "8000", 10));
+
+    // Electric-fast hard cap for provider acknowledgement:
+    // - Default: 3500ms
+    // - Min: 800ms (never lower; avoids false failures)
+    // - Max: 6000ms (keeps UX snappy; prevents long hangs)
+    const SEND_TIMEOUT_MS = clampInt(process.env.OTP_SEND_TIMEOUT_MS || "3500", 800, 6000);
+
     const now = new Date();
 
     let user = null;
@@ -744,8 +768,7 @@ export async function POST(req) {
       parsed.type === "phone" ? normalizePhone(user.phone || parsed.phone || identifier) : null;
     const phoneE164Out = parsed.type === "phone" && phoneDigitsOut ? `+${phoneDigitsOut}` : null;
 
-    // ✅ EARLY reuse check (no waiting): if an active OTP exists, return immediately.
-    // This keeps server response time near-zero for repeat clicks while an OTP is still valid.
+    // ✅ EARLY reuse check: if an active OTP exists, return immediately (no re-send).
     if (!forceNew) {
       const preActive = await prisma.otpCode.findFirst({
         where: {
@@ -797,6 +820,7 @@ export async function POST(req) {
       }
     }
 
+    // Create OTP row (concurrency-safe). We only return success if provider send is confirmed.
     const created = await prisma.$transaction(async (tx) => {
       const lockKey = `auth-request-otp:${user.id}:${purpose}`;
       const locked = await advisoryTryLock(tx, lockKey);
@@ -819,12 +843,9 @@ export async function POST(req) {
           if (active2) return { id: active2.id, expiresAt: active2.expiresAt, reused: true, locked: false };
           await sleepMs(15);
         }
-        // If still not visible, report busy (prevents duplicate OTP creation under contention).
         return { busy: true, id: null, expiresAt: null, reused: true, locked: false };
       }
 
-      // Reuse existing active OTP to prevent accidental double-send (no cooldown; one OTP active per TTL)
-      // If the client explicitly requests a new OTP (forceNew === true), we will consume the active one and create a new code.
       const active = await tx.otpCode.findFirst({
         where: {
           userId: user.id,
@@ -861,9 +882,9 @@ export async function POST(req) {
             alg: "HMAC-SHA256",
             base64: altBase64.slice(0, 16),
             rawsha: rawSha256Hex.slice(0, 16),
-            v: 5,
+            v: 6,
             scope: "global",
-            mode: "async_send",
+            mode: "sync_send_confirm",
             idem: idempotencyKey ? String(idempotencyKey).slice(0, 180) : undefined,
             forceNew: !!forceNew,
           }),
@@ -893,35 +914,44 @@ export async function POST(req) {
     });
     mark("audit");
 
+    // If we reused an active OTP, do NOT re-send via provider.
+    if (created.reused) {
+      mark("response_ready");
+
+      const normalizedIdentifierOut =
+        resolvedChannel === "EMAIL"
+          ? (user.email || parsed.email || "").toLowerCase()
+          : resolvedChannel === "WHATSAPP"
+            ? phoneE164Out
+            : phoneDigitsOut
+              ? `+${phoneDigitsOut}`
+              : "";
+
+      return NextResponse.json({
+        ok: true,
+        purpose,
+        channel: resolvedChannel,
+        otpId: created.id,
+        ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
+        expiresAt: created.expiresAt,
+        serverNow: new Date().toISOString(),
+        resendCooldownSeconds,
+        normalizedIdentifier: normalizedIdentifierOut,
+        delivery: "reused",
+        timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+      });
+    }
+
+    // Targets
     if (resolvedChannel === "EMAIL") {
       const targetEmail = (user.email || parsed.email || "").toLowerCase();
       if (!targetEmail) {
-        await prisma.otpCode
-          .update({ where: { id: created.id }, data: { expiresAt: now, consumedAt: now } })
-          .catch(() => {});
+        await consumeOtpNow(created.id);
         if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
         return NextResponse.json({ ok: false, error: "EMAIL_TARGET_MISSING" }, { status: 400 });
       }
 
-      // If we reused an active OTP, do NOT re-send via provider (prevents duplicate emails/SMS).
-      if (created.reused) {
-        mark("response_ready");
-        return NextResponse.json({
-          ok: true,
-          purpose,
-          channel: "EMAIL",
-          otpId: created.id,
-          ttlSeconds: remainingTtlSeconds(created.expiresAt, now),
-          expiresAt: created.expiresAt,
-          serverNow: now.toISOString(),
-          resendCooldownSeconds,
-          normalizedIdentifier: targetEmail,
-          delivery: "reused",
-          timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
-        });
-      }
-
-      backgroundSend({
+      const sendRes = await sendOtpAndConfirm({
         otpId: created.id,
         channel: "EMAIL",
         purpose,
@@ -935,6 +965,29 @@ export async function POST(req) {
         ua,
         sendTimeoutMs: SEND_TIMEOUT_MS,
       });
+      mark("provider");
+
+      if (!sendRes.ok) {
+        // FULLPROOF RULE: if provider failed/timeout -> consume immediately; never leave active OTP.
+        await consumeOtpNow(created.id);
+        if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
+
+        mark("response_ready");
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "OTP_DELIVERY_FAILED",
+            reason: sendRes.reason,
+            purpose,
+            channel: "EMAIL",
+            otpId: created.id,
+            retryable: true,
+            serverNow: new Date().toISOString(),
+            timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+          },
+          { status: 502 }
+        );
+      }
 
       mark("response_ready");
       return NextResponse.json({
@@ -942,44 +995,24 @@ export async function POST(req) {
         purpose,
         channel: "EMAIL",
         otpId: created.id,
-        ttlSeconds: ttl,
+        ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
         expiresAt: created.expiresAt,
-        serverNow: now.toISOString(),
+        serverNow: new Date().toISOString(),
         resendCooldownSeconds,
         normalizedIdentifier: targetEmail,
-        delivery: "queued",
+        delivery: "sent",
         timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
       });
     }
 
     if (resolvedChannel === "SMS") {
       if (!phoneDigitsOut) {
-        await prisma.otpCode
-          .update({ where: { id: created.id }, data: { expiresAt: now, consumedAt: now } })
-          .catch(() => {});
+        await consumeOtpNow(created.id);
         if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
         return NextResponse.json({ ok: false, error: "PHONE_TARGET_MISSING" }, { status: 400 });
       }
 
-      // If we reused an active OTP, do NOT re-send via provider (prevents duplicate emails/SMS).
-      if (created.reused) {
-        mark("response_ready");
-        return NextResponse.json({
-          ok: true,
-          purpose,
-          channel: "SMS",
-          otpId: created.id,
-          ttlSeconds: remainingTtlSeconds(created.expiresAt, now),
-          expiresAt: created.expiresAt,
-          serverNow: now.toISOString(),
-          resendCooldownSeconds,
-          normalizedIdentifier: `+${phoneDigitsOut}`,
-          delivery: "reused",
-          timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
-        });
-      }
-
-      backgroundSend({
+      const sendRes = await sendOtpAndConfirm({
         otpId: created.id,
         channel: "SMS",
         purpose,
@@ -987,12 +1020,34 @@ export async function POST(req) {
         code: otpCode,
         ttlSeconds: ttl,
         email: null,
-        phoneDigits: phoneDigitsOut, // canonical "8801XXXXXXXXX"
+        phoneDigits: phoneDigitsOut,
         phoneE164: null,
         ip,
         ua,
         sendTimeoutMs: SEND_TIMEOUT_MS,
       });
+      mark("provider");
+
+      if (!sendRes.ok) {
+        await consumeOtpNow(created.id);
+        if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
+
+        mark("response_ready");
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "OTP_DELIVERY_FAILED",
+            reason: sendRes.reason,
+            purpose,
+            channel: "SMS",
+            otpId: created.id,
+            retryable: true,
+            serverNow: new Date().toISOString(),
+            timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+          },
+          { status: 502 }
+        );
+      }
 
       mark("response_ready");
       return NextResponse.json({
@@ -1000,44 +1055,24 @@ export async function POST(req) {
         purpose,
         channel: "SMS",
         otpId: created.id,
-        ttlSeconds: ttl,
+        ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
         expiresAt: created.expiresAt,
-        serverNow: now.toISOString(),
+        serverNow: new Date().toISOString(),
         resendCooldownSeconds,
         normalizedIdentifier: `+${phoneDigitsOut}`,
-        delivery: "queued",
+        delivery: "sent",
         timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
       });
     }
 
     if (resolvedChannel === "WHATSAPP") {
       if (!phoneE164Out) {
-        await prisma.otpCode
-          .update({ where: { id: created.id }, data: { expiresAt: now, consumedAt: now } })
-          .catch(() => {});
+        await consumeOtpNow(created.id);
         if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
         return NextResponse.json({ ok: false, error: "WHATSAPP_TARGET_MISSING" }, { status: 400 });
       }
 
-      // If we reused an active OTP, do NOT re-send via provider (prevents duplicate emails/SMS).
-      if (created.reused) {
-        mark("response_ready");
-        return NextResponse.json({
-          ok: true,
-          purpose,
-          channel: "WHATSAPP",
-          otpId: created.id,
-          ttlSeconds: remainingTtlSeconds(created.expiresAt, now),
-          expiresAt: created.expiresAt,
-          serverNow: now.toISOString(),
-          resendCooldownSeconds,
-          normalizedIdentifier: phoneE164Out,
-          delivery: "reused",
-          timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
-        });
-      }
-
-      backgroundSend({
+      const sendRes = await sendOtpAndConfirm({
         otpId: created.id,
         channel: "WHATSAPP",
         purpose,
@@ -1046,11 +1081,33 @@ export async function POST(req) {
         ttlSeconds: ttl,
         email: null,
         phoneDigits: null,
-        phoneE164: phoneE164Out, // "+8801XXXXXXXXX"
+        phoneE164: phoneE164Out,
         ip,
         ua,
         sendTimeoutMs: SEND_TIMEOUT_MS,
       });
+      mark("provider");
+
+      if (!sendRes.ok) {
+        await consumeOtpNow(created.id);
+        if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
+
+        mark("response_ready");
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "OTP_DELIVERY_FAILED",
+            reason: sendRes.reason,
+            purpose,
+            channel: "WHATSAPP",
+            otpId: created.id,
+            retryable: true,
+            serverNow: new Date().toISOString(),
+            timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+          },
+          { status: 502 }
+        );
+      }
 
       mark("response_ready");
       return NextResponse.json({
@@ -1058,19 +1115,17 @@ export async function POST(req) {
         purpose,
         channel: "WHATSAPP",
         otpId: created.id,
-        ttlSeconds: ttl,
+        ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
         expiresAt: created.expiresAt,
-        serverNow: now.toISOString(),
+        serverNow: new Date().toISOString(),
         resendCooldownSeconds,
         normalizedIdentifier: phoneE164Out,
-        delivery: "queued",
+        delivery: "sent",
         timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
       });
     }
 
-    await prisma.otpCode
-      .update({ where: { id: created.id }, data: { expiresAt: now, consumedAt: now } })
-      .catch(() => {});
+    await consumeOtpNow(created.id);
     return NextResponse.json({ ok: false, error: "CHANNEL_UNSUPPORTED" }, { status: 400 });
   } catch (err) {
     console.error("[request-otp]", err);

@@ -16,6 +16,15 @@ export const viewport = {
   viewportFit: "cover",
 };
 
+/* ---------------- SEO/social constants (no UI/UX impact) ---------------- */
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
+  "https://www.thednalabstore.com";
+
+const BRAND = "TDLS";
+const FALLBACK_DESC =
+  "TDLS is a premium multi-product ecommerce brand. Shop curated essentials across multiple categories.";
+
 /* ========= SHAPE NORMALISER ========= */
 /**
  * Normalises Strapi product shapes into:
@@ -57,6 +66,13 @@ function extractText(val) {
     return extractText(val.children);
   if (typeof val === "object" && val.text) return val.text;
   return "";
+}
+
+function toAbsoluteUrl(u) {
+  if (!u) return u;
+  const s = String(u);
+  if (/^https?:\/\//i.test(s)) return s;
+  return `${SITE_URL.replace(/\/+$/, "")}${s.startsWith("/") ? "" : "/"}${s}`;
 }
 
 function firstMediaUrl(field) {
@@ -254,7 +270,10 @@ async function loadStockFromPrisma({ product, slug }) {
       or.push({ strapiSlug: product.slug });
     }
 
-    if (product.attributes?.slug && typeof product.attributes.slug === "string") {
+    if (
+      product.attributes?.slug &&
+      typeof product.attributes.slug === "string"
+    ) {
       or.push({ slug: product.attributes.slug });
       or.push({ strapiSlug: product.attributes.slug });
     }
@@ -331,9 +350,9 @@ export async function generateMetadata(ctx) {
 
   if (!product || isSoftDisabled(product)) {
     return {
-      title: "Product Not Found | THE DNA LAB CLOTHING",
+      title: `Product Not Found | ${BRAND}`,
       description: "Sorry, this product does not exist or is unavailable.",
-      robots: "noindex",
+      robots: { index: false, follow: false },
     };
   }
 
@@ -342,20 +361,26 @@ export async function generateMetadata(ctx) {
     extractText(product.attributes?.name) ||
     "Product";
 
-  const desc =
+  const descRaw =
     extractText(product.short_description) ||
     extractText(product.attributes?.short_description) ||
     (typeof product.description === "string"
-      ? product.description.substring(0, 140)
-      : "Shop premium apparel and lifestyle. Discover TDLC.");
+      ? product.description.substring(0, 160)
+      : FALLBACK_DESC);
 
-  const ogImage = pickOgImage(product);
+  const desc = String(descRaw || FALLBACK_DESC).slice(0, 180);
+
+  const ogImage = toAbsoluteUrl(pickOgImage(product));
+  const canonical = `${SITE_URL.replace(/\/+$/, "")}/product/${encodeURIComponent(
+    slug || product.slug || ""
+  )}`;
 
   return {
-    title: `${name} | THE DNA LAB CLOTHING`,
+    title: `${name} | ${BRAND}`,
     description: desc,
+    alternates: { canonical },
     openGraph: {
-      title: `${name} | THE DNA LAB CLOTHING`,
+      title: `${name} | ${BRAND}`,
       description: desc,
       images: [
         {
@@ -366,11 +391,12 @@ export async function generateMetadata(ctx) {
         },
       ],
       type: "website",
-      siteName: "THE DNA LAB CLOTHING",
+      siteName: BRAND,
+      url: canonical,
     },
     twitter: {
       card: "summary_large_image",
-      title: `${name} | THE DNA LAB CLOTHING`,
+      title: `${name} | ${BRAND}`,
       description: desc,
       images: [ogImage],
     },
@@ -430,9 +456,9 @@ export default async function ProductPage(ctx) {
     extractText(product.attributes?.short_description) ||
     (typeof product.description === "string"
       ? product.description.substring(0, 140)
-      : "Shop premium apparel and lifestyle. Discover TDLC.");
+      : FALLBACK_DESC);
 
-  const ogImage = pickOgImage(product);
+  const ogImage = toAbsoluteUrl(pickOgImage(product));
 
   const price =
     typeof product.price === "number"
@@ -460,7 +486,11 @@ export default async function ProductPage(ctx) {
 
   const isInStock = stockQty > 0;
 
-  // Keep the exact same schema payload you already had.
+  const productUrlAbs = `${SITE_URL.replace(/\/+$/, "")}/product/${encodeURIComponent(
+    product.slug || slug || ""
+  )}`;
+
+  // Keep the exact same schema payload structure; only brand/site naming + absolute url hardened.
   const productSchema = {
     "@context": "https://schema.org/",
     "@type": "Product",
@@ -470,7 +500,7 @@ export default async function ProductPage(ctx) {
     sku: sku,
     brand: {
       "@type": "Brand",
-      name: "THE DNA LAB CLOTHING",
+      name: BRAND,
     },
     offers: {
       "@type": "Offer",
@@ -479,7 +509,7 @@ export default async function ProductPage(ctx) {
       availability: isInStock
         ? "https://schema.org/InStock"
         : "https://schema.org/OutOfStock",
-      url: `/product/${product.slug}`,
+      url: productUrlAbs,
     },
     ...(aggregateRating && { aggregateRating }),
     ...(reviews.length && {

@@ -1,10 +1,10 @@
-// PATH: my-project/src/components/common/homepanel.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
+import HomePanelAllProducts from "@/components/common/homepanel_all_products";
 
 /* Brand tokens */
 const NAVY = "#0F2147";
@@ -323,7 +323,22 @@ function Icon({ name = "spark" }) {
   return <span />;
 }
 
-function PillButton({ title, subtitle, icon, onClick, variant = "dark", disabled = false }) {
+function PillButton({
+  title,
+  subtitle,
+  icon,
+  onClick,
+  variant = "dark",
+  disabled = false,
+  buttonRef,
+  onMouseEnter,
+  onMouseLeave,
+  onFocus,
+  onBlur,
+  ariaExpanded,
+  ariaHaspopup,
+  ariaControls,
+}) {
   const bg =
     variant === "gold"
       ? "linear-gradient(135deg,#FFF7D6 0%, #F6D77B 40%, #C9B065 100%)"
@@ -335,9 +350,17 @@ function PillButton({ title, subtitle, icon, onClick, variant = "dark", disabled
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       disabled={disabled}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      aria-expanded={ariaExpanded}
+      aria-haspopup={ariaHaspopup}
+      aria-controls={ariaControls}
       style={{
         width: "100%",
         maxWidth: "100%",
@@ -352,13 +375,14 @@ function PillButton({ title, subtitle, icon, onClick, variant = "dark", disabled
         cursor: disabled ? "not-allowed" : "pointer",
         transition: "transform .12s ease, box-shadow .12s ease, filter .12s ease",
         textAlign: "left",
+        touchAction: "manipulation",
       }}
-      onMouseEnter={(e) => {
+      onMouseEnterCapture={(e) => {
         if (disabled) return;
         e.currentTarget.style.transform = "translateY(-1px)";
         e.currentTarget.style.filter = "saturate(1.05)";
       }}
-      onMouseLeave={(e) => {
+      onMouseLeaveCapture={(e) => {
         e.currentTarget.style.transform = "translateY(0)";
         e.currentTarget.style.filter = "none";
       }}
@@ -434,6 +458,160 @@ function PillButton({ title, subtitle, icon, onClick, variant = "dark", disabled
   );
 }
 
+/* ---------- extracted UI components (avoid nested-component lint/reset) ---------- */
+function TabButton({ id, label, labelSub, active, onSelect }) {
+  const isActive = !!active;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect?.(id)}
+      role="tab"
+      aria-selected={isActive}
+      style={{
+        padding: "8px 14px",
+        borderRadius: 999,
+        border: "none",
+        cursor: "pointer",
+        background: isActive
+          ? `linear-gradient(135deg, ${NAVY} 0%, ${NAVY_DARK} 100%)`
+          : "rgba(15,22,45,0.05)",
+        color: isActive ? "#FDFCF8" : NAVY_SOFT,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontFamily: SYS_FONT,
+        fontSize: 11.5,
+        fontWeight: 900,
+        letterSpacing: ".16em",
+        textTransform: "uppercase",
+        boxShadow: isActive ? "0 14px 34px rgba(6,10,24,.28)" : "none",
+        transition: "background .16s ease, color .16s ease, box-shadow .16s ease, transform .12s ease",
+        maxWidth: "100%",
+        minWidth: 0,
+        whiteSpace: "nowrap",
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) e.currentTarget.style.transform = "translateY(-1px)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+      }}
+    >
+      <span>{label}</span>
+      {labelSub ? (
+        <span style={{ fontSize: 10, fontWeight: 800, textTransform: "none", opacity: 0.85, letterSpacing: 0 }}>
+          {labelSub}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function RailItem({ item, index, isActive, onHover, onOpen, fallbackHref }) {
+  const priceFrom = formatBDT(item?.priceFrom);
+  const priceTo = formatBDT(item?.priceTo);
+
+  let priceText = "";
+  if (priceFrom && priceTo && priceFrom !== priceTo) priceText = `${priceFrom} – ${priceTo}`;
+  else if (priceFrom) priceText = priceFrom;
+
+  return (
+    <button
+      type="button"
+      onMouseEnter={() => onHover?.(index)}
+      onFocus={() => onHover?.(index)}
+      onClick={() => onOpen?.(item?.href || fallbackHref)}
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        border: "none",
+        textAlign: "left",
+        cursor: "pointer",
+        padding: "10px 10px",
+        borderRadius: 16,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        backgroundColor: isActive ? "#f5f6fb" : "transparent",
+        boxShadow: isActive ? "0 14px 28px rgba(7,11,27,.12)" : "none",
+        transform: isActive ? "translateX(2px)" : "translateX(0)",
+        transition: "background .12s ease, transform .12s ease, box-shadow .12s ease",
+        minWidth: 0,
+        outline: "none",
+        touchAction: "manipulation",
+      }}
+    >
+      <div
+        style={{
+          minWidth: 28,
+          height: 28,
+          borderRadius: 999,
+          border: `1px solid ${isActive ? GOLD : "#D1D5E3"}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: SYS_FONT,
+          fontSize: 11,
+          fontWeight: 900,
+          color: isActive ? "#7a5b18" : NAVY_SOFT,
+          background: isActive
+            ? "radial-gradient(circle at 30% 0%, #fffdf4 0%, #f1e6c7 100%)"
+            : "linear-gradient(135deg,#f8fafc,#edf1fb)",
+          boxShadow: "0 10px 22px rgba(6,10,24,.10)",
+          flex: "0 0 auto",
+        }}
+      >
+        {index + 1}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+        <div
+          style={{
+            fontFamily: LUX_FONT,
+            fontWeight: 900,
+            fontSize: 13.75,
+            color: NAVY,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            letterSpacing: ".01em",
+            lineHeight: 1.2,
+          }}
+        >
+          {item?.title || "Product"}
+        </div>
+        <div
+          style={{
+            fontFamily: SYS_FONT,
+            fontSize: 12,
+            fontWeight: 800,
+            color: NAVY_SOFT,
+            opacity: 0.84,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.2,
+          }}
+        >
+          {priceText ? priceText : "View details"}
+        </div>
+      </div>
+
+      <div
+        style={{
+          flex: "0 0 auto",
+          width: 10,
+          height: 10,
+          borderRadius: 999,
+          background: isActive ? GOLD : "rgba(15,33,71,.18)",
+          boxShadow: isActive ? "0 10px 18px rgba(201,176,101,.35)" : "none",
+        }}
+        aria-hidden="true"
+      />
+    </button>
+  );
+}
+
 /* ------------------ viewport-safe vh (iOS/Android) ------------------ */
 function setAppVhVar() {
   if (typeof window === "undefined") return;
@@ -490,6 +668,20 @@ export default function HomePanel({ open, onClose }) {
   const [navH, setNavH] = useState(89);
   const [bottomH, setBottomH] = useState(86);
 
+  // ✅ NEW: Collections flyout (anchored; no “new window” overlay)
+  const collectionsBtnRef = useRef(null);
+  const collectionsFlyRef = useRef(null);
+  const openIntentRef = useRef(null);
+  const closeIntentRef = useRef(null);
+
+  const [collectionsOpen, setCollectionsOpen] = useState(false);
+  const [collectionsGeom, setCollectionsGeom] = useState({
+    top: 120,
+    left: 24,
+    width: 560,
+    height: 520,
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -533,6 +725,11 @@ export default function HomePanel({ open, onClose }) {
     };
   }, []);
 
+  // close collections flyout when panel closes
+  useEffect(() => {
+    if (!open) setCollectionsOpen(false);
+  }, [open]);
+
   const isAuthed = status === "authenticated" && !!session?.user;
   const displayName =
     session?.user?.name || session?.user?.email || session?.user?.phone || "Signed in";
@@ -541,13 +738,14 @@ export default function HomePanel({ open, onClose }) {
     const customerDashboard = "/customer/dashboard";
     const customerLogin = `/login?redirect=${encodeURIComponent(customerDashboard)}`;
     const customerForgot = "/forgot-password";
-    const allProducts = "/product";
+    const allProducts = "/product"; // kept for compatibility with existing prefetch + fallback
     const cart = "/cart";
     const adminLogin = "/admin/login";
     return { customerDashboard, customerLogin, customerForgot, allProducts, cart, adminLogin };
   }, []);
 
   const handleNavigate = (path) => {
+    setCollectionsOpen(false);
     onClose?.();
     setTimeout(() => router.push(path), 0);
   };
@@ -561,6 +759,7 @@ export default function HomePanel({ open, onClose }) {
       router.prefetch(routes.adminLogin);
       router.prefetch(routes.cart);
       router.prefetch(routes.customerForgot);
+      router.prefetch("/collections");
     } catch {}
   }, [router, routes]);
 
@@ -582,17 +781,22 @@ export default function HomePanel({ open, onClose }) {
     };
   }, [open]);
 
-  // Close on Escape
+  // Close on Escape (flyout first, then panel)
   useEffect(() => {
     if (!open) return;
     const onEsc = (e) => {
-      if (e.key === "Escape") onClose?.();
+      if (e.key !== "Escape") return;
+      if (collectionsOpen) {
+        setCollectionsOpen(false);
+        return;
+      }
+      onClose?.();
     };
     document.addEventListener("keydown", onEsc, true);
     return () => document.removeEventListener("keydown", onEsc, true);
-  }, [open, onClose]);
+  }, [open, onClose, collectionsOpen]);
 
-  // Close on outside click (robust swallow, no click-through)
+  // Close on outside click (include flyout as "inside" so clicking flyout does NOT close panel)
   useEffect(() => {
     if (!open) return;
 
@@ -607,16 +811,20 @@ export default function HomePanel({ open, onClose }) {
     const isOutside = (t) => {
       const inPanel = panelRef.current?.contains(t);
       const inPreview = previewRef.current?.contains(t);
-      return !inPanel && !inPreview;
+      const inFlyout = collectionsFlyRef.current?.contains(t);
+      const inTrigger = collectionsBtnRef.current?.contains(t);
+      return !inPanel && !inPreview && !inFlyout && !inTrigger;
     };
 
     const onDownCapture = (e) => {
+      if (swallowNextOutsideClickRef.current) return;
       const t = e?.target;
       if (!t) return;
       if (!isOutside(t)) return;
 
       swallowNextOutsideClickRef.current = true;
       swallow(e);
+      setCollectionsOpen(false);
       onClose?.();
     };
 
@@ -672,19 +880,17 @@ export default function HomePanel({ open, onClose }) {
       const dx = clientX - startX;
       const dy = clientY - startY;
 
-      // Only react to a clear horizontal swipe, closing gesture is right->left (dx negative)
       if (Math.abs(dx) < 18) return;
       if (Math.abs(dy) > Math.abs(dx) * 0.9) return;
 
-      // Prevent accidental scroll-jank when swiping
       if (e.cancelable) e.preventDefault();
 
       const dt = Math.max(1, Date.now() - startT);
-      const vx = dx / dt; // px/ms
+      const vx = dx / dt;
 
-      // Close threshold: either distance or velocity
       if (dx < -70 || vx < -0.55) {
         tracking = false;
+        setCollectionsOpen(false);
         onClose?.();
       }
     };
@@ -706,7 +912,7 @@ export default function HomePanel({ open, onClose }) {
     };
   }, [open, onClose]);
 
-  // Focus panel when opened (avoid “dead” keyboard state)
+  // Focus panel when opened
   useEffect(() => {
     if (!open) return;
     const id = window.setTimeout(() => {
@@ -759,7 +965,6 @@ export default function HomePanel({ open, onClose }) {
           return;
         }
 
-        // Fallback: build from Strapi product list via proxy
         const json = await fetchFromStrapi("/products?populate=*", ac.signal);
         const payload = unwrapStrapiProxy(json);
         const products = toProductArrayFromStrapiPayload(payload);
@@ -804,186 +1009,118 @@ export default function HomePanel({ open, onClose }) {
   const safeIndex = activeList.length === 0 ? 0 : clampInt(hoverIndex, 0, activeList.length - 1);
   const previewItem = activeList.length > 0 ? activeList[safeIndex] : null;
 
-  function TabButton({ id, label, labelSub }) {
-    const isActive = activeTab === id;
-    return (
-      <button
-        type="button"
-        onClick={() => setActiveTab(id)}
-        style={{
-          padding: "8px 14px",
-          borderRadius: 999,
-          border: "none",
-          cursor: "pointer",
-          background: isActive
-            ? `linear-gradient(135deg, ${NAVY} 0%, ${NAVY_DARK} 100%)`
-            : "rgba(15,22,45,0.05)",
-          color: isActive ? "#FDFCF8" : NAVY_SOFT,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          fontFamily: SYS_FONT,
-          fontSize: 11.5,
-          fontWeight: 900,
-          letterSpacing: ".16em",
-          textTransform: "uppercase",
-          boxShadow: isActive ? "0 14px 34px rgba(6,10,24,.28)" : "none",
-          transition: "background .16s ease, color .16s ease, box-shadow .16s ease, transform .12s ease",
-          maxWidth: "100%",
-          minWidth: 0,
-          whiteSpace: "nowrap",
-        }}
-        onMouseOver={(e) => {
-          if (!isActive) e.currentTarget.style.transform = "translateY(-1px)";
-        }}
-        onMouseOut={(e) => {
-          e.currentTarget.style.transform = "translateY(0)";
-        }}
-      >
-        <span>{label}</span>
-        {labelSub ? (
-          <span style={{ fontSize: 10, fontWeight: 800, textTransform: "none", opacity: 0.85, letterSpacing: 0 }}>
-            {labelSub}
-          </span>
-        ) : null}
-      </button>
-    );
-  }
-
-  function RailItem({ item, index }) {
-    const priceFrom = formatBDT(item.priceFrom);
-    const priceTo = formatBDT(item.priceTo);
-
-    let priceText = "";
-    if (priceFrom && priceTo && priceFrom !== priceTo) priceText = `${priceFrom} – ${priceTo}`;
-    else if (priceFrom) priceText = priceFrom;
-
-    const isActive = index === safeIndex;
-
-    return (
-      <button
-        type="button"
-        onMouseEnter={() => setHoverIndex(index)}
-        onFocus={() => setHoverIndex(index)}
-        onClick={() => handleNavigate(item.href || routes.allProducts)}
-        style={{
-          width: "100%",
-          maxWidth: "100%",
-          border: "none",
-          textAlign: "left",
-          cursor: "pointer",
-          padding: "10px 10px",
-          borderRadius: 16,
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          backgroundColor: isActive ? "#f5f6fb" : "transparent",
-          boxShadow: isActive ? "0 14px 28px rgba(7,11,27,.12)" : "none",
-          transform: isActive ? "translateX(2px)" : "translateX(0)",
-          transition: "background .12s ease, transform .12s ease, box-shadow .12s ease",
-          minWidth: 0,
-          outline: "none",
-        }}
-      >
-        <div
-          style={{
-            minWidth: 28,
-            height: 28,
-            borderRadius: 999,
-            border: `1px solid ${isActive ? GOLD : "#D1D5E3"}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontFamily: SYS_FONT,
-            fontSize: 11,
-            fontWeight: 900,
-            color: isActive ? "#7a5b18" : NAVY_SOFT,
-            background: isActive
-              ? "radial-gradient(circle at 30% 0%, #fffdf4 0%, #f1e6c7 100%)"
-              : "linear-gradient(135deg,#f8fafc,#edf1fb)",
-            boxShadow: "0 10px 22px rgba(6,10,24,.10)",
-            flex: "0 0 auto",
-          }}
-        >
-          {index + 1}
-        </div>
-
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-          <div
-            style={{
-              fontFamily: LUX_FONT,
-              fontWeight: 900,
-              fontSize: 13.75,
-              color: NAVY,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              letterSpacing: ".01em",
-              lineHeight: 1.2,
-            }}
-          >
-            {item.title || "Product"}
-          </div>
-          <div
-            style={{
-              fontFamily: SYS_FONT,
-              fontSize: 12,
-              fontWeight: 800,
-              color: NAVY_SOFT,
-              opacity: 0.84,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              lineHeight: 1.2,
-            }}
-          >
-            {priceText ? priceText : "View details"}
-          </div>
-        </div>
-
-        <div
-          style={{
-            flex: "0 0 auto",
-            width: 10,
-            height: 10,
-            borderRadius: 999,
-            background: isActive ? GOLD : "rgba(15,33,71,.18)",
-            boxShadow: isActive ? "0 10px 18px rgba(201,176,101,.35)" : "none",
-          }}
-          aria-hidden="true"
-        />
-      </button>
-    );
-  }
-
   const layout = useMemo(() => {
     const safeTop = 8;
     const safeBottom = 10;
 
-    // Use app-vh when available (iOS/Android address bar safe)
     const viewportPx = `calc(var(--app-vh, 1vh) * 100)`;
 
     const top = `calc(${navH}px + ${safeTop}px + env(safe-area-inset-top))`;
     const bottom = `calc(${bottomH}px + ${safeBottom}px + env(safe-area-inset-bottom))`;
     const maxH = `calc(${viewportPx} - ${navH}px - ${bottomH}px - ${safeTop}px - ${safeBottom}px - env(safe-area-inset-top) - env(safe-area-inset-bottom))`;
 
-    // Drawer width: never overflow small screens, never exceed viewport
     const panelW = isMobile ? "min(100vw, 520px)" : "min(420px, calc(100vw - 24px))";
-
-    // Preview shown only on comfortable desktops
     const showPreview = !isMobile && !isCompactHeight && vw >= 980;
 
     return { top, bottom, maxH, panelW, showPreview };
   }, [navH, bottomH, isMobile, isCompactHeight, vw]);
 
+  // ✅ Collections flyout geometry (anchored to the Collections button; no backdrop)
+  useEffect(() => {
+    if (!open) return;
+    if (!collectionsOpen) return;
+    if (typeof window === "undefined") return;
+
+    const compute = () => {
+      const btn = collectionsBtnRef.current;
+      if (!btn) return;
+
+      const rect = btn.getBoundingClientRect();
+      const safe = 10;
+
+      const viewportPx = (window.innerHeight || 0);
+      const vwNow = window.innerWidth || 0;
+
+      const maxW = Math.min(600, Math.max(340, vwNow - safe * 2));
+      const width = isMobile ? Math.min(vwNow - safe * 2, 600) : Math.min(560, maxW);
+
+      const maxH = Math.max(320, Math.min(640, Math.round(viewportPx * 0.66)));
+      const height = isMobile ? Math.max(320, Math.min(Math.round(viewportPx * 0.62), 620)) : maxH;
+
+      // Prefer open to LEFT of the drawer (premium flyout), else open to the inside-left of button
+      let left = Math.round(rect.left - width - 12);
+      if (left < safe) left = Math.round(Math.max(safe, rect.right - width)); // fallback
+      left = Math.min(left, vwNow - width - safe);
+      left = Math.max(safe, left);
+
+      // Align top with button; clamp to viewport
+      let top = Math.round(rect.top - 6);
+      const minTop = safe + 4;
+      const maxTop = Math.max(minTop, viewportPx - height - safe - 4);
+      top = Math.min(Math.max(top, minTop), maxTop);
+
+      setCollectionsGeom({ top, left, width, height });
+    };
+
+    compute();
+
+    window.addEventListener("resize", compute, { passive: true });
+    window.addEventListener("orientationchange", compute, { passive: true });
+    window.addEventListener("scroll", compute, { passive: true, capture: true });
+
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("orientationchange", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
+  }, [open, collectionsOpen, isMobile]);
+
+  const closeCollections = () => setCollectionsOpen(false);
+
+  // Desktop hover behavior (delayed open/close; prevents hypersensitive jitter)
+  const scheduleOpenCollections = () => {
+    if (isMobile) return;
+    if (closeIntentRef.current) {
+      window.clearTimeout(closeIntentRef.current);
+      closeIntentRef.current = null;
+    }
+    if (collectionsOpen) return;
+    openIntentRef.current = window.setTimeout(() => {
+      setCollectionsOpen(true);
+      openIntentRef.current = null;
+    }, 120);
+  };
+
+  const scheduleCloseCollections = () => {
+    if (isMobile) return;
+    if (openIntentRef.current) {
+      window.clearTimeout(openIntentRef.current);
+      openIntentRef.current = null;
+    }
+    closeIntentRef.current = window.setTimeout(() => {
+      setCollectionsOpen(false);
+      closeIntentRef.current = null;
+    }, 160);
+  };
+
+  const cancelCloseCollections = () => {
+    if (closeIntentRef.current) {
+      window.clearTimeout(closeIntentRef.current);
+      closeIntentRef.current = null;
+    }
+  };
+
+  const toggleCollectionsClick = () => {
+    // tap/click toggles; no accidental close on scroll
+    setCollectionsOpen((v) => !v);
+  };
+
   const handleSignOut = async () => {
     try {
+      setCollectionsOpen(false);
       onClose?.();
-      // Customer-plane sign out only (this component is rendered in siteTree, not adminTree)
       await signOut({ redirect: true, callbackUrl: "/" });
-    } catch {
-      // noop
-    }
+    } catch {}
   };
 
   if (!open) return null;
@@ -1006,7 +1143,6 @@ export default function HomePanel({ open, onClose }) {
           overflow: hidden;
         }
 
-        /* Preview tile (desktop only) */
         .tdls-homepanel-preview{
           pointer-events: auto;
           position: absolute;
@@ -1024,7 +1160,6 @@ export default function HomePanel({ open, onClose }) {
           flex-direction: column;
         }
 
-        /* Drawer */
         .tdls-homepanel-drawer{
           pointer-events: auto;
           position: absolute;
@@ -1154,7 +1289,64 @@ export default function HomePanel({ open, onClose }) {
           background: linear-gradient(180deg, #ffffff 0%, #fbfbff 100%);
         }
 
-        /* Mobile: drawer uses full available height, no preview */
+        /* ✅ Collections flyout (anchored popover, no backdrop/new window) */
+        .tdls-collections-flyout{
+          pointer-events: auto;
+          position: fixed;
+          border-radius: 22px;
+          background: linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.86) 100%);
+          border: 1px solid rgba(255,255,255,.34);
+          box-shadow: 0 26px 70px rgba(0,0,0,.22);
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .tdls-collections-flyhead{
+          padding: 12px 12px 10px;
+          border-bottom: 1px solid rgba(231,227,218,.85);
+          background: linear-gradient(180deg, rgba(255,255,255,.94) 0%, rgba(255,255,255,.84) 100%);
+          display:flex;
+          align-items:center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .tdls-collections-flytitle{
+          min-width: 0;
+          font-family: ${LUX_FONT};
+          font-weight: 900;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          font-size: 1.02rem;
+          color: ${NAVY};
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .tdls-collections-flyclose{
+          height: 40px;
+          width: 40px;
+          border-radius: 14px;
+          border: 1px solid rgba(15,33,71,.14);
+          background: rgba(255,255,255,.92);
+          color: ${NAVY};
+          cursor: pointer;
+          box-shadow: 0 12px 26px rgba(6,10,24,.12);
+          transition: transform .10s ease, background .12s ease;
+        }
+        .tdls-collections-flyclose:hover{ transform: translateY(-1px); background: rgba(246,247,251,.95); }
+        .tdls-collections-flyclose:active{ transform: translateY(0); }
+
+        .tdls-collections-flybody{
+          padding: 12px;
+          overflow: auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+        }
+        .tdls-collections-flybody::-webkit-scrollbar{ width: 0px; height: 0px; }
+
         @media (max-width: 768px){
           .tdls-homepanel-drawer{
             left: max(10px, env(safe-area-inset-left));
@@ -1167,16 +1359,14 @@ export default function HomePanel({ open, onClose }) {
           }
         }
 
-        /* Reduced motion */
         @media (prefers-reduced-motion: reduce){
           .tdls-homepanel-close{ transition: none; }
+          .tdls-collections-flyclose{ transition: none; }
         }
       `}</style>
 
-      {/* Backdrop */}
       <div className="tdls-homepanel-backdrop" aria-hidden="true" />
 
-      {/* Stage */}
       <div className="tdls-homepanel-stage" role="presentation">
         {layout.showPreview ? (
           <div ref={previewRef} className="tdls-homepanel-preview" aria-label="Preview">
@@ -1321,6 +1511,7 @@ export default function HomePanel({ open, onClose }) {
                       padding: "10px 14px",
                       cursor: "pointer",
                       boxShadow: "0 14px 30px rgba(6,10,24,.14)",
+                      touchAction: "manipulation",
                     }}
                   >
                     Open ↗
@@ -1331,7 +1522,6 @@ export default function HomePanel({ open, onClose }) {
           </div>
         ) : null}
 
-        {/* Drawer */}
         <aside
           ref={panelRef}
           className="tdls-homepanel-drawer"
@@ -1350,7 +1540,10 @@ export default function HomePanel({ open, onClose }) {
               type="button"
               className="tdls-homepanel-close"
               aria-label="Close home panel"
-              onClick={() => onClose?.()}
+              onClick={() => {
+                setCollectionsOpen(false);
+                onClose?.();
+              }}
             >
               <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
                 ×
@@ -1359,7 +1552,6 @@ export default function HomePanel({ open, onClose }) {
           </div>
 
           <div className="tdls-homepanel-body">
-            {/* Primary actions */}
             <div className="tdls-homepanel-section">
               <div className="tdls-homepanel-section-title">Quick actions</div>
               <div className="tdls-homepanel-grid">
@@ -1381,12 +1573,21 @@ export default function HomePanel({ open, onClose }) {
                   />
                 )}
 
+                {/* ✅ Collections: hover-to-open flyout (desktop), tap-to-toggle (mobile) */}
                 <PillButton
-                  title="All Products"
-                  subtitle="Browse catalog"
+                  title="Collections"
+                  subtitle={collectionsOpen ? "Browse categories (open)" : "Browse categories"}
                   icon={<Icon name="spark" />}
-                  onClick={() => handleNavigate(routes.allProducts)}
+                  onClick={toggleCollectionsClick}
                   variant="glass"
+                  buttonRef={collectionsBtnRef}
+                  onMouseEnter={scheduleOpenCollections}
+                  onMouseLeave={scheduleCloseCollections}
+                  onFocus={() => scheduleOpenCollections()}
+                  onBlur={() => scheduleCloseCollections()}
+                  ariaHaspopup="dialog"
+                  ariaExpanded={collectionsOpen}
+                  ariaControls="tdls-collections-flyout"
                 />
 
                 <PillButton
@@ -1417,7 +1618,6 @@ export default function HomePanel({ open, onClose }) {
               </div>
             </div>
 
-            {/* Highlights */}
             <div className="tdls-homepanel-section">
               <div
                 style={{
@@ -1433,12 +1633,16 @@ export default function HomePanel({ open, onClose }) {
                   <TabButton
                     id="TRENDING"
                     label="Trending"
-                    labelSub={activeList.length ? `${trendingProducts.length}` : ""}
+                    labelSub={trendingProducts.length ? `${trendingProducts.length}` : ""}
+                    active={activeTab === "TRENDING"}
+                    onSelect={setActiveTab}
                   />
                   <TabButton
                     id="BEST"
                     label="Best Sellers"
-                    labelSub={activeList.length ? `${bestSellerProducts.length}` : ""}
+                    labelSub={bestSellerProducts.length ? `${bestSellerProducts.length}` : ""}
+                    active={activeTab === "BEST"}
+                    onSelect={setActiveTab}
                   />
                 </div>
               </div>
@@ -1480,7 +1684,14 @@ export default function HomePanel({ open, onClose }) {
                 <div className="tdls-homepanel-rail" role="list">
                   {activeList.map((it, idx) => (
                     <div key={it.slug || it.id || idx} role="listitem">
-                      <RailItem item={it} index={idx} />
+                      <RailItem
+                        item={it}
+                        index={idx}
+                        isActive={idx === safeIndex}
+                        onHover={setHoverIndex}
+                        onOpen={handleNavigate}
+                        fallbackHref={routes.allProducts}
+                      />
                     </div>
                   ))}
                 </div>
@@ -1502,7 +1713,6 @@ export default function HomePanel({ open, onClose }) {
                 </div>
               )}
 
-              {/* Mobile-only inline preview (so desktop preview absence doesn’t reduce clarity) */}
               {!layout.showPreview && previewItem ? (
                 <div
                   style={{
@@ -1585,6 +1795,7 @@ export default function HomePanel({ open, onClose }) {
                         fontSize: 11,
                         padding: "10px 12px",
                         cursor: "pointer",
+                        touchAction: "manipulation",
                       }}
                     >
                       Open
@@ -1594,7 +1805,6 @@ export default function HomePanel({ open, onClose }) {
               ) : null}
             </div>
 
-            {/* Micro hint (mobile UX) */}
             <div
               style={{
                 marginTop: 14,
@@ -1610,6 +1820,54 @@ export default function HomePanel({ open, onClose }) {
             </div>
           </div>
         </aside>
+
+        {/* ✅ Anchored Collections Flyout (hover/tap) */}
+        {collectionsOpen ? (
+          <div
+            ref={collectionsFlyRef}
+            id="tdls-collections-flyout"
+            className="tdls-collections-flyout"
+            role="dialog"
+            aria-label="Collections flyout"
+            style={{
+              top: collectionsGeom.top,
+              left: collectionsGeom.left,
+              width: collectionsGeom.width,
+              height: collectionsGeom.height,
+            }}
+            onMouseEnter={() => {
+              cancelCloseCollections();
+            }}
+            onMouseLeave={() => {
+              scheduleCloseCollections();
+            }}
+          >
+            <div className="tdls-collections-flyhead">
+              <div className="tdls-collections-flytitle">Collections</div>
+
+              <button
+                type="button"
+                className="tdls-collections-flyclose"
+                aria-label="Close collections flyout"
+                onClick={() => closeCollections()}
+              >
+                <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
+                  ×
+                </span>
+              </button>
+            </div>
+
+            <div className="tdls-collections-flybody">
+              <HomePanelAllProducts
+                onAfterNavigate={() => {
+                  // close flyout + panel after any link click (no interference with Link navigation)
+                  setCollectionsOpen(false);
+                  onClose?.();
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
     </Portal>
   );

@@ -1,3 +1,4 @@
+//my-project/src/components/common/footer.jsx
 import React, { useMemo, useState } from "react";
 import LanguageSwitcher from "@/components/common/languageswitcher";
 import { signIn } from "next-auth/react";
