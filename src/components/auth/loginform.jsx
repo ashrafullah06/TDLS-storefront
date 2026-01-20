@@ -280,6 +280,46 @@ async function assertSessionAuthedOrThrow({ wrongPasswordMessage = "Password inc
   return s;
 }
 
+/* ===========================
+   IMPORTANT: 2FA PENDING FLAG (additive; fixes redirect race)
+   - Prevents redirect to dashboard after password success but before OTP verification.
+   - Stored in sessionStorage so it survives back nav / quick rerenders.
+   =========================== */
+const SS_PENDING_2FA_KEY = "tdls:login:pending2fa:v1";
+
+function readPending2fa() {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(SS_PENDING_2FA_KEY);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== "object") return null;
+    // Optional TTL safety (15 minutes)
+    const ts = Number(j.ts || 0);
+    if (ts && Date.now() - ts > 15 * 60 * 1000) {
+      window.sessionStorage.removeItem(SS_PENDING_2FA_KEY);
+      return null;
+    }
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+function writePending2fa(payload) {
+  try {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.setItem(SS_PENDING_2FA_KEY, JSON.stringify(payload || { ts: Date.now() }));
+  } catch {}
+}
+
+function clearPending2fa() {
+  try {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.removeItem(SS_PENDING_2FA_KEY);
+  } catch {}
+}
+
 export default function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -328,6 +368,44 @@ export default function LoginForm() {
   const [channelWarn, setChannelWarn] = useState("");
 
   /* ===========================
+     2FA PENDING STATE (additive; fixes dashboard-before-otp)
+     =========================== */
+  const pending2faRef = useRef(false);
+  const [pending2fa, setPending2fa] = useState(false);
+
+  // Hydrate pending2fa from sessionStorage once
+  useEffect(() => {
+    const j = readPending2fa();
+    if (j?.pending === true) {
+      pending2faRef.current = true;
+      setPending2fa(true);
+    }
+  }, []);
+
+  // Keep ref in sync for immediate checks (no render wait)
+  useEffect(() => {
+    pending2faRef.current = Boolean(pending2fa);
+  }, [pending2fa]);
+
+  // If user switches away from 2FA mode or starts other flows, clear pending flag.
+  useEffect(() => {
+    if (mode !== MODE_2FA && pending2faRef.current) {
+      pending2faRef.current = false;
+      setPending2fa(false);
+      clearPending2fa();
+    }
+  }, [mode]);
+
+  // If the user becomes unauthenticated (logout / session cleared), pending 2FA should not linger.
+  useEffect(() => {
+    if (status === "unauthenticated" && pending2faRef.current) {
+      pending2faRef.current = false;
+      setPending2fa(false);
+      clearPending2fa();
+    }
+  }, [status]);
+
+  /* ===========================
      DIMENSIONS (kept)
      =========================== */
   const PAGE_MAX_WIDTH = 1180;
@@ -360,17 +438,35 @@ export default function LoginForm() {
   }, [mode]);
 
   /* ===========================
-     Already authed? redirect (kept)
+     Already authed? redirect (FIXED: 2FA pending must pass OTP first)
      =========================== */
   const redirectedRef = useRef(false);
   useEffect(() => {
     if (redirectedRef.current) return;
-    const twoFactorOk = session?.twoFactorPassed !== false;
+
+    // Default legacy behavior: allow redirect unless explicitly blocked by server flag
+    let twoFactorOk = session?.twoFactorPassed !== false;
+
+    // IMPORTANT FIX:
+    // If we are in a 2FA-in-progress state (password already accepted, OTP not verified yet),
+    // do NOT allow redirect unless OTP has been verified.
+    if (pending2faRef.current || pending2fa) {
+      twoFactorOk = session?.twoFactorPassed === true;
+    }
+
     if (status === "authenticated" && session?.user && twoFactorOk) {
       redirectedRef.current = true;
+
+      // If OTP has now been verified, clear pending state
+      if (pending2faRef.current) {
+        pending2faRef.current = false;
+        setPending2fa(false);
+        clearPending2fa();
+      }
+
       router.replace(redirectTo);
     }
-  }, [status, session, router, redirectTo]);
+  }, [status, session, router, redirectTo, pending2fa]);
 
   /* ===========================
      RISK PROBE (kept)
@@ -525,6 +621,13 @@ export default function LoginForm() {
      FLOWS (kept; BD normalization included)
      =========================== */
   async function startOtpLayer() {
+    // Starting OTP-only flow must not inherit pending 2FA state
+    if (pending2faRef.current) {
+      pending2faRef.current = false;
+      setPending2fa(false);
+      clearPending2fa();
+    }
+
     setErr("");
     setFieldErr({ id: "", password: "" });
 
@@ -560,6 +663,13 @@ export default function LoginForm() {
   }
 
   async function passwordLogin() {
+    // Password-only flow must not inherit pending 2FA state
+    if (pending2faRef.current) {
+      pending2faRef.current = false;
+      setPending2fa(false);
+      clearPending2fa();
+    }
+
     setErr("");
     setFieldErr({ id: "", password: "" });
 
@@ -618,6 +728,13 @@ export default function LoginForm() {
     }
 
     setLoading(true);
+
+    // IMPORTANT FIX: mark 2FA as pending immediately to prevent the auth redirect effect
+    // from routing to dashboard right after password sign-in.
+    pending2faRef.current = true;
+    setPending2fa(true);
+    writePending2fa({ pending: true, to: id, ts: Date.now() });
+
     try {
       const res = await signIn("credentials", {
         redirect: false,
@@ -642,6 +759,11 @@ export default function LoginForm() {
       }).toString();
       router.push(`/login/otp?${q}`);
     } catch (e) {
+      // If password check fails or OTP request fails, do not keep pending state.
+      pending2faRef.current = false;
+      setPending2fa(false);
+      clearPending2fa();
+
       const msg = e?.message || "Unable to start verification.";
       if (msg.includes("CredentialsSignin")) setErr("Password incorrect.");
       else if (msg.includes("ACCOUNT_NOT_FOUND") || msg.includes("USER_NOT_FOUND"))
@@ -656,6 +778,14 @@ export default function LoginForm() {
     if (loading) return;
     setErr("");
     setFieldErr({ id: "", password: "" });
+
+    // Social sign-in should not inherit pending 2FA state from previous attempts
+    if (pending2faRef.current) {
+      pending2faRef.current = false;
+      setPending2fa(false);
+      clearPending2fa();
+    }
+
     setLoading(true);
     try {
       track("social_signin_start", { provider });
@@ -1300,7 +1430,10 @@ export default function LoginForm() {
                           }}
                           title="OTP delivery channel"
                         >
-                          OTP: <span style={{ color: NAVY, marginLeft: 6 }}>{effectiveOtpChannel === "sms" ? "SMS" : "Email"}</span>
+                          OTP:{" "}
+                          <span style={{ color: NAVY, marginLeft: 6 }}>
+                            {effectiveOtpChannel === "sms" ? "SMS" : "Email"}
+                          </span>
                         </span>
                       ) : null}
                     </div>

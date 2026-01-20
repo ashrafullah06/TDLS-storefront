@@ -528,7 +528,16 @@ function TabButton({ id, label, labelSub, active, onSelect }) {
   );
 }
 
-function RailItem({ item, index, isActive, onHover, onOpen, fallbackHref }) {
+function RailItem({
+  item,
+  index,
+  isActive,
+  onHover,
+  onHoverIntent,
+  onHoverCancel,
+  onOpen,
+  fallbackHref,
+}) {
   const priceFrom = formatBDT(item?.priceFrom);
   const priceTo = formatBDT(item?.priceTo);
 
@@ -539,7 +548,8 @@ function RailItem({ item, index, isActive, onHover, onOpen, fallbackHref }) {
   return (
     <button
       type="button"
-      onMouseEnter={() => onHover?.(index)}
+      onMouseEnter={() => onHoverIntent?.(index)}
+      onMouseLeave={() => onHoverCancel?.()}
       onFocus={() => onHover?.(index)}
       onClick={() => onOpen?.(item?.href || fallbackHref)}
       style={{
@@ -671,6 +681,7 @@ export default function HomePanel({ open, onClose }) {
   const panelRef = useRef(null);
   const previewRef = useRef(null);
   const bodyRef = useRef(null);
+  const highlightsSectionRef = useRef(null);
 
   const swallowNextOutsideClickRef = useRef(false);
 
@@ -698,7 +709,18 @@ export default function HomePanel({ open, onClose }) {
   const openIntentRef = useRef(null);
   const closeIntentRef = useRef(null);
 
-  const [collectionsOpen, setCollectionsOpen] = useState(false);
+  // ✅ SINGLE openFlyout controller
+  // null | "collections" | "highlights"
+  const [openFlyout, setOpenFlyout] = useState(null);
+  const openFlyoutRef = useRef(null);
+
+  useEffect(() => {
+    openFlyoutRef.current = openFlyout;
+  }, [openFlyout]);
+
+  const collectionsOpen = openFlyout === "collections";
+  const highlightsPreviewOpen = openFlyout === "highlights";
+
   const [collectionsReady, setCollectionsReady] = useState(false);
   const [collectionsGeom, setCollectionsGeom] = useState({
     top: 140,
@@ -709,13 +731,22 @@ export default function HomePanel({ open, onClose }) {
     side: "left",
   });
 
-  // ✅ Gesture guard
+  // ✅ Gesture guard (only blocks accidental scroll-drag clicks on touch/pen, NOT mouse)
   const flyGestureRef = useRef({
     active: false,
     moved: false,
     sx: 0,
     sy: 0,
+    pointerType: "mouse",
   });
+
+  // ✅ Highlights preview flyout behavior (desktop only)
+  const highlightsOpenIntentRef = useRef(null);
+  const highlightsCloseIntentRef = useRef(null);
+
+  // ✅ Hover intent to avoid “hypersensitive” selection changes
+  const railHoverTimerRef = useRef(null);
+  const railHoverTargetRef = useRef(-1);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -760,7 +791,8 @@ export default function HomePanel({ open, onClose }) {
 
   useEffect(() => {
     if (!open) {
-      setCollectionsOpen(false);
+      // reset flyouts hard when panel closes (component may stay mounted)
+      setOpenFlyout(null);
       setCollectionsReady(false);
     }
   }, [open]);
@@ -771,6 +803,15 @@ export default function HomePanel({ open, onClose }) {
       if (closeIntentRef.current) window.clearTimeout(closeIntentRef.current);
       openIntentRef.current = null;
       closeIntentRef.current = null;
+
+      if (highlightsOpenIntentRef.current) window.clearTimeout(highlightsOpenIntentRef.current);
+      if (highlightsCloseIntentRef.current) window.clearTimeout(highlightsCloseIntentRef.current);
+      highlightsOpenIntentRef.current = null;
+      highlightsCloseIntentRef.current = null;
+
+      if (railHoverTimerRef.current) window.clearTimeout(railHoverTimerRef.current);
+      railHoverTimerRef.current = null;
+      railHoverTargetRef.current = -1;
     }
   }, [open]);
 
@@ -788,9 +829,13 @@ export default function HomePanel({ open, onClose }) {
     return { customerDashboard, customerLogin, customerForgot, allProducts, cart, adminLogin };
   }, []);
 
-  const handleNavigate = (path) => {
-    setCollectionsOpen(false);
+  const closeAllFlyouts = useCallback(() => {
+    setOpenFlyout(null);
     setCollectionsReady(false);
+  }, []);
+
+  const handleNavigate = (path) => {
+    closeAllFlyouts();
     onClose?.();
     setTimeout(() => router.push(path), 0);
   };
@@ -829,16 +874,22 @@ export default function HomePanel({ open, onClose }) {
     if (!open) return;
     const onEsc = (e) => {
       if (e.key !== "Escape") return;
-      if (collectionsOpen) {
-        setCollectionsOpen(false);
+
+      // single flyout controller: close flyout first, then panel
+      if (openFlyoutRef.current === "collections") {
+        setOpenFlyout(null);
         setCollectionsReady(false);
+        return;
+      }
+      if (openFlyoutRef.current === "highlights") {
+        setOpenFlyout(null);
         return;
       }
       onClose?.();
     };
     document.addEventListener("keydown", onEsc, true);
     return () => document.removeEventListener("keydown", onEsc, true);
-  }, [open, onClose, collectionsOpen]);
+  }, [open, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -867,8 +918,8 @@ export default function HomePanel({ open, onClose }) {
 
       swallowNextOutsideClickRef.current = true;
       swallow(e);
-      setCollectionsOpen(false);
-      setCollectionsReady(false);
+
+      closeAllFlyouts();
       onClose?.();
     };
 
@@ -886,7 +937,7 @@ export default function HomePanel({ open, onClose }) {
       document.removeEventListener("pointerdown", onDownCapture, true);
       document.removeEventListener("click", onClickCapture, true);
     };
-  }, [open, onClose]);
+  }, [open, onClose, closeAllFlyouts]);
 
   useEffect(() => {
     if (!open) return;
@@ -928,8 +979,7 @@ export default function HomePanel({ open, onClose }) {
 
       if (dx < -70 || vx < -0.55) {
         tracking = false;
-        setCollectionsOpen(false);
-        setCollectionsReady(false);
+        closeAllFlyouts();
         onClose?.();
       }
     };
@@ -949,7 +999,7 @@ export default function HomePanel({ open, onClose }) {
       el.removeEventListener("touchend", onEnd);
       el.removeEventListener("touchcancel", onEnd);
     };
-  }, [open, onClose]);
+  }, [open, onClose, closeAllFlyouts]);
 
   useEffect(() => {
     if (!open) return;
@@ -1065,6 +1115,13 @@ export default function HomePanel({ open, onClose }) {
     return { top, bottom, maxH, panelW, showPreview };
   }, [navH, bottomH, isMobile, isCompactHeight, vw]);
 
+  // If desktop preview is not eligible (responsive), never keep highlights flyout "open" in state.
+  useEffect(() => {
+    if (!layout.showPreview && openFlyoutRef.current === "highlights") {
+      setOpenFlyout(null);
+    }
+  }, [layout.showPreview]);
+
   const computeCollectionsGeom = useCallback(() => {
     if (typeof window === "undefined") return null;
     const btn = collectionsBtnRef.current;
@@ -1122,7 +1179,7 @@ export default function HomePanel({ open, onClose }) {
 
     const gapY = 10;
     const spaceBelow = bottomLimit - (rect.bottom + gapY);
-    const spaceAbove = (rect.top - gapY) - topLimit;
+    const spaceAbove = rect.top - gapY - topLimit;
 
     const desiredMax = clampInt(Math.round((bottomLimit - topLimit) * 0.92), 360, 780);
 
@@ -1141,6 +1198,7 @@ export default function HomePanel({ open, onClose }) {
   }, [isMobile, navH, bottomH]);
 
   const openCollections = useCallback(() => {
+    // ✅ Auto-close any other flyout via single controller (highlights)
     try {
       window.dispatchEvent(
         new CustomEvent("tdls:homepanel:closeFlyouts", { detail: { except: "collections" } })
@@ -1150,13 +1208,35 @@ export default function HomePanel({ open, onClose }) {
     const g = computeCollectionsGeom();
     if (g) setCollectionsGeom(g);
     setCollectionsReady(true);
-    setCollectionsOpen(true);
+    setOpenFlyout("collections");
   }, [computeCollectionsGeom]);
 
   const closeCollections = useCallback(() => {
-    setCollectionsOpen(false);
     setCollectionsReady(false);
+    setOpenFlyout((cur) => (cur === "collections" ? null : cur));
   }, []);
+
+  // ✅ Global closeFlyouts listener so other UI can close ours safely
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      const except = e?.detail?.except || null;
+
+      if (except !== "collections") {
+        if (openFlyoutRef.current === "collections") {
+          setCollectionsReady(false);
+          setOpenFlyout(null);
+        }
+      }
+      if (except !== "highlights") {
+        if (openFlyoutRef.current === "highlights") {
+          setOpenFlyout(null);
+        }
+      }
+    };
+    window.addEventListener("tdls:homepanel:closeFlyouts", handler);
+    return () => window.removeEventListener("tdls:homepanel:closeFlyouts", handler);
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!open || !collectionsOpen) return;
@@ -1186,7 +1266,7 @@ export default function HomePanel({ open, onClose }) {
     const vv = window.visualViewport;
     if (vv?.addEventListener) {
       vv.addEventListener("resize", tick, { passive: true });
-      vv.addEventListener("scroll", tick, { passiveive: true });
+      vv.addEventListener("scroll", tick, { passive: true }); // ✅ fixed typo
     }
 
     return () => {
@@ -1252,24 +1332,117 @@ export default function HomePanel({ open, onClose }) {
     else openCollections();
   };
 
+  // ✅ Highlights preview open/close (desktop intent, not hypersensitive)
+  const openHighlightsPreview = useCallback(() => {
+    if (isMobile) return;
+    if (!layout.showPreview) return;
+
+    // If collections is open, keep it as the only overlay.
+    if (collectionsOpen) return;
+
+    // ✅ single controller: open highlights
+    setOpenFlyout("highlights");
+    try {
+      window.dispatchEvent(
+        new CustomEvent("tdls:homepanel:closeFlyouts", { detail: { except: "highlights" } })
+      );
+    } catch {}
+  }, [isMobile, layout.showPreview, collectionsOpen]);
+
+  const scheduleOpenHighlightsPreview = useCallback(() => {
+    if (isMobile) return;
+    if (!layout.showPreview) return;
+    if (collectionsOpen) return;
+
+    if (highlightsCloseIntentRef.current) {
+      window.clearTimeout(highlightsCloseIntentRef.current);
+      highlightsCloseIntentRef.current = null;
+    }
+    if (openFlyoutRef.current === "highlights") return;
+
+    if (highlightsOpenIntentRef.current) window.clearTimeout(highlightsOpenIntentRef.current);
+    highlightsOpenIntentRef.current = window.setTimeout(() => {
+      openHighlightsPreview();
+      highlightsOpenIntentRef.current = null;
+    }, 160);
+  }, [isMobile, layout.showPreview, collectionsOpen, openHighlightsPreview]);
+
+  // ✅ Close on mouse-leave (but allow moving between section <-> preview without closing)
+  const scheduleCloseHighlightsPreview = useCallback(
+    (e) => {
+      if (isMobile) return;
+      if (!layout.showPreview) return;
+
+      const next = e?.relatedTarget || null;
+      const inPreview = next && previewRef.current?.contains(next);
+      const inSection = next && highlightsSectionRef.current?.contains(next);
+
+      if (inPreview || inSection) return;
+
+      if (highlightsOpenIntentRef.current) {
+        window.clearTimeout(highlightsOpenIntentRef.current);
+        highlightsOpenIntentRef.current = null;
+      }
+      if (highlightsCloseIntentRef.current) window.clearTimeout(highlightsCloseIntentRef.current);
+      highlightsCloseIntentRef.current = window.setTimeout(() => {
+        setOpenFlyout((cur) => (cur === "highlights" ? null : cur));
+        highlightsCloseIntentRef.current = null;
+      }, 420);
+    },
+    [isMobile, layout.showPreview]
+  );
+
+  const cancelCloseHighlightsPreview = useCallback(() => {
+    if (highlightsCloseIntentRef.current) {
+      window.clearTimeout(highlightsCloseIntentRef.current);
+      highlightsCloseIntentRef.current = null;
+    }
+  }, []);
+
+  // ✅ Hover-intent for rail selection (prevents “cursor passing over items = selected”)
+  const scheduleRailHoverIndex = useCallback((idx) => {
+    if (typeof window === "undefined") return;
+    if (railHoverTimerRef.current) window.clearTimeout(railHoverTimerRef.current);
+    railHoverTargetRef.current = idx;
+
+    railHoverTimerRef.current = window.setTimeout(() => {
+      railHoverTimerRef.current = null;
+      const t = railHoverTargetRef.current;
+      if (t >= 0) setHoverIndex(t);
+    }, 140);
+  }, []);
+
+  const cancelRailHoverIndex = useCallback(() => {
+    if (typeof window === "undefined") return;
+    railHoverTargetRef.current = -1;
+    if (railHoverTimerRef.current) window.clearTimeout(railHoverTimerRef.current);
+    railHoverTimerRef.current = null;
+  }, []);
+
   const handleSignOut = async () => {
     try {
-      closeCollections();
+      closeAllFlyouts();
       onClose?.();
       await signOut({ redirect: true, callbackUrl: "/" });
     } catch {}
   };
 
+  // ✅ Collections flyout gesture guard (do not block mouse clicks)
   const onFlyPointerDownCapture = (e) => {
     const g = flyGestureRef.current;
     g.active = true;
     g.moved = false;
     g.sx = e.clientX;
     g.sy = e.clientY;
+    g.pointerType = e.pointerType || "mouse";
   };
   const onFlyPointerMoveCapture = (e) => {
     const g = flyGestureRef.current;
     if (!g.active) return;
+
+    // only treat as “drag” for touch/pen, never for mouse
+    if (g.pointerType === "mouse") return;
+
     if (Math.abs(e.clientX - g.sx) > 8 || Math.abs(e.clientY - g.sy) > 8) g.moved = true;
   };
   const onFlyPointerUpCapture = () => {
@@ -1280,7 +1453,10 @@ export default function HomePanel({ open, onClose }) {
     }, 0);
   };
   const onFlyClickCapture = (e) => {
-    if (flyGestureRef.current.moved) {
+    const g = flyGestureRef.current;
+
+    // Only suppress click if it was a touch/pen drag; never suppress mouse.
+    if (g.pointerType !== "mouse" && g.moved) {
       e.preventDefault();
       e.stopPropagation();
     }
@@ -1557,8 +1733,15 @@ export default function HomePanel({ open, onClose }) {
       <div className="tdls-homepanel-backdrop" aria-hidden="true" />
 
       <div className="tdls-homepanel-stage" role="presentation">
-        {layout.showPreview ? (
-          <div ref={previewRef} className="tdls-homepanel-preview" aria-label="Preview">
+        {/* ✅ Desktop Preview (flyout: opens on hover/click only; auto-closes via single controller) */}
+        {layout.showPreview && highlightsPreviewOpen ? (
+          <div
+            ref={previewRef}
+            className="tdls-homepanel-preview"
+            aria-label="Preview"
+            onMouseEnter={() => cancelCloseHighlightsPreview()}
+            onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
+          >
             <div style={{ padding: 16, borderBottom: `1px solid rgba(255,255,255,.34)` }}>
               <div
                 style={{
@@ -1630,7 +1813,8 @@ export default function HomePanel({ open, onClose }) {
                   right: 12,
                   bottom: 12,
                   borderRadius: 20,
-                  background: "linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.78) 100%)",
+                  background:
+                    "linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.78) 100%)",
                   border: "1px solid rgba(255,255,255,.44)",
                   boxShadow: "0 18px 44px rgba(0,0,0,.18)",
                   padding: 14,
@@ -1730,7 +1914,7 @@ export default function HomePanel({ open, onClose }) {
               className="tdls-homepanel-close"
               aria-label="Close home panel"
               onClick={() => {
-                closeCollections();
+                closeAllFlyouts();
                 onClose?.();
               }}
             >
@@ -1772,7 +1956,7 @@ export default function HomePanel({ open, onClose }) {
                   onMouseEnter={scheduleOpenCollections}
                   onMouseLeave={scheduleCloseCollections}
                   onFocus={() => scheduleOpenCollections()}
-                  onBlur={() => scheduleCloseCollections()}
+                  onBlur={(e) => scheduleCloseCollections(e)}
                   ariaHaspopup="dialog"
                   ariaExpanded={collectionsOpen}
                   ariaControls="tdls-collections-flyout"
@@ -1806,7 +1990,21 @@ export default function HomePanel({ open, onClose }) {
               </div>
             </div>
 
-            <div className="tdls-homepanel-section">
+            <div
+              ref={highlightsSectionRef}
+              className="tdls-homepanel-section"
+              // ✅ Desktop: preview opens only when user intentionally hovers/focuses this section
+              onMouseEnter={() => {
+                cancelCloseHighlightsPreview();
+                scheduleOpenHighlightsPreview();
+              }}
+              onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
+              onFocusCapture={() => {
+                cancelCloseHighlightsPreview();
+                scheduleOpenHighlightsPreview();
+              }}
+              onBlurCapture={(e) => scheduleCloseHighlightsPreview(e)}
+            >
               <div
                 style={{
                   display: "flex",
@@ -1823,14 +2021,22 @@ export default function HomePanel({ open, onClose }) {
                     label="Trending"
                     labelSub={trendingProducts.length ? `${trendingProducts.length}` : ""}
                     active={activeTab === "TRENDING"}
-                    onSelect={setActiveTab}
+                    onSelect={(id) => {
+                      setActiveTab(id);
+                      // ✅ Click intent: open preview on desktop
+                      openHighlightsPreview();
+                    }}
                   />
                   <TabButton
                     id="BEST"
                     label="Best Sellers"
                     labelSub={bestSellerProducts.length ? `${bestSellerProducts.length}` : ""}
                     active={activeTab === "BEST"}
-                    onSelect={setActiveTab}
+                    onSelect={(id) => {
+                      setActiveTab(id);
+                      // ✅ Click intent: open preview on desktop
+                      openHighlightsPreview();
+                    }}
                   />
                 </div>
               </div>
@@ -1869,7 +2075,15 @@ export default function HomePanel({ open, onClose }) {
                   {highlightsError}
                 </div>
               ) : activeList.length > 0 ? (
-                <div className="tdls-homepanel-rail" role="list">
+                <div
+                  className="tdls-homepanel-rail"
+                  role="list"
+                  onMouseEnter={() => {
+                    cancelCloseHighlightsPreview();
+                    scheduleOpenHighlightsPreview();
+                  }}
+                  onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
+                >
                   {activeList.map((it, idx) => (
                     <div key={it.slug || it.id || idx} role="listitem">
                       <RailItem
@@ -1877,6 +2091,8 @@ export default function HomePanel({ open, onClose }) {
                         index={idx}
                         isActive={idx === safeIndex}
                         onHover={setHoverIndex}
+                        onHoverIntent={scheduleRailHoverIndex}
+                        onHoverCancel={cancelRailHoverIndex}
                         onOpen={handleNavigate}
                         fallbackHref={routes.allProducts}
                       />
@@ -2047,16 +2263,44 @@ export default function HomePanel({ open, onClose }) {
             </div>
 
             <div className="tdls-collections-flybody">
-              <HomePanelAllProducts
-                onAfterNavigate={() => {
-                  closeCollections();
-                  onClose?.();
+              {/* ✅ Desktop click navigation fix:
+                  - Mouse clicks are no longer suppressed by the gesture guard.
+                  - Additionally, if any plain <a href="/..."> exists inside, we safely route it. */}
+              <div
+                onClick={(e) => {
+                  // respect modified clicks / already-handled clicks
+                  if (
+                    e.defaultPrevented ||
+                    e.button !== 0 ||
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    e.shiftKey ||
+                    e.altKey
+                  )
+                    return;
+
+                  const a = e.target?.closest?.("a[href]");
+                  if (!a) return;
+
+                  const href = String(a.getAttribute("href") || "");
+                  if (!href || !href.startsWith("/")) return;
+
+                  e.preventDefault();
+                  handleNavigate(href);
                 }}
-                /* ✅ safe hints for selection/nav behavior inside the flyout */
-                isMobile={isMobile}
-                interactionMode={isMobile ? "tap" : "hover"}
-                onRequestNavigate={handleNavigate}
-              />
+              >
+                <HomePanelAllProducts
+                  onAfterNavigate={() => {
+                    closeAllFlyouts();
+                    onClose?.();
+                  }}
+                  /* ✅ safe hints for selection/nav behavior inside the flyout */
+                  isMobile={isMobile}
+                  interactionMode={isMobile ? "tap" : "hover"}
+                  hoverIntentMs={160}
+                  onRequestNavigate={handleNavigate}
+                />
+              </div>
 
               {/* ✅ Bottom spacer: ensures the last clickable options are visible comfortably */}
               <div aria-hidden="true" style={{ height: isMobile ? 18 : 14 }} />

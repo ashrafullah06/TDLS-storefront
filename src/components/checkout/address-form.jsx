@@ -145,6 +145,9 @@ export default function AddressForm({
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
+  // Compact-by-default optional fields (reduces vertical height substantially)
+  const [showOptional, setShowOptional] = useState(false);
+
   const lastDraftSigRef = useRef("");
   const saveTimerRef = useRef(null);
 
@@ -484,7 +487,6 @@ export default function AddressForm({
       const res = await onSubmit?.(candidate);
       if (res === false) return;
     } catch (err) {
-      // If API/DB save fails, do not silently succeed
       setError(
         "Could not save your address. Please try again. If the problem continues, refresh the page and re-submit."
       );
@@ -537,8 +539,9 @@ export default function AddressForm({
         ))}
       </datalist>
 
+      {/* Primary user + required address fields (always visible) */}
       {includeUserFields ? (
-        <div className="ca-grid">
+        <div className="ca-grid cols3">
           <div className={`ca-field${fieldErrors.name ? " invalid" : ""}`}>
             <label>
               Full name <span className="req">*</span>
@@ -591,52 +594,8 @@ export default function AddressForm({
         </div>
       ) : null}
 
-      <div className="ca-grid">
-        <div className="ca-field">
-          <label>House No</label>
-          <input
-            name="houseNo"
-            autoComplete="address-line1"
-            value={vals.houseNo || ""}
-            onChange={(e) => setField("houseNo", e.target.value)}
-            placeholder="House No"
-            onBlur={() => rememberField("houseNo", vals.houseNo)}
-          />
-        </div>
-        <div className="ca-field">
-          <label>House Name</label>
-          <input
-            name="houseName"
-            value={vals.houseName || ""}
-            onChange={(e) => setField("houseName", e.target.value)}
-            placeholder="House Name"
-            onBlur={() => rememberField("houseName", vals.houseName)}
-          />
-        </div>
-        <div className="ca-field">
-          <label>Apartment No</label>
-          <input
-            name="apartmentNo"
-            value={vals.apartmentNo || ""}
-            onChange={(e) => setField("apartmentNo", e.target.value)}
-            placeholder="Apartment"
-            onBlur={() => rememberField("apartmentNo", vals.apartmentNo)}
-          />
-        </div>
-        <div className="ca-field">
-          <label>Floor No</label>
-          <input
-            name="floorNo"
-            value={vals.floorNo || ""}
-            onChange={(e) => setField("floorNo", e.target.value)}
-            placeholder="Floor"
-            onBlur={() => rememberField("floorNo", vals.floorNo)}
-          />
-        </div>
-      </div>
-
-      <div className="ca-grid">
-        <div className={`ca-field ca-span3${fieldErrors.streetAddress ? " invalid" : ""}`}>
+      <div className="ca-grid cols4">
+        <div className={`ca-field ca-span4${fieldErrors.streetAddress ? " invalid" : ""}`}>
           <label>
             Street Address <span className="req">*</span>
           </label>
@@ -651,21 +610,9 @@ export default function AddressForm({
             onBlur={() => rememberField("streetAddress", vals.streetAddress)}
           />
         </div>
-        <div className="ca-field ca-span3">
-          <label>Address line 2 (optional)</label>
-          <input
-            name="addressLine2"
-            autoComplete="address-line2"
-            autoCapitalize="words"
-            value={vals.address2 || ""}
-            onChange={(e) => setField("address2", e.target.value)}
-            placeholder="Nearby landmark / extra details"
-            onBlur={() => rememberField("address2", vals.address2)}
-          />
-        </div>
       </div>
 
-      <div className="ca-grid">
+      <div className="ca-grid cols4">
         <div className={`ca-field${fieldErrors.upazila ? " invalid" : ""}`}>
           <label>
             Upazila / City <span className="req">*</span>
@@ -725,55 +672,134 @@ export default function AddressForm({
         </div>
       </div>
 
-      <div className="ca-grid">
-        <div className="ca-field">
-          <label>Post Office (optional)</label>
-          <input
-            name="postOffice"
-            list="dl-po"
-            autoCapitalize="words"
-            value={vals.postOffice || ""}
-            onChange={(e) => setField("postOffice", e.target.value)}
-            placeholder="Post Office"
-            onBlur={() => rememberField("postOffice", vals.postOffice)}
-          />
+      {/* Optional fields toggle (compress vertical height) */}
+      <button
+        type="button"
+        className="ca-morebtn"
+        onClick={() => setShowOptional((v) => !v)}
+        aria-expanded={showOptional}
+        aria-controls="ca-optional"
+      >
+        <span className="t">
+          {showOptional ? "Hide optional address details" : "Add optional address details"}
+        </span>
+        <span className="i" aria-hidden="true">
+          {showOptional ? "▴" : "▾"}
+        </span>
+      </button>
+
+      {showOptional ? (
+        <div id="ca-optional" className="ca-optional">
+          <div className="ca-grid cols4">
+            <div className="ca-field">
+              <label>House No</label>
+              <input
+                name="houseNo"
+                autoComplete="address-line1"
+                value={vals.houseNo || ""}
+                onChange={(e) => setField("houseNo", e.target.value)}
+                placeholder="House No"
+                onBlur={() => rememberField("houseNo", vals.houseNo)}
+              />
+            </div>
+            <div className="ca-field">
+              <label>House Name</label>
+              <input
+                name="houseName"
+                value={vals.houseName || ""}
+                onChange={(e) => setField("houseName", e.target.value)}
+                placeholder="House Name"
+                onBlur={() => rememberField("houseName", vals.houseName)}
+              />
+            </div>
+            <div className="ca-field">
+              <label>Apartment No</label>
+              <input
+                name="apartmentNo"
+                value={vals.apartmentNo || ""}
+                onChange={(e) => setField("apartmentNo", e.target.value)}
+                placeholder="Apartment"
+                onBlur={() => rememberField("apartmentNo", vals.apartmentNo)}
+              />
+            </div>
+            <div className="ca-field">
+              <label>Floor No</label>
+              <input
+                name="floorNo"
+                value={vals.floorNo || ""}
+                onChange={(e) => setField("floorNo", e.target.value)}
+                placeholder="Floor"
+                onBlur={() => rememberField("floorNo", vals.floorNo)}
+              />
+            </div>
+          </div>
+
+          <div className="ca-grid cols4">
+            <div className="ca-field ca-span4">
+              <label>Address line 2 (optional)</label>
+              <input
+                name="addressLine2"
+                autoComplete="address-line2"
+                autoCapitalize="words"
+                value={vals.address2 || ""}
+                onChange={(e) => setField("address2", e.target.value)}
+                placeholder="Nearby landmark / extra details"
+                onBlur={() => rememberField("address2", vals.address2)}
+              />
+            </div>
+          </div>
+
+          <div className="ca-grid cols4">
+            <div className="ca-field">
+              <label>Post Office (optional)</label>
+              <input
+                name="postOffice"
+                list="dl-po"
+                autoCapitalize="words"
+                value={vals.postOffice || ""}
+                onChange={(e) => setField("postOffice", e.target.value)}
+                placeholder="Post Office"
+                onBlur={() => rememberField("postOffice", vals.postOffice)}
+              />
+            </div>
+            <div className="ca-field">
+              <label>Union (optional)</label>
+              <input
+                name="union"
+                list="dl-union"
+                autoCapitalize="words"
+                value={vals.union || ""}
+                onChange={(e) => setField("union", e.target.value)}
+                placeholder="Union"
+                onBlur={() => rememberField("union", vals.union)}
+              />
+            </div>
+            <div className="ca-field">
+              <label>Police Station / Thana (optional)</label>
+              <input
+                name="policeStation"
+                list="dl-ps"
+                autoCapitalize="words"
+                value={vals.policeStation || vals.thana || ""}
+                onChange={(e) => setField("policeStation", e.target.value)}
+                placeholder="Police Station / Thana"
+                onBlur={() => rememberField("policeStation", vals.policeStation)}
+              />
+            </div>
+            <div className="ca-field">
+              <label>Country</label>
+              <select
+                name="country"
+                autoComplete="country"
+                value={(vals.countryIso2 || "BD").toString().toUpperCase()}
+                onChange={(e) => setField("countryIso2", e.target.value)}
+              >
+                <option value="BD">Bangladesh (BD)</option>
+              </select>
+            </div>
+          </div>
         </div>
-        <div className="ca-field">
-          <label>Union (optional)</label>
-          <input
-            name="union"
-            list="dl-union"
-            autoCapitalize="words"
-            value={vals.union || ""}
-            onChange={(e) => setField("union", e.target.value)}
-            placeholder="Union"
-            onBlur={() => rememberField("union", vals.union)}
-          />
-        </div>
-        <div className="ca-field">
-          <label>Police Station / Thana (optional)</label>
-          <input
-            name="policeStation"
-            list="dl-ps"
-            autoCapitalize="words"
-            value={vals.policeStation || vals.thana || ""}
-            onChange={(e) => setField("policeStation", e.target.value)}
-            placeholder="Police Station / Thana"
-            onBlur={() => rememberField("policeStation", vals.policeStation)}
-          />
-        </div>
-        <div className="ca-field">
-          <label>Country</label>
-          <select
-            name="country"
-            autoComplete="country"
-            value={(vals.countryIso2 || "BD").toString().toUpperCase()}
-            onChange={(e) => setField("countryIso2", e.target.value)}
-          >
-            <option value="BD">Bangladesh (BD)</option>
-          </select>
-        </div>
-      </div>
+      ) : null}
 
       {showMakeDefault || forceDefault ? (
         <label className="chk">
@@ -800,24 +826,34 @@ export default function AddressForm({
       </div>
 
       <style jsx>{`
-        /* Center + widen the form, reduce vertical height */
+        /* ---------------------------------------------------------
+         * Key goal: never sit underneath Navbar + BottomFloatingBar
+         * --------------------------------------------------------- */
         .ca-form {
-          width: min(1180px, 100%);
+          width: min(1320px, 100%);
           margin: 0 auto;
           display: grid;
-          gap: 10px;
+          gap: 8px;
 
-          /* Default (desktop): keep as-is to preserve desktop layout */
-          padding: 10px 12px;
-          padding-top: calc(10px + env(safe-area-inset-top));
+          /* Always reserve space for fixed bars (desktop + mobile) */
+          padding-left: 12px;
+          padding-right: 12px;
+          padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
           padding-bottom: calc(
-            12px + env(safe-area-inset-bottom) + var(--bottom-floating-h, 0px)
+            10px + env(safe-area-inset-bottom) +
+              max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
           );
 
           align-content: start;
           box-sizing: border-box;
           max-width: 100%;
           overflow-x: clip;
+
+          /* Makes long forms usable without being hidden under bars */
+          scroll-padding-top: calc(env(safe-area-inset-top) + var(--navbar-h, 96px) + 12px);
+          scroll-padding-bottom: calc(
+            env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) + 16px
+          );
         }
 
         .ca-title {
@@ -839,36 +875,39 @@ export default function AddressForm({
           border: 1px solid #fecdd3;
           color: #9f1239;
           border-radius: 14px;
-          padding: 10px 12px;
+          padding: 9px 11px;
           font-weight: 800;
           font-size: 12.5px;
           line-height: 1.25;
         }
 
-        /* Desktop: triple column, premium spacing, no clipping */
+        /* Dense, wide grids (reduces vertical height by using horizontal space) */
         .ca-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(160px, 1fr));
-          gap: 10px;
+          gap: 8px;
           align-items: start;
           min-width: 0;
         }
-        .ca-span2 {
-          grid-column: span 2;
+        .ca-grid.cols3 {
+          grid-template-columns: repeat(3, minmax(180px, 1fr));
         }
-        .ca-span3 {
-          grid-column: span 3;
+        .ca-grid.cols4 {
+          grid-template-columns: repeat(4, minmax(160px, 1fr));
+        }
+
+        .ca-span4 {
+          grid-column: span 4;
         }
 
         .ca-field {
           display: grid;
-          gap: 6px;
+          gap: 5px;
           min-width: 0;
         }
         .ca-field label {
           color: ${NAVY};
           font-weight: 900;
-          font-size: 11px;
+          font-size: 10.5px;
           line-height: 1.1;
           letter-spacing: 0.12em;
           text-transform: uppercase;
@@ -892,13 +931,13 @@ export default function AddressForm({
           box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14) !important;
         }
 
-        /* Deep-pond input style: inset shadows + soft depth + safe inner padding */
+        /* Inputs: slightly shorter to compress vertical height */
         .ca-field input,
         .ca-field select {
-          height: 44px;
+          height: 42px;
           border: 1px solid rgba(223, 227, 236, 0.95);
           border-radius: 14px;
-          padding: 0 14px; /* safe distance from edges (your request) */
+          padding: 0 14px;
           font-weight: 800;
           font-size: 13px;
           color: ${NAVY};
@@ -930,6 +969,43 @@ export default function AddressForm({
           transform: translateY(-0.5px);
         }
 
+        /* Optional section toggle (compact, premium, not tall) */
+        .ca-morebtn {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          width: 100%;
+          border: 1px solid rgba(223, 227, 236, 0.95);
+          background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+          border-radius: 14px;
+          padding: 10px 12px;
+          color: ${NAVY};
+          font-weight: 900;
+          font-size: 12.5px;
+          box-shadow: 0 10px 22px rgba(15, 33, 71, 0.06);
+          cursor: pointer;
+          user-select: none;
+          touch-action: manipulation;
+        }
+        .ca-morebtn .t {
+          letter-spacing: 0.01em;
+        }
+        .ca-morebtn .i {
+          opacity: 0.7;
+          font-size: 14px;
+          line-height: 1;
+        }
+        .ca-morebtn:active {
+          transform: translateY(0.5px);
+        }
+
+        .ca-optional {
+          display: grid;
+          gap: 8px;
+          padding-top: 2px;
+        }
+
         .chk {
           display: flex;
           align-items: center;
@@ -944,11 +1020,11 @@ export default function AddressForm({
           display: flex;
           gap: 10px;
           justify-content: flex-end;
-          padding-top: 6px;
+          padding-top: 4px;
           flex-wrap: wrap;
         }
         .ca-btn {
-          height: 44px;
+          height: 42px;
           border-radius: 9999px;
           font-weight: 900;
           padding: 0 18px;
@@ -959,6 +1035,7 @@ export default function AddressForm({
           box-shadow: 0 10px 18px rgba(15, 33, 71, 0.06);
           transition: transform 120ms ease, box-shadow 150ms ease;
           max-width: 100%;
+          touch-action: manipulation;
         }
         .ca-btn:hover {
           transform: translateY(-1px);
@@ -981,38 +1058,31 @@ export default function AddressForm({
         }
 
         @media (max-width: 1024px) {
-          /* Ensure safe top/bottom distance under fixed navbar/bottom bar on smaller screens */
           .ca-form {
             width: min(980px, 100%);
             padding-left: 12px;
             padding-right: 12px;
-
-            /* Parent can override with --navbar-h; fallback 96px */
-            padding-top: calc(10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
-
-            /* If BottomFloatingBar doesn't set --bottom-floating-h, keep a safe fallback */
+            padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
             padding-bottom: calc(
-              12px + env(safe-area-inset-bottom) +
-                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 76px))
+              10px + env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
             );
           }
 
-          .ca-grid {
+          .ca-grid.cols4,
+          .ca-grid.cols3 {
             grid-template-columns: repeat(2, minmax(160px, 1fr));
           }
-          .ca-span3 {
+          .ca-span4 {
             grid-column: span 2;
           }
         }
 
         @media (max-width: 640px) {
-          /* Mobile: scale down CTA + fonts; never overflow; keep premium density */
           .ca-form {
-            width: 100%;
             padding-left: 10px;
             padding-right: 10px;
-
-            padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 84px));
+            padding-top: calc(6px + env(safe-area-inset-top) + var(--navbar-h, 84px));
             padding-bottom: calc(
               10px + env(safe-area-inset-bottom) +
                 max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
@@ -1030,15 +1100,6 @@ export default function AddressForm({
             padding: 9px 10px;
           }
 
-          .ca-grid {
-            grid-template-columns: repeat(2, minmax(140px, 1fr));
-            gap: 9px;
-          }
-          .ca-span2,
-          .ca-span3 {
-            grid-column: span 2;
-          }
-
           .ca-field label {
             font-size: 10px;
             letter-spacing: 0.11em;
@@ -1046,10 +1107,15 @@ export default function AddressForm({
 
           .ca-field input,
           .ca-field select {
-            height: 40px;
+            height: 38px;
             border-radius: 13px;
             padding: 0 12px;
             font-size: 12.5px;
+          }
+
+          .ca-morebtn {
+            padding: 9px 11px;
+            font-size: 12.25px;
           }
 
           .chk {
@@ -1064,23 +1130,19 @@ export default function AddressForm({
             height: 40px;
             font-size: 12.5px;
             padding: 0 14px;
-            flex: 1 1 160px; /* prevents overflow in landscape, wraps if needed */
+            flex: 1 1 160px; /* wraps in landscape; never overflows */
           }
         }
 
         @media (max-width: 420px) {
-          .ca-grid {
+          .ca-grid.cols4,
+          .ca-grid.cols3 {
             grid-template-columns: 1fr;
           }
-          .ca-span2,
-          .ca-span3 {
+          .ca-span4 {
             grid-column: span 1;
           }
-          .ca-field input,
-          .ca-field select {
-            height: 40px;
-            font-size: 12.25px;
-          }
+
           .ca-btn {
             flex: 1 1 auto;
             width: 100%;

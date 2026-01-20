@@ -58,14 +58,15 @@ export const metadata = {
  * - Dev: http://localhost:3000
  * - Prod: https://www.thednalabstore.com
  */
-function resolveRequestBaseUrl() {
+async function resolveRequestBaseUrl() {
   try {
-    const h = headers();
+    const h = await headers(); // ✅ Next.js 15: headers() is async
     const host =
       h.get("x-forwarded-host") ||
       h.get("host") ||
       SITE_URL.replace(/^https?:\/\//i, "");
-    const proto = h.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
+    const proto =
+      h.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
     return `${proto}://${host}`.replace(/\/+$/, "");
   } catch {
     return SITE_URL.replace(/\/+$/, "");
@@ -153,7 +154,7 @@ async function fetchProductsFromStrapi(appBaseUrl) {
 /* ───────── Page component ───────── */
 
 export default async function ProductIndexPage() {
-  const requestBaseUrl = resolveRequestBaseUrl();
+  const requestBaseUrl = await resolveRequestBaseUrl(); // ✅ await the async helper
 
   const products = await fetchProductsFromStrapi(requestBaseUrl);
   const safeList = Array.isArray(products) ? products : [];

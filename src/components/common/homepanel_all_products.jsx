@@ -144,7 +144,11 @@ function pickSlugs(obj) {
   }
 
   const one =
-    obj?.attributes?.slug || obj?.slug || obj?.attributes?.name || obj?.name || null;
+    obj?.attributes?.slug ||
+    obj?.slug ||
+    obj?.attributes?.name ||
+    obj?.name ||
+    null;
   return one ? [normSlug(one)] : [];
 }
 
@@ -237,7 +241,13 @@ function sortByOrderThenAlpha(items, audience, labelsList) {
   });
 }
 
-const SEASON_BADGE_SLUGS = ["winter", "on-sale", "new-arrival", "monsoon", "summer"];
+const SEASON_BADGE_SLUGS = [
+  "winter",
+  "on-sale",
+  "new-arrival",
+  "monsoon",
+  "summer",
+];
 const BADGE_LABEL = {
   winter: "Winter",
   "on-sale": "Sale",
@@ -257,7 +267,12 @@ function badgesFromAudiences(product) {
 }
 
 /* ===================== MENU BUILDERS (copied from BFBar, unchanged) ===================== */
-function buildMWHD(products, audSlug, labels, prefix = `/collections/${normSlug(audSlug)}`) {
+function buildMWHD(
+  products,
+  audSlug,
+  labels,
+  prefix = `/collections/${normSlug(audSlug)}`
+) {
   const buckets = new Map(); // cat => sub => node
   products
     .filter((p) => hasAudience(p, audSlug))
@@ -400,13 +415,17 @@ function buildAccessories(products, labels, prefix = "/collections/accessories")
       }
     }
 
-    if (children.length)
-      options.push({ label: supLabel, href: `${prefix}${supSegment}`, children });
+    if (children.length) options.push({ label: supLabel, href: `${prefix}${supSegment}`, children });
   }
   return options.sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function buildKidsYoung(products, audSlug, labels, prefix = `/collections/${normSlug(audSlug)}`) {
+function buildKidsYoung(
+  products,
+  audSlug,
+  labels,
+  prefix = `/collections/${normSlug(audSlug)}`
+) {
   const tree = new Map(); // gender -> age -> cat -> sub
   products
     .filter((p) => hasAudience(p, audSlug))
@@ -547,57 +566,27 @@ function buildSeasonal(products, seasonSlug, labels) {
   const sections = [];
 
   const kidsPrefix = `/collections/${seasonalKey}/kids`;
-  const kids = buildKidsYoung(
-    seasonal.filter((p) => hasAudience(p, "kids")),
-    "kids",
-    labels,
-    kidsPrefix
-  );
+  const kids = buildKidsYoung(seasonal.filter((p) => hasAudience(p, "kids")), "kids", labels, kidsPrefix);
   if (kids.length) sections.push({ label: "Kids", href: kidsPrefix, children: kids });
 
   const youngPrefix = `/collections/${seasonalKey}/young`;
-  const young = buildKidsYoung(
-    seasonal.filter((p) => hasAudience(p, "young")),
-    "young",
-    labels,
-    youngPrefix
-  );
+  const young = buildKidsYoung(seasonal.filter((p) => hasAudience(p, "young")), "young", labels, youngPrefix);
   if (young.length) sections.push({ label: "Young", href: youngPrefix, children: young });
 
   const accessoriesPrefix = `/collections/${seasonalKey}/accessories`;
-  const accessories = buildAccessories(
-    seasonal.filter((p) => hasAudience(p, "accessories")),
-    labels,
-    accessoriesPrefix
-  );
-  if (accessories.length)
-    sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
+  const accessories = buildAccessories(seasonal.filter((p) => hasAudience(p, "accessories")), labels, accessoriesPrefix);
+  if (accessories.length) sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
-  const men = buildMWHD(
-    seasonal.filter((p) => hasAudience(p, "men")),
-    "men",
-    labels,
-    menPrefix
-  );
+  const men = buildMWHD(seasonal.filter((p) => hasAudience(p, "men")), "men", labels, menPrefix);
   if (men.length) sections.push({ label: "Men", href: menPrefix, children: men });
 
   const womenPrefix = `/collections/${seasonalKey}/women`;
-  const women = buildMWHD(
-    seasonal.filter((p) => hasAudience(p, "women")),
-    "women",
-    labels,
-    womenPrefix
-  );
+  const women = buildMWHD(seasonal.filter((p) => hasAudience(p, "women")), "women", labels, womenPrefix);
   if (women.length) sections.push({ label: "Women", href: womenPrefix, children: women });
 
   const homePrefix = `/collections/${seasonalKey}/home-decor`;
-  const home = buildMWHD(
-    seasonal.filter((p) => hasAudience(p, "home-decor")),
-    "home-decor",
-    labels,
-    homePrefix
-  );
+  const home = buildMWHD(seasonal.filter((p) => hasAudience(p, "home-decor")), "home-decor", labels, homePrefix);
   if (home.length) sections.push({ label: "Home Décor", href: homePrefix, children: home });
 
   return sections;
@@ -757,15 +746,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         if (cancelled) return;
 
         const nextProducts =
-          ps.status === "fulfilled" && Array.isArray(ps.value)
-            ? ps.value.map(toLiteProduct)
-            : [];
-        const nextAge =
-          ags.status === "fulfilled" && Array.isArray(ags.value) ? ags.value : [];
-        const nextCats =
-          cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
-        const nextAud =
-          auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
+          ps.status === "fulfilled" && Array.isArray(ps.value) ? ps.value.map(toLiteProduct) : [];
+        const nextAge = ags.status === "fulfilled" && Array.isArray(ags.value) ? ags.value : [];
+        const nextCats = cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
+        const nextAud = auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
 
         if (!nextProducts.length) setFetchError(true);
 
@@ -943,6 +927,58 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     }
   };
 
+  /* ===================== Desktop hover-intent (previews options without hypersensitivity) ===================== */
+  const hoverTimerRef = useRef(null);
+  const hoverKeyRef = useRef("");
+  const ignoreHoverUntilRef = useRef(0);
+
+  const cancelHoverIntent = () => {
+    try {
+      if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+    } catch {}
+    hoverTimerRef.current = null;
+    hoverKeyRef.current = "";
+  };
+
+  useEffect(() => {
+    return () => cancelHoverIntent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const previewAudience = (item) => {
+    if (!item?.key) return;
+    if (active?.key === item.key) return;
+
+    setActive(item);
+    try {
+      window.localStorage.setItem(LS_LAST_KEY, String(item.key));
+    } catch {}
+
+    const next = computeOptions(item.key);
+    setSubOptions(next);
+  };
+
+  const schedulePreview = (item) => {
+    if (!item?.key) return;
+    if (isMobile) return; // mobile uses click/tap only
+    if (Date.now() < (ignoreHoverUntilRef.current || 0)) return;
+
+    cancelHoverIntent();
+    hoverKeyRef.current = String(item.key);
+
+    // Hover-intent delay prevents accidental selection when passing over items.
+    hoverTimerRef.current = window.setTimeout(() => {
+      if (hoverKeyRef.current !== String(item.key)) return;
+      previewAudience(item);
+    }, 170);
+  };
+
+  const onLeftWheel = () => {
+    // When scrolling the left list, do NOT switch selection from incidental hover.
+    ignoreHoverUntilRef.current = Date.now() + 240;
+    cancelHoverIntent();
+  };
+
   const activeHref = active?.key ? `/collections/${normSlug(active.key)}` : "/collections";
 
   return (
@@ -1104,6 +1140,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           transition: background .16s ease, border-color .16s ease, transform .10s ease, color .16s ease;
           min-height: var(--tap-target-min, 44px);
           touch-action: manipulation;
+
+          /* Link-safe (desktop audience items are Links) */
+          display: block;
+          text-decoration: none;
         }
         .hpFly-audBtn[data-active="true"]{
           border-color: rgba(189,160,77,.95);
@@ -1291,6 +1331,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
             if (!a) return;
             const href = String(a.getAttribute("href") || "");
             if (!href.startsWith("/")) return;
+
             window.setTimeout(() => onAfterNavigate?.(), 0);
           }}
         >
@@ -1424,23 +1465,30 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
           {/* =============== DESKTOP/TABLET: split layout preserved =============== */}
           <div className="hpFly-grid" aria-label="Collections flyout (desktop)">
-            <div className="hpFly-left">
+            <div className="hpFly-left" onWheel={onLeftWheel}>
               <div className="hpFly-kicker">Choose</div>
 
               <div className="hpFly-stack" aria-label="Collections list">
                 {(barItems || []).map((item) => {
                   const isActive = active?.key === item.key;
+                  const href = `/collections/${normSlug(item.key)}`;
+
                   return (
-                    <button
+                    <Link
                       key={item.key}
-                      type="button"
+                      href={href}
+                      prefetch
                       className="hpFly-audBtn"
                       data-active={isActive ? "true" : "false"}
-                      aria-pressed={isActive}
-                      onClick={() => toggleAudience(item)}
+                      aria-current={isActive ? "page" : undefined}
+                      // Hover/focus previews the right panel (with intent delay; not hypersensitive)
+                      onMouseEnter={() => schedulePreview(item)}
+                      onMouseLeave={() => cancelHoverIntent()}
+                      onFocus={() => previewAudience(item)}
+                      onBlur={() => cancelHoverIntent()}
                     >
                       {item.label}
-                    </button>
+                    </Link>
                   );
                 })}
               </div>

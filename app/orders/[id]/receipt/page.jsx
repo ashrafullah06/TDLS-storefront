@@ -1,9 +1,11 @@
+//my-project/app/orders/[id]/receipt/page.jsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import Script from "next/script";
 
 import CartClearOnReceipt from "@/components/checkout/cart-clear-on-receipt";
 // import ReceiptDownloadButton from "@/components/checkout/receipt-download-button"; // replaced with direct <a> for production-safe download
@@ -370,6 +372,58 @@ function prettyKind(kind) {
   return k.replace(/_/g, " ");
 }
 
+/* ───────── filename helpers (download-safe) ───────── */
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function safeFilenamePart(input, fallback = "Customer") {
+  const raw = String(input || "").trim() || fallback;
+  return raw
+    .replace(/[\/\\:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+}
+
+function dhakaParts(dateLike) {
+  try {
+    const d = new Date(dateLike);
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Dhaka",
+      year: "2-digit",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(d);
+
+    const get = (t) => parts.find((p) => p.type === t)?.value || "00";
+    return { dd: get("day"), mm: get("month"), yy: get("year"), HH: get("hour"), MI: get("minute"), SS: get("second") };
+  } catch {
+    const d = new Date(dateLike);
+    return {
+      dd: pad2(d.getDate()),
+      mm: pad2(d.getMonth() + 1),
+      yy: String(d.getFullYear()).slice(-2),
+      HH: pad2(d.getHours()),
+      MI: pad2(d.getMinutes()),
+      SS: pad2(d.getSeconds()),
+    };
+  }
+}
+
+function buildReceiptFilename({ placedAt, customerName, orderNumber }) {
+  const { dd, mm, yy, HH, MI, SS } = dhakaParts(placedAt || Date.now());
+  const who = safeFilenamePart(customerName, "Customer").replace(/\s+/g, "_");
+  const ord = safeFilenamePart(orderNumber || "", "").replace(/\s+/g, "_");
+  const base = ord ? `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}-${ord}` : `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}`;
+  return `${base}.pdf`;
+}
+
 /* ───────── server component ───────── */
 
 export default async function ReceiptPage({ params }) {
@@ -459,6 +513,17 @@ export default async function ReceiptPage({ params }) {
   } else if (rawPhone) {
     downloadParams.set("phone", String(rawPhone));
   }
+
+  // ✅ NEW: deterministic download filename (safe on Windows/Android/iOS)
+  const downloadName = buildReceiptFilename({
+    placedAt: order.placedAt || order.createdAt,
+    customerName: displayName || "Customer",
+    orderNumber: String(order.orderNumber || ""),
+  });
+
+  // Optional: allow API route to use filename for Content-Disposition (if implemented)
+  downloadParams.set("filename", downloadName);
+
   const invoiceHref = `/api/orders/${encodeURIComponent(order.id)}/invoice?${downloadParams.toString()}`;
 
   return (
@@ -743,14 +808,14 @@ export default async function ReceiptPage({ params }) {
               </div>
 
               <div className="actions no-print">
-                {/* ✅ FIX: production-safe download (direct link with guest verification params) */}
+                {/* ✅ FIX: hardened download — stable filename + no error.txt generation */}
                 <a
+                  id="tdls-receipt-download"
                   href={invoiceHref}
                   className="btn"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  // download attr is best-effort; Content-Disposition on API route enforces attachment
-                  download
+                  // download filename is enforced by JS fallback; also works natively in many browsers
+                  download={downloadName}
+                  data-filename={downloadName}
                 >
                   Download Receipt
                 </a>
@@ -773,6 +838,84 @@ export default async function ReceiptPage({ params }) {
         </div>
 
         <div aria-hidden="true" className="h-24" />
+
+        {/* ✅ NEW: robust downloader to prevent "site not available" + "error.txt" */}
+        <Script
+          id="tdls-receipt-download-script"
+          strategy="afterInteractive"
+          dangerouslySetInnerHTML={{
+            __html: `
+(function(){
+  var a = document.getElementById("tdls-receipt-download");
+  if (!a) return;
+
+  var busy = false;
+
+  a.addEventListener("click", function(e){
+    // If browser handles download natively and JS fails, default still works.
+    // Here we intercept to prevent blob-url revoke timing issues and "error.txt" downloads.
+    if (busy) { e.preventDefault(); return; }
+
+    var href = a.getAttribute("href") || "";
+    if (!href) return;
+
+    var filename = a.getAttribute("download") || (a.dataset && a.dataset.filename) || "TDLS-receipt.pdf";
+
+    // If user holds modifiers (open new tab), let default happen.
+    if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
+
+    e.preventDefault();
+    busy = true;
+
+    try { a.setAttribute("aria-busy","true"); } catch(_){}
+
+    (async function(){
+      try{
+        var res = await fetch(href, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: { "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8" }
+        });
+
+        if (!res || !res.ok) throw new Error("HTTP_" + (res ? res.status : "0"));
+
+        var ct = String(res.headers.get("content-type") || "").toLowerCase();
+        var blob = await res.blob();
+
+        // Hard validation: do NOT download server error text/html as a file.
+        var looksPdf = ct.indexOf("pdf") !== -1 || (blob && String(blob.type || "").toLowerCase().indexOf("pdf") !== -1);
+        if (!looksPdf && blob && blob.size < 2048) throw new Error("NON_PDF_SMALL");
+
+        var url = URL.createObjectURL(blob);
+        var tmp = document.createElement("a");
+        tmp.href = url;
+        tmp.download = filename;
+        tmp.style.display = "none";
+        document.body.appendChild(tmp);
+
+        // Must be in the click call-stack (still within handler async turn).
+        tmp.click();
+
+        // Delayed revoke avoids Chrome "site not available" in download history.
+        setTimeout(function(){
+          try{ URL.revokeObjectURL(url); }catch(_){}
+          try{ tmp.remove(); }catch(_){}
+        }, 4000);
+
+      }catch(err){
+        // Fallback: allow native handling (works when API sets Content-Disposition attachment).
+        try{ window.location.assign(href); }catch(_){}
+      }finally{
+        busy = false;
+        try { a.removeAttribute("aria-busy"); } catch(_){}
+      }
+    })();
+  }, { passive: false });
+})();
+            `,
+          }}
+        />
 
         <style>{`
           .receipt{background:#fff;border-radius:18px;box-shadow:0 12px 40px rgba(15,33,71,.10);padding:18px 18px 16px;border:1px solid rgba(15,33,71,.08)}
