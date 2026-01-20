@@ -1,4 +1,3 @@
-// FILE: app/customer/dashboard/page.jsx
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -320,7 +319,7 @@ function SafePanel({ title, children }) {
     return /failed to fetch|networkerror|load failed/i.test(m);
   }, []);
 
-  const blockNow = useCallback((msg) => {
+  const blockNow = useCallback(() => {
     if (blockedRef.current) return;
     blockedRef.current = true;
     setBlocked(true);
@@ -337,7 +336,7 @@ function SafePanel({ title, children }) {
       try {
         e?.preventDefault?.();
       } catch {}
-      blockNow(msg);
+      blockNow();
     };
 
     const onRejection = (e) => {
@@ -347,7 +346,7 @@ function SafePanel({ title, children }) {
       try {
         e?.preventDefault?.();
       } catch {}
-      blockNow(msg);
+      blockNow();
     };
 
     window.addEventListener('error', onError);
@@ -431,19 +430,34 @@ export default function Dashboard() {
     [router, buildLoginUrl],
   );
 
-  // If NextAuth session fetch gets stuck (network/proxy) we must avoid endless spinner,
-  // BUT we must NOT sign out active customers just because the network is slow.
+  // NEW: prevent “panic sign out” while status is loading:
+  // - Never sign out on fetch errors/timeouts.
+  // - If session endpoint returns null, confirm once more before signing out.
+  // - Optionally attempt one router.refresh() if NextAuth is stuck in loading too long.
+  const sessionNullConfirmRef = useRef(false);
+  const refreshedOnceRef = useRef(false);
+
+  useEffect(() => {
+    if (status !== 'loading') {
+      sessionNullConfirmRef.current = false;
+      refreshedOnceRef.current = false;
+    }
+  }, [status]);
+
   useEffect(() => {
     if (authLost) return;
     if (status !== 'loading') return;
 
-    const SESSION_SOFT_TIMEOUT_MS = 1500;
-    const SESSION_FETCH_TIMEOUT_MS = 6000;
+    const SESSION_SOFT_TIMEOUT_MS = 2500;
+    const SESSION_CONFIRM_DELAY_MS = 900;
+    const SESSION_FETCH_TIMEOUT_MS = 5000;
+    const SESSION_STUCK_REFRESH_MS = 7000;
 
-    const t = setTimeout(async () => {
-      // If status already resolved, do nothing.
-      if (statusRef.current !== 'loading') return;
+    let softTimer = null;
+    let confirmTimer = null;
+    let refreshTimer = null;
 
+    const probeSession = async () => {
       try {
         const controller = new AbortController();
         const tt = setTimeout(() => controller.abort(), SESSION_FETCH_TIMEOUT_MS);
@@ -451,23 +465,73 @@ export default function Dashboard() {
         const r = await fetch('/api/auth/session', { cache: 'no-store', signal: controller.signal });
         clearTimeout(tt);
 
-        // IMPORTANT CHANGE:
-        // - Do NOT sign out on non-OK / timeout / network errors.
-        // - Only sign out when session endpoint confirms logged out (null / no user).
-        if (!r.ok) return;
+        // IMPORTANT: never sign out on non-OK / timeout / network errors.
+        if (!r.ok) return { kind: 'unknown' };
 
         const j = await r.json().catch(() => null);
-        // next-auth returns `null` when logged out.
-        if (!j || !j.user) return handleAuthLost('logged_out');
+        // NextAuth-compatible route returns Session object OR null
+        if (!j || !j.user) return { kind: 'null' };
+        return { kind: 'ok' };
       } catch {
-        // IMPORTANT CHANGE:
-        // Do nothing on timeout/network errors — NextAuth may still resolve.
+        return { kind: 'unknown' };
+      }
+    };
+
+    softTimer = setTimeout(async () => {
+      if (statusRef.current !== 'loading') return;
+
+      const first = await probeSession();
+      if (statusRef.current !== 'loading') return;
+
+      if (first.kind === 'ok') {
+        sessionNullConfirmRef.current = false;
         return;
       }
+
+      if (first.kind === 'null') {
+        // Don’t panic-signout on first null; confirm once.
+        if (sessionNullConfirmRef.current) {
+          return;
+        }
+        sessionNullConfirmRef.current = true;
+
+        confirmTimer = setTimeout(async () => {
+          if (statusRef.current !== 'loading') return;
+
+          const second = await probeSession();
+          if (statusRef.current !== 'loading') return;
+
+          if (second.kind === 'null') {
+            handleAuthLost('logged_out');
+          } else {
+            // recovered or unknown; do not sign out
+            sessionNullConfirmRef.current = false;
+          }
+        }, SESSION_CONFIRM_DELAY_MS);
+      }
+
+      // unknown => do nothing
     }, SESSION_SOFT_TIMEOUT_MS);
 
-    return () => clearTimeout(t);
-  }, [status, authLost, handleAuthLost]);
+    refreshTimer = setTimeout(() => {
+      if (authLost) return;
+      if (statusRef.current !== 'loading') return;
+      if (refreshedOnceRef.current) return;
+
+      refreshedOnceRef.current = true;
+      try {
+        router.refresh();
+      } catch {
+        // silent
+      }
+    }, SESSION_STUCK_REFRESH_MS);
+
+    return () => {
+      if (softTimer) clearTimeout(softTimer);
+      if (confirmTimer) clearTimeout(confirmTimer);
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
+  }, [status, authLost, handleAuthLost, router]);
 
   const baseRef = useRef(base);
   useEffect(() => {
