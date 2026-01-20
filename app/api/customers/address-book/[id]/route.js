@@ -5,12 +5,16 @@ export const revalidate = 0;
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import crypto from "crypto";
 
-/* ────────────────────────── shared utils (mirrors root route) ────────────────────────── */
+/* ────────────────────────── helpers ────────────────────────── */
 
-function isEmail(v) {
-  return /\S+@\S+\.\S+/.test(String(v || "").trim());
+function getUserIdFromSession(session) {
+  return session?.user?.id || session?.user?.uid || session?.user?.sub || null;
+}
+
+function strOrNull(v) {
+  const s = v == null ? "" : String(v).trim();
+  return s ? s : null;
 }
 
 function normalizePhone(raw) {
@@ -37,264 +41,377 @@ function normalizePhone(raw) {
   return null;
 }
 
-function detectIdentifier(raw) {
-  const val = String(raw || "").trim();
-  if (!val) return { type: null };
-  if (isEmail(val)) return { type: "email", email: val.toLowerCase() };
-  const phone = normalizePhone(val);
-  if (phone) return { type: "phone", phone };
-  return { type: null };
-}
-
-function getOtpSecret() {
-  const v = process.env.OTP_SECRET;
-  if (!v) throw new Error("OTP_SECRET is required");
-  return v;
-}
-
-function hmacFor(userId, purpose, code) {
-  return crypto
-    .createHmac("sha256", getOtpSecret())
-    .update(`${userId}:${purpose}:${code}`)
-    .digest("hex");
-}
-
-const PURPOSES = {
-  CREATE: "address_create",
-  UPDATE: "address_update",
-  DELETE: "address_delete",
-};
-
-const ADDRESS_MUTATION_PURPOSES = new Set([
-  PURPOSES.CREATE,
-  PURPOSES.UPDATE,
-  PURPOSES.DELETE,
-]);
-
 /**
- * FIX: Next.js 15+ can supply dynamic route params as a Promise.
- * Always unwrap (await) before reading properties like `id`.
+ * Next.js 15+ can supply dynamic route params as a Promise.
+ * Always unwrap (await) before reading params.id.
  */
 async function unwrapParams(params) {
   return params && typeof params.then === "function" ? await params : params;
 }
 
-/** Parse OTP from headers/body, defaulting purpose when needed */
-async function parseOtp(req, body, fallbackPurpose) {
-  const h = req.headers;
-  const purpose = (
-    body?.otp?.purpose ??
-    h.get("x-otp-purpose") ??
-    fallbackPurpose ??
-    ""
-  )
-    .toString()
-    .toLowerCase()
+/**
+ * Accepts BOTH DB-shaped keys (line1/line2/city/state)
+ * and UI-shaped keys (streetAddress/address2/upazila/district/division).
+ * For PATCH, missing fields are preserved from `existing`.
+ */
+function pickInputAddress(raw = {}, existing = null) {
+  const ex = existing || {};
+  const g = (ex.granular && typeof ex.granular === "object") ? ex.granular : {};
+
+  const line1 = strOrNull(
+    raw.line1 ?? raw.address1 ?? raw.addressLine1 ?? raw.streetAddress ?? ex.line1 ?? g.streetAddress
+  );
+  const line2 = strOrNull(raw.line2 ?? raw.address2 ?? raw.addressLine2 ?? ex.line2 ?? g.address2);
+
+  // In your BD mapping: upazila ≈ city (required), district ≈ state
+  const upazila = strOrNull(raw.upazila ?? raw.city ?? raw.area ?? ex.adminLevel3 ?? ex.city ?? g.upazila);
+  const district = strOrNull(raw.district ?? raw.state ?? raw.region ?? ex.adminLevel2 ?? ex.state ?? g.district);
+  const division = strOrNull(raw.division ?? raw.adminLevel1 ?? ex.adminLevel1 ?? g.division);
+
+  const postalCode = strOrNull(raw.postalCode ?? raw.postcode ?? raw.zip ?? ex.postalCode);
+  const countryIso2 = String(raw.countryIso2 ?? raw.country ?? ex.countryIso2 ?? "BD")
+    .toUpperCase()
     .trim();
 
-  const code = (
-    body?.otp?.code ??
-    h.get("x-otp-code") ??
-    h.get("x-otp-token") ?? // some clients send it as token
-    ""
-  )
-    .toString()
-    .trim();
+  const name = strOrNull(raw.name ?? g.name);
+  const phone = normalizePhone(raw.phone ?? ex.phone ?? g.phone) || null;
+  const email = strOrNull(raw.email ?? g.email) ? String(raw.email ?? g.email).trim().toLowerCase() : null;
+  const label = strOrNull(raw.label ?? ex.label ?? g.label);
+  const notes = strOrNull(raw.notes ?? g.notes);
 
-  // Identifier can arrive under several keys
-  const identifier =
-    body?.otp?.identifier ??
-    body?.otp?.to ??
-    body?.otp?.id ??
-    h.get("x-otp-identifier") ??
-    h.get("x-otp-to") ??
-    h.get("x-otp-id") ??
-    "";
+  const houseNo = strOrNull(raw.houseNo ?? ex.streetNumber ?? g.houseNo);
+  const houseName = strOrNull(raw.houseName ?? ex.premise ?? g.houseName);
+  const apartmentNo = strOrNull(raw.apartmentNo ?? g.apartmentNo);
+  const floorNo = strOrNull(raw.floorNo ?? g.floorNo);
 
-  return { purpose, code, identifier };
-}
+  const policeStation = strOrNull(raw.policeStation ?? raw.thana ?? ex.sublocality ?? g.policeStation);
 
-/** Canonicalize incoming address payload into model fields, preserving existing values when not provided */
-function canon(a = {}, exists = {}) {
-  const l1 =
-    a.line1 ||
-    a.address1 ||
-    a.addressLine1 ||
-    a.streetAddress ||
-    exists.line1;
-  const l2 =
-    a.line2 ||
-    a.address2 ||
-    a.addressLine2 ||
-    exists.line2 ||
-    null;
-  const city =
-    a.city || a.cityOrUpazila || a.upazila || a.district || exists.city;
-  const state =
-    a.state ||
-    a.districtOrState ||
-    a.district ||
-    a.division ||
-    exists.state;
-  const postalCode =
-    a.postalCode || a.postcode || exists.postalCode || null;
-  const countryIso2 = (
-    a.countryIso2 || a.country || exists.countryIso2 || "BD"
-  ).toUpperCase();
+  const makeDefault = !!(raw.makeDefault ?? raw.isDefault ?? raw.default ?? raw.primary);
 
   return {
-    line1: l1,
-    line2: l2,
-    city,
-    state,
+    line1,
+    line2,
+
+    // DB required fields
+    city: upazila,
+    state: district,
+
     postalCode,
     countryIso2,
-    premise: a.houseName ?? exists.premise ?? null,
-    streetNumber: a.houseNo ?? exists.streetNumber ?? null,
-    subpremise:
-      [a.apartmentNo, a.floorNo].filter(Boolean).join(", ") ||
-      exists.subpremise ||
-      null,
-    sublocality:
-      a.policeStation || a.thana || exists.sublocality || null,
-    adminLevel1: a.division ?? exists.adminLevel1 ?? null,
-    adminLevel2: a.district ?? exists.adminLevel2 ?? null,
-    adminLevel3: a.upazila ?? exists.adminLevel3 ?? null,
-    granular: {
-      ...(exists.granular || {}),
-      name: a.name ?? exists.granular?.name ?? null,
-      phone: a.phone ?? exists.granular?.phone ?? null,
-      email: a.email ?? exists.granular?.email ?? null,
-      label: a.label ?? exists.granular?.label ?? null,
-      notes: a.notes ?? exists.granular?.notes ?? null,
-    },
-  };
-}
 
-/** Normalize DB address to client payload (FIX: flatten name/phone/email/label). */
-function normalizeAddress(a) {
-  if (!a) return null;
-  const g = a.granular || {};
+    // BD hierarchy fields
+    upazila,
+    district,
+    division,
 
-  const name =
-    (a.name ?? g.name ?? null) != null
-      ? String(a.name ?? g.name).trim() || null
-      : null;
-
-  const phone =
-    normalizePhone(a.phone ?? g.phone ?? null) ||
-    normalizePhone(g.phone ?? null) ||
-    null;
-
-  const email =
-    (a.email ?? g.email ?? null) != null
-      ? String(a.email ?? g.email).trim().toLowerCase() || null
-      : null;
-
-  const label =
-    (a.label ?? g.label ?? null) != null
-      ? String(a.label ?? g.label).trim() || null
-      : null;
-
-  const notes =
-    (a.notes ?? g.notes ?? null) != null
-      ? String(a.notes ?? g.notes).trim() || null
-      : null;
-
-  return {
-    id: a.id,
-    isDefault: !!a.isDefault,
-
-    // ✅ critical fields for checkout tiles (top-level)
+    // identity
     name,
     phone,
     email,
     label,
     notes,
 
+    // granular extras
+    houseNo,
+    houseName,
+    apartmentNo,
+    floorNo,
+    policeStation,
+
+    makeDefault,
+  };
+}
+
+function validateForWrite(picked) {
+  if (!picked?.line1) return { ok: false, error: "LINE1_REQUIRED" };
+  if (!picked?.city) return { ok: false, error: "UPAZILA_REQUIRED" }; // city in DB
+  if (!picked?.countryIso2 || picked.countryIso2.length !== 2) {
+    return { ok: false, error: "COUNTRY_ISO2_REQUIRED" };
+  }
+  return { ok: true };
+}
+
+function toPrismaAddressData(picked, existing = null) {
+  const ex = existing || {};
+  const g = (ex.granular && typeof ex.granular === "object") ? ex.granular : {};
+
+  const subpremise =
+    [picked.apartmentNo, picked.floorNo].filter(Boolean).join(", ") ||
+    ex.subpremise ||
+    null;
+
+  return {
+    // canonical mailing
+    line1: String(picked.line1).trim(),
+    line2: picked.line2 ? String(picked.line2).trim() : null,
+    city: String(picked.city).trim(),
+    state: picked.state ? String(picked.state).trim() : null,
+    postalCode: picked.postalCode ? String(picked.postalCode).trim() : null,
+    countryIso2: String(picked.countryIso2).toUpperCase().trim(),
+
+    // columns
+    phone: picked.phone,
+    label: picked.label,
+
+    // BD hierarchy
+    adminLevel1: picked.division,
+    adminLevel2: picked.district,
+    adminLevel3: picked.upazila,
+
+    // optional mapped fields
+    premise: picked.houseName ?? ex.premise ?? null,
+    streetNumber: picked.houseNo ?? ex.streetNumber ?? null,
+    subpremise,
+    sublocality: picked.policeStation ?? ex.sublocality ?? null,
+
+    // preserve round-trip identity + UI aliases
+    granular: {
+      ...(g || {}),
+      name: picked.name ?? g.name ?? null,
+      phone: picked.phone ?? g.phone ?? null,
+      email: picked.email ?? g.email ?? null,
+      label: picked.label ?? g.label ?? null,
+      notes: picked.notes ?? g.notes ?? null,
+
+      houseNo: picked.houseNo ?? g.houseNo ?? null,
+      houseName: picked.houseName ?? g.houseName ?? null,
+      apartmentNo: picked.apartmentNo ?? g.apartmentNo ?? null,
+      floorNo: picked.floorNo ?? g.floorNo ?? null,
+      policeStation: picked.policeStation ?? g.policeStation ?? null,
+
+      // UI-friendly aliases for future-proof clients
+      streetAddress: picked.line1 ?? g.streetAddress ?? null,
+      address2: picked.line2 ?? g.address2 ?? null,
+      upazila: picked.upazila ?? g.upazila ?? null,
+      district: picked.district ?? g.district ?? null,
+      division: picked.division ?? g.division ?? null,
+    },
+  };
+}
+
+function normalizeAddressRow(a, defaultId) {
+  if (!a) return null;
+  const g = (a.granular && typeof a.granular === "object") ? a.granular : {};
+  const isDefault = defaultId ? String(a.id) === String(defaultId) : !!a.isDefault;
+
+  return {
+    id: a.id,
+    isDefault,
+
+    // identity fields (top-level for UI)
+    name: strOrNull(g.name),
+    phone: normalizePhone(a.phone ?? g.phone) || null,
+    email: strOrNull(g.email) ? String(g.email).trim().toLowerCase() : null,
+    label: strOrNull(a.label ?? g.label),
+    notes: strOrNull(g.notes),
+
+    // UI-friendly canonical keys
+    streetAddress: a.line1,
+    address2: a.line2,
+    upazila: a.adminLevel3 ?? a.city,
+    district: a.adminLevel2 ?? a.state,
+    division: a.adminLevel1 ?? null,
+    postalCode: a.postalCode,
+    countryIso2: a.countryIso2,
+
+    // DB keys for compatibility
     line1: a.line1,
     line2: a.line2,
     city: a.city,
     state: a.state,
-    postalCode: a.postalCode,
-    countryIso2: a.countryIso2,
-    houseName: a.premise,
-    houseNo: a.streetNumber,
-    apartmentNo: a.subpremise || null,
-    division: a.adminLevel1,
-    district: a.adminLevel2,
-    upazila: a.adminLevel3,
-    policeStation: a.sublocality || null,
 
-    // keep granular for backward compat
-    granular: g,
+    // optional
+    houseName: a.premise ?? g.houseName ?? null,
+    houseNo: a.streetNumber ?? g.houseNo ?? null,
+    apartmentNo: g.apartmentNo ?? null,
+    floorNo: g.floorNo ?? null,
+    policeStation: a.sublocality ?? g.policeStation ?? null,
 
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
+    archivedAt: a.archivedAt,
+
+    granular: g,
   };
 }
 
-/** Helper to verify OTP required (strict) for update/delete cases */
-async function verifyOtpRequired({ userId, otp, expectedPurpose }) {
-  const idRaw = otp?.identifier ?? otp?.id ?? otp?.to ?? null;
-  const code = otp?.code ?? null;
-  const purpose = String(otp?.purpose || expectedPurpose || "")
-    .toLowerCase()
-    .trim();
+/**
+ * Auto-heal default consistency between:
+ * - User.defaultAddressId (canonical pointer)
+ * - Address.isDefault (denormalized flag)
+ */
+async function loadListAndDefault(userId) {
+  const [user, list] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { defaultAddressId: true },
+    }),
+    prisma.address.findMany({
+      where: { userId, archivedAt: null },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+    }),
+  ]);
 
-  if (!ADDRESS_MUTATION_PURPOSES.has(purpose)) {
-    return { ok: false, error: "OTP_PURPOSE_INVALID" };
-  }
-  if (!/^\d{6}$/.test(String(code || ""))) {
-    return { ok: false, error: "OTP_CODE_REQUIRED" };
-  }
-  const parsed = detectIdentifier(idRaw);
-  if (!parsed.type || parsed.type !== "phone") {
-    return { ok: false, error: "OTP_IDENTIFIER_PHONE_REQUIRED" };
+  const userDefaultId = user?.defaultAddressId || null;
+  const hasUserDefault =
+    userDefaultId && list.some((x) => String(x.id) === String(userDefaultId));
+
+  let desiredDefaultId = null;
+
+  if (hasUserDefault) {
+    desiredDefaultId = userDefaultId;
+  } else {
+    const flagged = list.find((x) => !!x.isDefault);
+    desiredDefaultId = flagged?.id || (list[0]?.id ?? null);
   }
 
-  const now = new Date();
-  const rec = await prisma.otpCode.findFirst({
-    where: {
-      userId,
-      purpose,
-      consumedAt: null,
-      expiresAt: { gte: now },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, codeHash: true, purpose: true },
-  });
-  if (!rec) return { ok: false, error: "OTP_NOT_FOUND_OR_EXPIRED" };
+  const desiredStr = desiredDefaultId ? String(desiredDefaultId) : null;
+  const flaggedIds = list.filter((x) => !!x.isDefault).map((x) => String(x.id));
 
-  const expectedHash = hmacFor(userId, rec.purpose, String(code));
-  if (rec.codeHash !== expectedHash) {
-    await prisma.otpCode.update({
-      where: { id: rec.id },
-      data: { attemptCount: { increment: 1 } },
+  const mismatch =
+    String(userDefaultId || "") !== String(desiredDefaultId || "") ||
+    (desiredStr
+      ? !(flaggedIds.length === 1 && flaggedIds[0] === desiredStr)
+      : flaggedIds.length > 0);
+
+  if (mismatch) {
+    await prisma.$transaction(async (tx) => {
+      await tx.address.updateMany({
+        where: { userId, archivedAt: null },
+        data: { isDefault: false },
+      });
+
+      if (desiredDefaultId) {
+        await tx.address.update({
+          where: { id: desiredDefaultId },
+          data: { isDefault: true },
+        });
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: desiredDefaultId },
+        });
+      } else {
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: null },
+        });
+      }
     });
-    return { ok: false, error: "OTP_MISMATCH" };
+
+    // reload after heal
+    const [u2, l2] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { defaultAddressId: true },
+      }),
+      prisma.address.findMany({
+        where: { userId, archivedAt: null },
+        orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+      }),
+    ]);
+
+    const defId2 = u2?.defaultAddressId || null;
+    const addresses2 = l2.map((x) => normalizeAddressRow(x, defId2)).filter(Boolean);
+    const def2 = addresses2.find((x) => x.isDefault) || addresses2[0] || null;
+
+    return {
+      addresses: addresses2,
+      defaultId: def2?.id || null,
+      defaultAddress: def2,
+      data: addresses2,
+    };
   }
 
-  // consume OTP
-  await prisma.otpCode.update({
-    where: { id: rec.id },
-    data: { consumedAt: new Date() },
-  });
-  return { ok: true, phoneFromOtp: parsed.phone || null };
+  const addresses = list.map((x) => normalizeAddressRow(x, desiredDefaultId)).filter(Boolean);
+  const def = addresses.find((x) => x.isDefault) || addresses[0] || null;
+
+  return {
+    addresses,
+    defaultId: def?.id || null,
+    defaultAddress: def,
+    data: addresses,
+  };
 }
 
-/** Load list+default used in DELETE response */
-async function loadListAndDefault(userId) {
-  const list = await prisma.address.findMany({
-    where: { userId, archivedAt: null },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+async function setDefaultAddress(userId, addressId) {
+  await prisma.$transaction(async (tx) => {
+    const target = await tx.address.findFirst({
+      where: { id: addressId, userId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!target) {
+      const e = new Error("NOT_FOUND");
+      e.code = "NOT_FOUND";
+      throw e;
+    }
+
+    await tx.address.updateMany({
+      where: { userId, archivedAt: null },
+      data: { isDefault: false },
+    });
+    await tx.address.update({
+      where: { id: addressId },
+      data: { isDefault: true },
+    });
+    await tx.user.update({
+      where: { id: userId },
+      data: { defaultAddressId: addressId },
+    });
   });
+}
 
-  // ✅ list now includes top-level name/phone too
-  const normalized = list.map(normalizeAddress);
+async function softDeleteAddress(userId, addressId) {
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.address.findFirst({
+      where: { id: addressId, userId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!existing) {
+      const e = new Error("NOT_FOUND");
+      e.code = "NOT_FOUND";
+      throw e;
+    }
 
-  const def = normalized.find((x) => x.isDefault) || normalized[0] || null;
-  return { list: normalized, def };
+    // Archive address
+    await tx.address.update({
+      where: { id: addressId },
+      data: { archivedAt: new Date(), isDefault: false },
+    });
+
+    // If user pointer referenced it, select a new default
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { defaultAddressId: true },
+    });
+
+    if (user?.defaultAddressId && String(user.defaultAddressId) === String(addressId)) {
+      const candidate = await tx.address.findFirst({
+        where: { userId, archivedAt: null },
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+        select: { id: true },
+      });
+
+      if (candidate) {
+        await tx.address.updateMany({
+          where: { userId, archivedAt: null },
+          data: { isDefault: false },
+        });
+        await tx.address.update({
+          where: { id: candidate.id },
+          data: { isDefault: true },
+        });
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: candidate.id },
+        });
+      } else {
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: null },
+        });
+      }
+    }
+  });
 }
 
 /* ────────────────────────── GET (single address) ────────────────────────── */
@@ -302,166 +419,153 @@ async function loadListAndDefault(userId) {
 export async function GET(req, { params }) {
   try {
     const session = await auth();
-    const userId = session?.user?.id;
+    const userId = getUserIdFromSession(session);
     if (!userId) {
-      return NextResponse.json(
-        { ok: false, error: "unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
     }
 
-    // FIX: await params
     const p = await unwrapParams(params);
-    const id = p?.id;
+    const id = p?.id ? String(p.id) : null;
 
     if (!id) {
-      return NextResponse.json(
-        { ok: false, error: "id_required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "ID_REQUIRED" }, { status: 400 });
     }
 
-    const addr = await prisma.address.findFirst({
-      where: { id, userId, archivedAt: null },
-    });
+    const [user, addr] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { defaultAddressId: true },
+      }),
+      prisma.address.findFirst({
+        where: { id, userId, archivedAt: null },
+      }),
+    ]);
+
     if (!addr) {
-      return NextResponse.json(
-        { ok: false, error: "address_not_found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
     }
 
+    const defId = user?.defaultAddressId || null;
     return NextResponse.json(
-      { ok: true, data: normalizeAddress(addr) },
+      { ok: true, data: normalizeAddressRow(addr, defId) },
       { status: 200 }
     );
   } catch (err) {
-    console.error("Address [id] GET error", err);
-    return NextResponse.json(
-      { ok: false, error: "INTERNAL_ERROR" },
-      { status: 500 }
-    );
+    console.error("Address-book [id] GET error", err);
+    return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }
 
-/* ────────────────────────── core update handler ────────────────────────── */
+/* ────────────────────────── PUT / PATCH (update + optional makeDefault) ────────────────────────── */
 
 async function handleUpdate(req, { params }) {
   const session = await auth();
-  const userId = session?.user?.id;
+  const userId = getUserIdFromSession(session);
   if (!userId) {
-    return NextResponse.json(
-      { ok: false, error: "unauthorized" },
-      { status: 401 }
-    );
+    return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  // FIX: await params
   const p = await unwrapParams(params);
-  const id = p?.id;
+  const id = p?.id ? String(p.id) : null;
 
   if (!id) {
-    return NextResponse.json(
-      { ok: false, error: "id_required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "ID_REQUIRED" }, { status: 400 });
   }
 
-  const exists = await prisma.address.findFirst({
+  const existing = await prisma.address.findFirst({
     where: { id, userId, archivedAt: null },
   });
-  if (!exists) {
-    return NextResponse.json(
-      { ok: false, error: "address_not_found" },
-      { status: 404 }
-    );
+  if (!existing) {
+    return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
   }
 
   const body = await req.json().catch(() => ({}));
-  const { makeDefault, ...rest } = body || {};
+  const makeDefault = !!(body?.makeDefault ?? body?.isDefault ?? body?.default ?? body?.primary);
 
-  // Strict: update requires UPDATE OTP
-  const otpParsed = await parseOtp(req, body, PURPOSES.UPDATE);
-  const otpResult = await verifyOtpRequired({
-    userId,
-    otp: otpParsed,
-    expectedPurpose: PURPOSES.UPDATE,
-  });
-  if (!otpResult.ok) {
+  // If this is a default-only operation (no address fields), just set default
+  const hasAnyAddressFields =
+    body?.line1 ||
+    body?.streetAddress ||
+    body?.address1 ||
+    body?.addressLine1 ||
+    body?.line2 ||
+    body?.address2 ||
+    body?.city ||
+    body?.upazila ||
+    body?.district ||
+    body?.division ||
+    body?.postalCode ||
+    body?.countryIso2 ||
+    body?.phone ||
+    body?.label ||
+    body?.notes ||
+    body?.houseNo ||
+    body?.houseName ||
+    body?.apartmentNo ||
+    body?.floorNo ||
+    body?.policeStation ||
+    body?.thana;
+
+  if (makeDefault && !hasAnyAddressFields) {
+    await setDefaultAddress(userId, id);
+    const loaded = await loadListAndDefault(userId);
     return NextResponse.json(
-      { ok: false, error: otpResult.error },
-      { status: 400 }
+      {
+        ok: true,
+        message: "Default address updated.",
+        addresses: loaded.addresses,
+        defaultAddress: loaded.defaultAddress,
+        defaultId: loaded.defaultId,
+        data: loaded.addresses,
+      },
+      { status: 200 }
     );
   }
 
-  const me = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { phone: true, phoneVerifiedAt: true },
-  });
-
-  if (!me?.phoneVerifiedAt) {
-    const candidatePhone = normalizePhone(me?.phone || otpResult.phoneFromOtp);
-    if (!candidatePhone) {
-      return NextResponse.json(
-        { ok: false, error: "PHONE_VERIFICATION_REQUIRED" },
-        { status: 400 }
-      );
-    }
-    await prisma.user.update({
-      where: { id: userId },
-      data: { phone: candidatePhone, phoneVerifiedAt: new Date() },
-    });
+  // Merge payload with existing for PATCH-like behavior
+  const picked = pickInputAddress(body, existing);
+  const v = validateForWrite(picked);
+  if (!v.ok) {
+    return NextResponse.json({ ok: false, error: v.error }, { status: 400 });
   }
 
-  const v = canon(rest, exists);
-  const updated = await prisma.address.update({
+  const data = toPrismaAddressData(picked, existing);
+
+  await prisma.address.update({
     where: { id },
-    data: v,
+    data,
   });
 
   if (makeDefault) {
-    await prisma.$transaction(async (tx) => {
-      await tx.address.updateMany({
-        where: { userId, archivedAt: null },
-        data: { isDefault: false },
-      });
-      await tx.address.update({
-        where: { id },
-        data: { isDefault: true },
-      });
-      await tx.user.update({
-        where: { id: userId },
-        data: { defaultAddressId: id },
-      });
-    });
+    await setDefaultAddress(userId, id);
   }
 
-  const { list, def } = await loadListAndDefault(userId);
+  const loaded = await loadListAndDefault(userId);
+  const updated = loaded.addresses.find((x) => String(x.id) === String(id)) || null;
 
   return NextResponse.json(
     {
       ok: true,
       message: "Address updated.",
-      address: normalizeAddress(updated),
-      addresses: list,
-      defaultAddress: def,
-      data: list,
+      address: updated,
+      addresses: loaded.addresses,
+      defaultAddress: loaded.defaultAddress,
+      defaultId: loaded.defaultId,
+      data: loaded.addresses,
     },
     { status: 200 }
   );
 }
 
-/* ────────────────────────── PUT & PATCH (OTP enforced) ────────────────────────── */
-
 export async function PUT(req, ctx) {
   try {
     return await handleUpdate(req, ctx);
   } catch (err) {
-    console.error("Address [id] PUT error", err);
-    return NextResponse.json(
-      { ok: false, error: "INTERNAL_ERROR" },
-      { status: 500 }
-    );
+    console.error("Address-book [id] PUT error", err);
+    if (err && (err.code === "NOT_FOUND" || err.message === "NOT_FOUND")) {
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }
 
@@ -469,117 +573,60 @@ export async function PATCH(req, ctx) {
   try {
     return await handleUpdate(req, ctx);
   } catch (err) {
-    console.error("Address [id] PATCH error", err);
-    return NextResponse.json(
-      { ok: false, error: "INTERNAL_ERROR" },
-      { status: 500 }
-    );
+    console.error("Address-book [id] PATCH error", err);
+    if (err && (err.code === "NOT_FOUND" || err.message === "NOT_FOUND")) {
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }
 
-/* ────────────────────────── DELETE (soft-delete; OTP optional for non-default) ────────────────────────── */
+/* ────────────────────────── DELETE (soft delete; no OTP) ────────────────────────── */
 
 export async function DELETE(req, { params }) {
   try {
     const session = await auth();
-    const userId = session?.user?.id;
+    const userId = getUserIdFromSession(session);
     if (!userId) {
-      return NextResponse.json(
-        { ok: false, error: "unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
     }
 
-    // FIX: await params
     const p = await unwrapParams(params);
-    const id = p?.id;
+    const id = p?.id ? String(p.id) : null;
 
     if (!id) {
-      return NextResponse.json(
-        { ok: false, error: "id_required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "ID_REQUIRED" }, { status: 400 });
     }
 
+    // Ensure it exists and belongs to user
     const existing = await prisma.address.findFirst({
       where: { id, userId, archivedAt: null },
+      select: { id: true },
     });
     if (!existing) {
-      return NextResponse.json(
-        { ok: false, error: "address_not_found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
     }
 
-    const body = await req.json().catch(() => ({}));
+    await softDeleteAddress(userId, id);
 
-    // Require OTP only when deleting current default
-    if (existing.isDefault) {
-      const otpParsed = await parseOtp(req, body, PURPOSES.DELETE);
-      const otpResult = await verifyOtpRequired({
-        userId,
-        otp: otpParsed,
-        expectedPurpose: PURPOSES.DELETE,
-      });
-      if (!otpResult.ok) {
-        return NextResponse.json(
-          { ok: false, error: otpResult.error },
-          { status: 400 }
-        );
-      }
-    }
-
-    await prisma.$transaction(async (tx) => {
-      // Soft-delete this address
-      await tx.address.update({
-        where: { id },
-        data: { archivedAt: new Date(), isDefault: false },
-      });
-
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        select: { defaultAddressId: true },
-      });
-
-      if (user?.defaultAddressId === id) {
-        // Try to assign a new default from remaining addresses
-        const candidate = await tx.address.findFirst({
-          where: { userId, archivedAt: null },
-          orderBy: [{ updatedAt: "desc" }],
-        });
-
-        if (candidate) {
-          await tx.address.update({
-            where: { id: candidate.id },
-            data: { isDefault: true },
-          });
-          await tx.user.update({
-            where: { id: userId },
-            data: { defaultAddressId: candidate.id },
-          });
-        } else {
-          await tx.user.update({
-            where: { id: userId },
-            data: { defaultAddressId: null },
-          });
-        }
-      }
-    });
-
-    const { list, def } = await loadListAndDefault(userId);
+    const loaded = await loadListAndDefault(userId);
 
     return NextResponse.json(
       {
         ok: true,
         message: "Address deleted.",
-        addresses: list,
-        defaultAddress: def,
-        data: list,
+        addresses: loaded.addresses,
+        defaultAddress: loaded.defaultAddress,
+        defaultId: loaded.defaultId,
+        data: loaded.addresses,
       },
       { status: 200 }
     );
   } catch (err) {
-    console.error("Address [id] DELETE error", err);
+    console.error("Address-book [id] DELETE error", err);
+    if (err && (err.code === "NOT_FOUND" || err.message === "NOT_FOUND")) {
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
+    }
     return NextResponse.json(
       { ok: false, error: "INTERNAL_ERROR_ADDRESS_DELETE" },
       { status: 500 }

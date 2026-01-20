@@ -1,194 +1,240 @@
-// FILE: src/components/common/bottomfloatingbar.preloader.jsx
+// FILE: src/components/common/homepanel.preloader.jsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 
 /**
- * BottomFloatingBarPreloader (no UI)
- * - Runs at site load (mounted in app/layout.js)
- * - Fetches BFBar critical datasets via existing /api/strapi proxy
- * - Stores a consolidated payload into localStorage for instant BFBar hydration
+ * HomePanelPreloader (no UI)
+ * -----------------------------------------------------------------------------
+ * Goal:
+ * - Preload HomePanel highlights at site load so HomePanel opens with data instantly.
+ * - Store payload in localStorage with TTL.
+ * - Dispatch an event so HomePanel can hydrate immediately if it opens too fast.
+ * - Warm critical routes via router.prefetch (best-effort).
  *
- * Goal: BFBar is always "warm" on refresh and not loaded on click.
+ * Shared cache keys (MUST match homepanel.jsx):
+ * - tdls:homepanel:highlights:v1
+ * - tdls:homepanel:highlights_ts:v1
  */
 
-/* ---------------- cache keys (must match bottomfloatingbar.jsx) ---------------- */
-const LS_INIT_KEY = "tdls:bfbar:init:v1";
-const LS_INIT_TS = "tdls:bfbar:init_ts:v1";
+const HP_HL_KEY = "tdls:homepanel:highlights:v1";
+const HP_HL_TS = "tdls:homepanel:highlights_ts:v1";
+const HP_HL_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
-// Keep fairly long so refreshes are instant, but still updates within same day
-const INIT_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+// Lightweight in-flight lock to avoid stampede across tabs/re-mounts
+const HP_HL_LOCK = "tdls:homepanel:highlights_lock:v1";
+const LOCK_TTL_MS = 25 * 1000; // 25s
 
-function readInitCache() {
-  try {
-    const raw = window.localStorage.getItem(LS_INIT_KEY);
-    const ts = Number(window.localStorage.getItem(LS_INIT_TS) || "0");
-    const payload = raw ? JSON.parse(raw) : null;
-    const ok = payload && typeof payload === "object";
-    return { ok, payload: ok ? payload : null, ts: Number.isFinite(ts) ? ts : 0 };
-  } catch {
-    return { ok: false, payload: null, ts: 0 };
-  }
+function now() {
+  return Date.now();
 }
 
-function writeInitCache(payload) {
+function safeParseJSON(raw) {
   try {
-    window.localStorage.setItem(LS_INIT_KEY, JSON.stringify(payload));
-    window.localStorage.setItem(LS_INIT_TS, String(Date.now()));
-  } catch {}
-}
-
-/* ---------------- client-safe proxy fetch ---------------- */
-async function fetchFromStrapi(path) {
-  try {
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-    const q = encodeURIComponent(normalizedPath);
-
-    const res = await fetch(`/api/strapi?path=${q}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "force-cache",
-    });
-
-    if (!res.ok) return null;
-
-    const raw = await res.json().catch(() => null);
-    if (!raw) return null;
-
-    // Proxy returns { ok: true, data: <rawStrapiJson> }
-    const payload = raw?.ok ? raw.data : raw;
-    return payload;
+    return JSON.parse(raw);
   } catch {
     return null;
   }
 }
 
-async function fetchProductsClient() {
-  // Add pageSize to reduce “partial menu” and to avoid repeated pagination calls.
-  const payload = await fetchFromStrapi("/products?populate=*&pagination[pageSize]=500");
-  if (!payload) return [];
-  const data = Array.isArray(payload.data) ? payload.data : [];
-  return data.map((n) => (n?.attributes ? { id: n.id, ...n.attributes, attributes: n.attributes } : n));
+function readCache() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(HP_HL_KEY);
+    if (!raw) return null;
+
+    const parsed = safeParseJSON(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const trendingProducts = Array.isArray(parsed.trendingProducts) ? parsed.trendingProducts : [];
+    const bestSellerProducts = Array.isArray(parsed.bestSellerProducts)
+      ? parsed.bestSellerProducts
+      : [];
+
+    const tsRaw = localStorage.getItem(HP_HL_TS);
+    const ts = tsRaw ? Number(tsRaw) : 0;
+
+    return {
+      trendingProducts,
+      bestSellerProducts,
+      ts: Number.isFinite(ts) ? ts : 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
-async function fetchAgeGroupsClient() {
-  const payload = await fetchFromStrapi("/age-groups?populate=*&pagination[pageSize]=500");
-  if (!payload) return [];
-  const data = Array.isArray(payload.data) ? payload.data : [];
-  return data
-    .map((n) => {
-      const a = n?.attributes || {};
-      return {
-        id: n?.id,
-        slug: a.slug || a.name || "",
-        name: a.name || a.slug || "",
-        order: typeof a.order === "number" ? a.order : undefined,
-      };
-    })
-    .filter((x) => x.slug && x.name);
+function writeCache(payload) {
+  if (typeof window === "undefined") return;
+  try {
+    const safePayload = {
+      trendingProducts: Array.isArray(payload?.trendingProducts) ? payload.trendingProducts : [],
+      bestSellerProducts: Array.isArray(payload?.bestSellerProducts) ? payload.bestSellerProducts : [],
+    };
+    localStorage.setItem(HP_HL_KEY, JSON.stringify(safePayload));
+    localStorage.setItem(HP_HL_TS, String(now()));
+  } catch {}
 }
 
-async function fetchCategoriesClient() {
-  const payload = await fetchFromStrapi("/categories?populate=*&pagination[pageSize]=500");
-  if (!payload) return [];
-  const data = Array.isArray(payload.data) ? payload.data : [];
-  return data
-    .map((n) => {
-      const a = n?.attributes || {};
-      return {
-        id: n?.id,
-        slug: a.slug || a.name || "",
-        name: a.name || a.slug || "",
-        order: typeof a.order === "number" ? a.order : undefined,
-      };
-    })
-    .filter((x) => x.slug && x.name);
+function isFresh(cache) {
+  const ts = Number(cache?.ts || 0);
+  if (!Number.isFinite(ts) || ts <= 0) return false;
+  return now() - ts < HP_HL_TTL_MS;
 }
 
-async function fetchAudienceCategoriesClient() {
-  const payload =
-    (await fetchFromStrapi("/audience-categories?populate=*&pagination[pageSize]=500")) ||
-    (await fetchFromStrapi("/audience-categories?populate=*")) ||
-    (await fetchFromStrapi("/audience-categories"));
-
-  if (!payload) return [];
-  const data = Array.isArray(payload.data) ? payload.data : [];
-  return data
-    .map((n) => {
-      const a = n?.attributes || {};
-      return {
-        id: n?.id,
-        slug: a.slug || a.name || "",
-        name: a.name || a.slug || "",
-        order: typeof a.order === "number" ? a.order : undefined,
-      };
-    })
-    .filter((x) => x.slug && x.name);
+function hasData(cache) {
+  const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
+  const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
+  return (t.length || 0) + (b.length || 0) > 0;
 }
 
-export default function BottomFloatingBarPreloader() {
+function dispatchReady() {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new Event("tdls:homepanel:highlightsReady"));
+  } catch {}
+}
+
+function acquireLock() {
+  if (typeof window === "undefined") return true;
+  try {
+    const raw = localStorage.getItem(HP_HL_LOCK);
+    const t = raw ? Number(raw) : 0;
+
+    if (Number.isFinite(t) && t > 0 && now() - t < LOCK_TTL_MS) return false;
+
+    localStorage.setItem(HP_HL_LOCK, String(now()));
+    return true;
+  } catch {
+    // If storage is blocked, just proceed (best-effort)
+    return true;
+  }
+}
+
+function releaseLock() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(HP_HL_LOCK);
+  } catch {}
+}
+
+async function fetchHighlights({ signal }) {
+  // Primary endpoint: your app-level highlights API (fastest / already curated)
+  const res = await fetch("/api/home/highlights", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    signal,
+  });
+
+  if (!res.ok) return null;
+
+  const json = await res.json().catch(() => null);
+  if (!json || !json.ok) return null;
+
+  const trendingProducts = Array.isArray(json.trendingProducts) ? json.trendingProducts : [];
+  const bestSellerProducts = Array.isArray(json.bestSellerProducts) ? json.bestSellerProducts : [];
+
+  return { trendingProducts, bestSellerProducts };
+}
+
+function safeIdle(cb, timeoutMs = 900) {
+  if (typeof window === "undefined") return;
+  const ric = window.requestIdleCallback;
+  if (typeof ric === "function") {
+    try {
+      ric(cb, { timeout: timeoutMs });
+      return;
+    } catch {}
+  }
+  window.setTimeout(cb, Math.min(450, timeoutMs));
+}
+
+export default function HomePanelPreloader() {
+  const router = useRouter();
+  const startedRef = useRef(false);
+
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (startedRef.current) return;
+    startedRef.current = true;
 
-    const cached = readInitCache();
-    const now = Date.now();
-    const stale = !cached.ok || now - (cached.ts || 0) >= INIT_TTL_MS;
+    // 1) If cache exists, immediately notify consumers (instant open)
+    const existing = readCache();
+    if (existing && hasData(existing)) {
+      dispatchReady();
+    }
 
-    // If not stale, do nothing: BFBar will hydrate instantly from cache on refresh.
-    if (!stale) return;
+    // 2) Warm critical routes (best effort, no failures allowed)
+    try {
+      router.prefetch("/product");
+      router.prefetch("/collections");
+      router.prefetch("/cart");
+      router.prefetch("/login");
+      router.prefetch("/login/otp");
+      router.prefetch("/customer/dashboard");
+      router.prefetch("/admin/login");
+    } catch {}
 
-    let cancelled = false;
+    // 3) Immediate fetch on mount if cache missing or stale
+    const shouldFetchNow = !existing || !isFresh(existing);
 
-    const run = async () => {
+    const runFetch = async (reason = "immediate") => {
+      // Prevent stampede across tabs/mounts
+      if (!acquireLock()) return;
+
+      const ac = new AbortController();
+      const t = window.setTimeout(() => {
+        try {
+          ac.abort();
+        } catch {}
+      }, reason === "immediate" ? 5200 : 6500);
+
       try {
-        const [ps, ags, cats, auds] = await Promise.allSettled([
-          fetchProductsClient(),
-          fetchAgeGroupsClient(),
-          fetchCategoriesClient(),
-          fetchAudienceCategoriesClient(),
-        ]);
+        const data = await fetchHighlights({ signal: ac.signal });
+        if (!data) return;
 
-        if (cancelled) return;
-
-        const payload = {
-          products: ps.status === "fulfilled" && Array.isArray(ps.value) ? ps.value : [],
-          ageGroups: ags.status === "fulfilled" && Array.isArray(ags.value) ? ags.value : [],
-          categories: cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [],
-          audienceCategories: auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [],
-        };
-
-        // Only write if we got anything meaningful
-        const meaningful =
-          payload.products.length || payload.ageGroups.length || payload.categories.length || payload.audienceCategories.length;
-
-        if (meaningful) writeInitCache(payload);
+        writeCache(data);
+        dispatchReady();
       } catch {
-        // silent by design
+        // Silent by design (HomePanel will fallback if needed)
+      } finally {
+        window.clearTimeout(t);
+        releaseLock();
+        try {
+          ac.abort();
+        } catch {}
       }
     };
 
-    // Start immediately, but allow browser to settle if possible.
-    // timeout ensures it still runs quickly even under load.
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(() => run(), { timeout: 900 });
+    if (shouldFetchNow) {
+      // Run immediately so HomePanel opens with data on first interaction
+      runFetch("immediate");
     } else {
-      setTimeout(run, 0);
+      // Cache is fresh: do a silent refresh later (keeps it current without any UI cost)
+      safeIdle(() => runFetch("idle"), 1200);
     }
 
-    // Also retry once when the tab becomes visible (covers back/forward cache + hidden tab loads)
-    const onVis = () => {
+    // 4) Refresh on visibility return if cache is stale
+    const onVisibility = () => {
       if (document.visibilityState !== "visible") return;
-      const c2 = readInitCache();
-      const stale2 = !c2.ok || Date.now() - (c2.ts || 0) >= INIT_TTL_MS;
-      if (stale2) run();
+
+      const c = readCache();
+      if (!c || !isFresh(c)) {
+        // do not block UI; run soon
+        safeIdle(() => runFetch("visible"), 700);
+      } else if (hasData(c)) {
+        // ensure listeners get notified in case they mounted after cache write
+        dispatchReady();
+      }
     };
-    document.addEventListener("visibilitychange", onVis);
+
+    document.addEventListener("visibilitychange", onVisibility, { passive: true });
 
     return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [router]);
 
-  return null; // no UI
+  return null;
 }

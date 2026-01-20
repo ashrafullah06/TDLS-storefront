@@ -431,13 +431,14 @@ export default function Dashboard() {
     [router, buildLoginUrl],
   );
 
-  // If NextAuth session fetch gets stuck (network/proxy) we must fail fast (no endless spinner).
+  // If NextAuth session fetch gets stuck (network/proxy) we must avoid endless spinner,
+  // BUT we must NOT sign out active customers just because the network is slow.
   useEffect(() => {
     if (authLost) return;
     if (status !== 'loading') return;
 
     const SESSION_SOFT_TIMEOUT_MS = 1500;
-    const SESSION_FETCH_TIMEOUT_MS = 1500;
+    const SESSION_FETCH_TIMEOUT_MS = 6000;
 
     const t = setTimeout(async () => {
       // If status already resolved, do nothing.
@@ -450,13 +451,18 @@ export default function Dashboard() {
         const r = await fetch('/api/auth/session', { cache: 'no-store', signal: controller.signal });
         clearTimeout(tt);
 
-        if (!r.ok) return handleAuthLost('session_check_failed');
+        // IMPORTANT CHANGE:
+        // - Do NOT sign out on non-OK / timeout / network errors.
+        // - Only sign out when session endpoint confirms logged out (null / no user).
+        if (!r.ok) return;
 
         const j = await r.json().catch(() => null);
         // next-auth returns `null` when logged out.
         if (!j || !j.user) return handleAuthLost('logged_out');
       } catch {
-        return handleAuthLost('session_timeout');
+        // IMPORTANT CHANGE:
+        // Do nothing on timeout/network errors — NextAuth may still resolve.
+        return;
       }
     }, SESSION_SOFT_TIMEOUT_MS);
 
@@ -1655,7 +1661,8 @@ export default function Dashboard() {
             <div style={{ borderTop: '1px solid rgba(148,163,184,0.35)', margin: '10px 0 8px' }} />
 
             <div style={{ marginTop: 2 }}>
-              <SignoutButton label="Logout" redirectTo="/" onDone={() => signOut({ callbackUrl: '/' })} />
+              {/* IMPORTANT CHANGE: remove double signOut (SignoutButton already signs out) */}
+              <SignoutButton label="Logout" redirectTo="/" />
             </div>
           </div>
         </div>

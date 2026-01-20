@@ -23,18 +23,35 @@ import { getSession, signOut } from "next-auth/react";
  *   and we NEVER call server logout while on /admin routes.
  */
 
-const IDLE_MINUTES = Number(process.env.NEXT_PUBLIC_AUTO_SIGNOUT_MINUTES || "45");
-const IDLE_MS = Math.max(1, IDLE_MINUTES) * 60 * 1000;
+/* ===================== IDLE POLICY (HARD) ===================== */
+/**
+ * Requirement:
+ * - Never sign out while the customer is active.
+ * - Only sign out after 1 hour of inactivity (silent / no interaction).
+ *
+ * We clamp any env misconfig to >= 60 minutes.
+ */
+const MIN_IDLE_MINUTES = 60;
+const RAW_IDLE_MINUTES = Number(process.env.NEXT_PUBLIC_AUTO_SIGNOUT_MINUTES);
+const IDLE_MINUTES = Number.isFinite(RAW_IDLE_MINUTES) && RAW_IDLE_MINUTES > 0
+  ? Math.max(MIN_IDLE_MINUTES, Math.floor(RAW_IDLE_MINUTES))
+  : MIN_IDLE_MINUTES;
 
-// Optional hard kill switch (no UI impact)
+const IDLE_MS = IDLE_MINUTES * 60 * 1000;
+
+/* ===================== OPTIONAL GLOBAL KILL SWITCH ===================== */
 const DISABLE_GUARD =
   String(process.env.NEXT_PUBLIC_DISABLE_AUTO_SIGNOUT || "").trim() === "1";
 
-// Customer-only broadcast channel (must never overlap admin plane)
+/* ===================== CROSS-TAB SYNC (CUSTOMER ONLY) ===================== */
 const BC_NAME = "tdlc_customer_plane_signout_v2";
 const MSG_SIGNOUT = "SIGNOUT_CUSTOMER";
+const MSG_ACTIVITY = "ACTIVITY_CUSTOMER";
 
-// Small safety: never execute if route is (or becomes) admin
+// Storage fallback for cross-tab activity (BroadcastChannel may be unavailable)
+const ACTIVITY_KEY = "tdlc_customer_last_activity_v2";
+
+/* ===================== ROUTE SAFETY ===================== */
 function isAdminPath(p) {
   const s = String(p || "").toLowerCase();
   return s === "/admin" || s.startsWith("/admin/") || s.includes("/admin/");
@@ -100,12 +117,11 @@ async function customerSignOut({ broadcast = true } = {}) {
     } catch {}
   }
 
-  // NextAuth customer plane logout (middleware blocks admin from using /api/auth)
   try {
     // Avoid redirect loops: we handle redirect on the page level
     await signOut({ redirect: false });
   } catch {
-    // Fallback: no throw
+    // no throw
   }
 }
 
@@ -113,13 +129,17 @@ export default function AutoSignoutGuard() {
   const nextPathname = usePathname();
 
   const lastActivityRef = useRef(Date.now());
-  // Prevent "race" signouts that appear to happen *on click* when idle threshold is crossed.
-  // We require 2 consecutive ticks past the threshold before signing out.
+
+  // Two-tick confirmation (prevents “logout on click” race at the threshold edge)
   const pendingSignoutRef = useRef(0);
-  const hiddenSinceRef = useRef(0);
+
   const intervalRef = useRef(null);
   const bcRef = useRef(null);
   const sessionKnownAuthedRef = useRef(false);
+
+  // Activity throttles (keep cheap but reliable)
+  const lastHiFreqMarkRef = useRef(0);
+  const lastActivitySyncRef = useRef(0);
 
   const stopIdleLoop = () => {
     if (intervalRef.current) {
@@ -130,9 +150,45 @@ export default function AutoSignoutGuard() {
     }
   };
 
-  const markActivity = () => {
-    lastActivityRef.current = Date.now();
+  const applyActivity = (at) => {
+    const t = Number(at || Date.now());
+    if (!Number.isFinite(t)) return;
+    if (t > lastActivityRef.current) lastActivityRef.current = t;
     pendingSignoutRef.current = 0;
+  };
+
+  const syncActivityCrossTab = (now) => {
+    // Broadcast + storage sync at a controlled cadence
+    const t = Number(now || Date.now());
+    const SYNC_EVERY_MS = 3_000;
+
+    if (t - lastActivitySyncRef.current < SYNC_EVERY_MS) return;
+    lastActivitySyncRef.current = t;
+
+    try {
+      // Storage sync (fires “storage” in other tabs)
+      localStorage.setItem(ACTIVITY_KEY, String(t));
+    } catch {}
+
+    try {
+      // BroadcastChannel sync (real-time where supported)
+      bcRef.current?.postMessage?.({ type: MSG_ACTIVITY, scope: "customer", at: t, v: 2 });
+    } catch {}
+  };
+
+  const markActivity = () => {
+    const now = Date.now();
+    applyActivity(now);
+    syncActivityCrossTab(now);
+  };
+
+  const markActivityThrottled = () => {
+    // For scroll/move/wheel/touchmove: mark activity max 1x per 1000ms
+    const now = Date.now();
+    if (now - lastHiFreqMarkRef.current < 1000) return;
+    lastHiFreqMarkRef.current = now;
+    applyActivity(now);
+    syncActivityCrossTab(now);
   };
 
   useEffect(() => {
@@ -150,14 +206,13 @@ export default function AutoSignoutGuard() {
     }
 
     let mounted = true;
-    const ac = new AbortController();
 
     // Determine customer auth strictly via CUSTOMER NextAuth session
     const ensureCustomerSession = async () => {
       try {
         const s = await getSession();
         if (!mounted) return false;
-        // If session exists, user is signed in as customer plane
+
         const authed = !!s?.user;
         sessionKnownAuthedRef.current = authed;
         return authed;
@@ -168,35 +223,50 @@ export default function AutoSignoutGuard() {
       }
     };
 
-    // Cross-tab signout sync (customer only)
+    // Cross-tab signout + activity sync (customer only)
     try {
       bcRef.current = new BroadcastChannel(BC_NAME);
       bcRef.current.onmessage = (e) => {
-        const msg = e?.data?.type;
+        const type = e?.data?.type;
         const scope = String(e?.data?.scope || "").toLowerCase();
         const v = Number(e?.data?.v || 0);
+        const at = Number(e?.data?.at || 0);
 
-        // Accept only customer-scoped events
         if (v !== 2) return;
         if (scope !== "customer") return;
 
-        if (msg === MSG_SIGNOUT) {
+        if (type === MSG_SIGNOUT) {
           stopIdleLoop();
           void customerSignOut({ broadcast: false });
+          return;
+        }
+
+        if (type === MSG_ACTIVITY) {
+          // If the customer is active in another tab, we must not sign out here.
+          applyActivity(at);
         }
       };
     } catch {
       bcRef.current = null;
     }
 
+    const onStorage = (e) => {
+      // Activity sync fallback for browsers without BroadcastChannel
+      try {
+        if (!e || e.key !== ACTIVITY_KEY) return;
+        const t = Number(e.newValue);
+        if (!Number.isFinite(t)) return;
+        applyActivity(t);
+      } catch {}
+    };
+
     const onVisibilityChange = () => {
+      // Visibility changes are NOT inactivity; they just should not reset timers incorrectly.
+      // When returning to the tab, consider it activity so users are not “logout on return”.
       if (inAuthFlow() || manualSignoutInProgress()) return;
       if (!sessionKnownAuthedRef.current) return;
 
-      if (document.visibilityState === "hidden") {
-        hiddenSinceRef.current = Date.now();
-      } else {
-        hiddenSinceRef.current = 0;
+      if (document.visibilityState !== "hidden") {
         markActivity();
       }
     };
@@ -225,31 +295,14 @@ export default function AutoSignoutGuard() {
 
         const now = Date.now();
         const idleFor = now - lastActivityRef.current;
+
         if (!sessionKnownAuthedRef.current) {
           stopIdleLoop();
           return;
         }
 
-        // Hidden too long -> logout
-        if (document.visibilityState === "hidden") {
-          const hs = hiddenSinceRef.current;
-          if (hs && now - hs >= IDLE_MS) {
-            // two-tick confirmation (prevents "click caused logout" race)
-            if (!pendingSignoutRef.current) {
-              pendingSignoutRef.current = now;
-              return;
-            }
-            if (now - pendingSignoutRef.current < 5_000) return;
-
-            stopIdleLoop();
-            void customerSignOut({ broadcast: true });
-          } else {
-            pendingSignoutRef.current = 0;
-          }
-          return;
-        }
-
-        // Foreground idle too long -> logout (two-tick confirmation)
+        // Only sign out based on REAL inactivity time (foreground or background),
+        // and only after 2 consecutive ticks past threshold.
         if (idleFor >= IDLE_MS) {
           if (!pendingSignoutRef.current) {
             pendingSignoutRef.current = now;
@@ -272,33 +325,53 @@ export default function AutoSignoutGuard() {
         }
       }, 15_000);
 
-      // Activity listeners (customer side only)
-      window.addEventListener("mousemove", markActivity, { passive: true });
+      /* ---------------- Activity listeners (customer side only) ----------------
+         Key fix: capture scroll from ANY scroll container (scroll does not bubble),
+         so active users inside panels/lists never get treated as “idle”.
+      */
       window.addEventListener("mousedown", markActivity, { passive: true });
       window.addEventListener("keydown", markActivity, { passive: true });
-      window.addEventListener("scroll", markActivity, { passive: true });
       window.addEventListener("touchstart", markActivity, { passive: true });
       window.addEventListener("pointerdown", markActivity, { passive: true });
       window.addEventListener("focus", markActivity, { passive: true });
 
+      // High-frequency signals (throttled)
+      window.addEventListener("mousemove", markActivityThrottled, { passive: true });
+      window.addEventListener("wheel", markActivityThrottled, { passive: true });
+      window.addEventListener("touchmove", markActivityThrottled, { passive: true });
+      window.addEventListener("pointermove", markActivityThrottled, { passive: true });
+
+      // Crucial: scroll capture on document catches scroll in nested containers
+      document.addEventListener("scroll", markActivityThrottled, {
+        passive: true,
+        capture: true,
+      });
+
       document.addEventListener("visibilitychange", onVisibilityChange, { capture: true });
+      window.addEventListener("storage", onStorage);
     })();
 
     return () => {
       mounted = false;
-      ac.abort();
 
       stopIdleLoop();
 
-      window.removeEventListener("mousemove", markActivity);
       window.removeEventListener("mousedown", markActivity);
       window.removeEventListener("keydown", markActivity);
-      window.removeEventListener("scroll", markActivity);
       window.removeEventListener("touchstart", markActivity);
       window.removeEventListener("pointerdown", markActivity);
       window.removeEventListener("focus", markActivity);
 
-      document.removeEventListener("visibilitychange", onVisibilityChange, { capture: true });
+      window.removeEventListener("mousemove", markActivityThrottled);
+      window.removeEventListener("wheel", markActivityThrottled);
+      window.removeEventListener("touchmove", markActivityThrottled);
+      window.removeEventListener("pointermove", markActivityThrottled);
+
+      // Must match capture=true
+      document.removeEventListener("scroll", markActivityThrottled, true);
+      document.removeEventListener("visibilitychange", onVisibilityChange, true);
+
+      window.removeEventListener("storage", onStorage);
 
       try {
         bcRef.current?.close?.();

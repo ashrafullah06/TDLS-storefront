@@ -96,6 +96,115 @@ function writeHistory(obj) {
   } catch {}
 }
 
+/* ---------------- Canonical payload (single source of truth) ---------------- */
+/**
+ * Build a canonical payload aligned with Prisma model Address:
+ * - line1, line2, city, state, postalCode, countryIso2, phone, label, isDefault
+ * - adminLevel1/2/3 represent division/district/upazila
+ *
+ * Also keeps UI keys (streetAddress/upazila/district/division) for backward-compat.
+ */
+function buildCanonicalAddressPayload(vals, { forceDefault }) {
+  const nameRaw = String(vals?.name ?? "");
+  const phoneRaw = String(vals?.phone ?? "");
+  const emailRaw = String(vals?.email ?? "");
+
+  const name = nameRaw.trim();
+  const phone = normalizeBDPhone(phoneRaw);
+  const email = emailRaw.trim().toLowerCase();
+
+  const streetAddress = String(vals?.streetAddress || vals?.address1 || vals?.line1 || "").trim();
+  const address2 = String(vals?.address2 || vals?.line2 || "").trim();
+
+  const upazila = String(vals?.upazila || vals?.city || "").trim();
+  const district = String(vals?.district || vals?.state || "").trim();
+  const division = String(vals?.division || "").trim();
+
+  const postalCode = String(vals?.postalCode || "").trim();
+  const countryIso2 = String(vals?.countryIso2 || "BD").toUpperCase().trim() || "BD";
+
+  const makeDefault = forceDefault ? true : !!vals?.makeDefault;
+  const isDefault = makeDefault;
+
+  // Optional details (future-proof) – stored in granular on the API side
+  const granular = {
+    name: name || null,
+    phone: phone || null,
+    email: email || null,
+    label: vals?.label != null ? String(vals.label).trim() || null : null,
+    notes: vals?.notes != null ? String(vals.notes).trim() || null : null,
+
+    houseNo: vals?.houseNo != null ? String(vals.houseNo).trim() || null : null,
+    houseName: vals?.houseName != null ? String(vals.houseName).trim() || null : null,
+    apartmentNo: vals?.apartmentNo != null ? String(vals.apartmentNo).trim() || null : null,
+    floorNo: vals?.floorNo != null ? String(vals.floorNo).trim() || null : null,
+
+    village: vals?.village != null ? String(vals.village).trim() || null : null,
+    postOffice: vals?.postOffice != null ? String(vals.postOffice).trim() || null : null,
+    union: vals?.union != null ? String(vals.union).trim() || null : null,
+    policeStation: vals?.policeStation != null ? String(vals.policeStation).trim() || null : null,
+
+    // UI aliases (stable across clients)
+    streetAddress: streetAddress || null,
+    address2: address2 || null,
+    upazila: upazila || null,
+    district: district || null,
+    division: division || null,
+  };
+
+  return {
+    // keep existing identity fields (authoritative for UI flows)
+    name,
+    phone,
+    email,
+
+    // raw + normalized (backward-compat)
+    nameRaw,
+    phoneRaw,
+    emailRaw,
+    nameNormalized: name,
+    phoneNormalized: phone,
+    emailNormalized: email,
+
+    // UI keys (checkout)
+    streetAddress,
+    address2: address2 || "",
+    upazila,
+    district,
+    division,
+    postalCode,
+    countryIso2,
+
+    // Model-aligned canonical keys (single source of truth)
+    line1: streetAddress,
+    line2: address2 || null,
+    city: upazila,
+    state: district,
+    adminLevel1: division || null,
+    adminLevel2: district || null,
+    adminLevel3: upazila || null,
+
+    // Model extras
+    label: vals?.label != null ? String(vals.label).trim() || null : null,
+    phoneModel: phone || null, // explicit alias; API may read `phone` anyway
+    makeDefault,
+    isDefault,
+
+    // optional fields (API can store into granular)
+    houseNo: vals?.houseNo ?? "",
+    houseName: vals?.houseName ?? "",
+    apartmentNo: vals?.apartmentNo ?? "",
+    floorNo: vals?.floorNo ?? "",
+    policeStation: vals?.policeStation ?? "",
+    postOffice: vals?.postOffice ?? "",
+    union: vals?.union ?? "",
+    village: vals?.village ?? "",
+
+    // canonical JSON blob
+    granular,
+  };
+}
+
 /* ---------------- Address Form ---------------- */
 export default function AddressForm({
   title,
@@ -134,6 +243,11 @@ export default function AddressForm({
       postalCode: "",
       countryIso2: "BD",
       makeDefault: false,
+
+      // optional but used in prefill merges
+      label: "",
+      notes: "",
+      id: "",
 
       ...(draft && typeof draft === "object" ? draft : {}),
       ...(p && typeof p === "object" ? p : {}),
@@ -189,13 +303,14 @@ export default function AddressForm({
       postOffice: p.postOffice,
       union: p.union,
       policeStation: p.policeStation,
-      upazila: p.upazila ?? p.city,
-      district: p.district ?? p.state,
-      division: p.division,
+      upazila: p.upazila ?? p.city ?? p.adminLevel3,
+      district: p.district ?? p.state ?? p.adminLevel2,
+      division: p.division ?? p.adminLevel1,
       postalCode: p.postalCode,
       countryIso2: p.countryIso2,
-      makeDefault: p.makeDefault,
+      makeDefault: p.makeDefault ?? p.isDefault,
       label: p.label,
+      notes: p.notes,
       id: p.id,
     };
 
@@ -229,6 +344,7 @@ export default function AddressForm({
         "countryIso2",
         "makeDefault",
         "label",
+        "notes",
         "id",
       ];
 
@@ -265,8 +381,7 @@ export default function AddressForm({
     setFieldErrors({});
 
     const name = String(vals.name || "").trim();
-    const phoneRaw = String(vals.phone || "").trim();
-    const phone = normalizeBDPhone(phoneRaw);
+    const phoneNorm = normalizeBDPhone(String(vals.phone || "").trim());
 
     const errs = {};
     const missingLabels = [];
@@ -275,8 +390,8 @@ export default function AddressForm({
       if (!name) errs.name = "required";
 
       if (requirePhone) {
-        if (!phone) errs.phone = "required";
-        else if (!isValidBDMobile(phone)) errs.phone = "invalid";
+        if (!phoneNorm) errs.phone = "required";
+        else if (!isValidBDMobile(phoneNorm)) errs.phone = "invalid";
       }
     }
 
@@ -329,43 +444,14 @@ export default function AddressForm({
   useEffect(() => {
     if (typeof onDraftChange !== "function") return;
 
-    const nameRaw = String(vals.name ?? "");
-    const phoneRaw = String(vals.phone ?? "");
-    const emailRaw = String(vals.email ?? "");
+    const canonical = buildCanonicalAddressPayload(vals, { forceDefault });
 
-    const nameNorm = nameRaw.trim();
-    const phoneNorm = normalizeBDPhone(phoneRaw);
-    const emailNorm = emailRaw.trim().toLowerCase();
-
-    const candidate = {
-      ...vals,
-
-      // keep raw user inputs
-      name: nameRaw,
-      phone: phoneRaw,
-      email: emailRaw,
-
-      // extra explicit raw aliases for backward-compat (some parents expect these)
-      nameRaw,
-      phoneRaw,
-      emailRaw,
-
-      // provide normalized variants for parent logic
-      nameNormalized: nameNorm,
-      phoneNormalized: phoneNorm,
-      emailNormalized: emailNorm,
-
-      countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
-      makeDefault: forceDefault ? true : !!vals.makeDefault,
-    };
-
-    const phoneValid = !requirePhone || isValidBDMobile(phoneNorm);
-    const userOk = !includeUserFields || (!!nameNorm && phoneValid);
-
-    const complete = userOk && isCompleteLocal(candidate);
+    const phoneValid = !requirePhone || isValidBDMobile(canonical.phoneNormalized);
+    const userOk = !includeUserFields || (!!canonical.nameNormalized && phoneValid);
+    const complete = userOk && isCompleteLocal(canonical);
 
     const sig = JSON.stringify({
-      v: candidate,
+      v: canonical,
       complete,
       includeUserFields: !!includeUserFields,
       requirePhone: !!requirePhone,
@@ -374,7 +460,8 @@ export default function AddressForm({
 
     if (sig === lastDraftSigRef.current) return;
     lastDraftSigRef.current = sig;
-    onDraftChange(candidate, complete);
+
+    onDraftChange(canonical, complete);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vals, includeUserFields, requirePhone, forceDefault, showMakeDefault]);
 
@@ -395,38 +482,27 @@ export default function AddressForm({
     setError("");
     setFieldErrors({});
 
-    // Preserve raw inputs explicitly for DB-save flows (shipping/billing edit)
-    const nameRaw = String(vals.name || "");
-    const phoneRaw = String(vals.phone || "");
-    const emailRaw = String(vals.email || "");
-
-    const name = nameRaw.trim();
-    const phone = normalizeBDPhone(phoneRaw);
-    const email = emailRaw.trim().toLowerCase();
+    const canonical = buildCanonicalAddressPayload(vals, { forceDefault });
 
     const errs = {};
+    const missingLabels = [];
 
     if (includeUserFields) {
-      if (!name) errs.name = "required";
+      if (!canonical.nameNormalized) errs.name = "required";
 
       if (requirePhone) {
-        if (!phoneRaw.trim()) errs.phone = "required";
-        else if (!isValidBDMobile(phoneRaw)) errs.phone = "invalid";
+        if (!canonical.phoneRaw.trim()) errs.phone = "required";
+        else if (!isValidBDMobile(canonical.phoneNormalized)) errs.phone = "invalid";
       }
     }
 
-    const street = String(vals.streetAddress || vals.address1 || vals.line1 || "").trim();
-    const city = String(vals.upazila || vals.city || "").trim();
-    const dist = String(vals.district || vals.state || "").trim();
-
-    if (!street) errs.streetAddress = "required";
-    if (!city) errs.upazila = "required";
-    if (!dist) errs.district = "required";
+    if (!canonical.streetAddress.trim()) errs.streetAddress = "required";
+    if (!canonical.upazila.trim()) errs.upazila = "required";
+    if (!canonical.district.trim()) errs.district = "required";
 
     if (Object.keys(errs).length) {
       setFieldErrors(errs);
 
-      const missingLabels = [];
       if (errs.name) missingLabels.push("Full name");
       if (errs.phone === "required") missingLabels.push("Mobile number");
       if (errs.phone === "invalid") {
@@ -448,43 +524,20 @@ export default function AddressForm({
     }
 
     // remember key fields for next checkout
-    rememberField("name", nameRaw);
-    rememberField("phone", phone);
-    rememberField("email", email);
-    rememberField("streetAddress", street);
-    rememberField("address2", vals.address2);
-    rememberField("upazila", city);
-    rememberField("district", dist);
-    rememberField("division", vals.division);
+    rememberField("name", canonical.nameRaw);
+    rememberField("phone", canonical.phoneNormalized);
+    rememberField("email", canonical.emailNormalized);
+    rememberField("streetAddress", canonical.streetAddress);
+    rememberField("address2", canonical.address2);
+    rememberField("upazila", canonical.upazila);
+    rememberField("district", canonical.district);
+    rememberField("division", canonical.division);
     rememberField("postOffice", vals.postOffice);
     rememberField("policeStation", vals.policeStation);
     rememberField("union", vals.union);
 
-    // IMPORTANT: keep both raw + normalized fields to avoid breaking parent save logic
-    const candidate = {
-      ...vals,
-
-      // authoritative fields
-      name,
-      phone,
-      email,
-
-      // backward-compat fields (raw input)
-      nameRaw,
-      phoneRaw,
-      emailRaw,
-
-      // normalized convenience fields (many flows use these)
-      nameNormalized: name,
-      phoneNormalized: phone,
-      emailNormalized: email,
-
-      countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
-      makeDefault: forceDefault ? true : !!vals.makeDefault,
-    };
-
     try {
-      const res = await onSubmit?.(candidate);
+      const res = await onSubmit?.(canonical);
       if (res === false) return;
     } catch (err) {
       setError(

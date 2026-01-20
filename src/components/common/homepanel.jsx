@@ -266,6 +266,73 @@ function buildHighlightsFromProducts(products) {
   return { trendingProducts: trending, bestSellerProducts: best };
 }
 
+/* --------- HomePanel highlights cache (shared with homepanel.preloader) --------- */
+const HP_HL_KEY = "tdls:homepanel:highlights:v1";
+const HP_HL_TS = "tdls:homepanel:highlights_ts:v1";
+const HP_HL_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+
+function safeParseJSON(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function readHighlightsCache() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(HP_HL_KEY);
+    if (!raw) return null;
+
+    const parsed = safeParseJSON(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const trendingProducts = Array.isArray(parsed.trendingProducts) ? parsed.trendingProducts : [];
+    const bestSellerProducts = Array.isArray(parsed.bestSellerProducts)
+      ? parsed.bestSellerProducts
+      : [];
+
+    const tsRaw = localStorage.getItem(HP_HL_TS);
+    const ts = tsRaw ? Number(tsRaw) : 0;
+
+    return { trendingProducts, bestSellerProducts, ts: Number.isFinite(ts) ? ts : 0 };
+  } catch {
+    return null;
+  }
+}
+
+function writeHighlightsCache(next) {
+  if (typeof window === "undefined") return;
+  try {
+    const payload = {
+      trendingProducts: Array.isArray(next?.trendingProducts) ? next.trendingProducts : [],
+      bestSellerProducts: Array.isArray(next?.bestSellerProducts) ? next.bestSellerProducts : [],
+    };
+    localStorage.setItem(HP_HL_KEY, JSON.stringify(payload));
+    localStorage.setItem(HP_HL_TS, String(Date.now()));
+  } catch {}
+}
+
+function hasHighlightsCacheData(cache) {
+  const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
+  const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
+  return (t.length || 0) + (b.length || 0) > 0;
+}
+
+function isFreshHighlightsCache(cache) {
+  const ts = Number(cache?.ts || 0);
+  if (!Number.isFinite(ts) || ts <= 0) return false;
+  return Date.now() - ts < HP_HL_TTL_MS;
+}
+
+function dispatchHighlightsReady() {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new Event("tdls:homepanel:highlightsReady"));
+  } catch {}
+}
+
 function Icon({ name = "spark" }) {
   const common = {
     width: 18,
@@ -691,13 +758,30 @@ export default function HomePanel({ open, onClose }) {
   const [isMobile, setIsMobile] = useState(false);
   const [isCompactHeight, setIsCompactHeight] = useState(false);
 
+  // ✅ Hydrate highlights from preloaded localStorage cache (instant perception)
+  const bootHighlights = useMemo(() => readHighlightsCache(), []);
+  const bootTrending = useMemo(
+    () => (bootHighlights?.trendingProducts || []).map(normalizeHighlightItem),
+    [bootHighlights]
+  );
+  const bootBest = useMemo(
+    () => (bootHighlights?.bestSellerProducts || []).map(normalizeHighlightItem),
+    [bootHighlights]
+  );
+  const bootHasData = (bootTrending.length || 0) + (bootBest.length || 0) > 0;
+
   const [loadingHighlights, setLoadingHighlights] = useState(false);
   const [highlightsError, setHighlightsError] = useState(null);
-  const [trendingProducts, setTrendingProducts] = useState([]);
-  const [bestSellerProducts, setBestSellerProducts] = useState([]);
+  const [trendingProducts, setTrendingProducts] = useState(bootTrending);
+  const [bestSellerProducts, setBestSellerProducts] = useState(bootBest);
   const [activeTab, setActiveTab] = useState("TRENDING");
   const [hoverIndex, setHoverIndex] = useState(0);
-  const [loadedOnce, setLoadedOnce] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(bootHasData);
+
+  const loadedOnceRef = useRef(false);
+  useEffect(() => {
+    loadedOnceRef.current = loadedOnce;
+  }, [loadedOnce]);
 
   const [navH, setNavH] = useState(89);
   const [bottomH, setBottomH] = useState(86);
@@ -747,6 +831,134 @@ export default function HomePanel({ open, onClose }) {
   // ✅ Hover intent to avoid “hypersensitive” selection changes
   const railHoverTimerRef = useRef(null);
   const railHoverTargetRef = useRef(-1);
+
+  // ✅ Sync from preloader event (if it finishes after initial paint)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onReady = () => {
+      const cache = readHighlightsCache();
+      if (!cache || !hasHighlightsCacheData(cache)) return;
+
+      const t = Array.isArray(cache.trendingProducts) ? cache.trendingProducts : [];
+      const b = Array.isArray(cache.bestSellerProducts) ? cache.bestSellerProducts : [];
+
+      setTrendingProducts(t.map(normalizeHighlightItem));
+      setBestSellerProducts(b.map(normalizeHighlightItem));
+      setLoadedOnce(true);
+      setLoadingHighlights(false);
+      setHighlightsError(null);
+      setHoverIndex(0);
+    };
+
+    window.addEventListener("tdls:homepanel:highlightsReady", onReady);
+    return () => window.removeEventListener("tdls:homepanel:highlightsReady", onReady);
+  }, []);
+
+  // ✅ Extra safety: if HomePanel stays mounted even when closed, warm cache silently here too.
+  // (No UI loading state; this only prevents "loaded later" perception.)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let cancelled = false;
+    const cache = readHighlightsCache();
+    const hasData = hasHighlightsCacheData(cache);
+    const fresh = isFreshHighlightsCache(cache);
+
+    // If we already have fresh data, nothing to do.
+    if (hasData && fresh) {
+      // ensure state is hydrated (in case of older state)
+      if (!loadedOnceRef.current) {
+        const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
+        const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
+        setTrendingProducts(t.map(normalizeHighlightItem));
+        setBestSellerProducts(b.map(normalizeHighlightItem));
+        setLoadedOnce(true);
+      }
+      return;
+    }
+
+    const ac = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      try {
+        ac.abort();
+      } catch {}
+    }, 5200);
+
+    (async () => {
+      try {
+        let data = null;
+
+        try {
+          const res = await fetch("/api/home/highlights", {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+            signal: ac.signal,
+          });
+          if (res.ok) data = await res.json().catch(() => null);
+        } catch {}
+
+        if (!cancelled && data?.ok) {
+          const trending = Array.isArray(data.trendingProducts) ? data.trendingProducts : [];
+          const best = Array.isArray(data.bestSellerProducts) ? data.bestSellerProducts : [];
+
+          writeHighlightsCache({ trendingProducts: trending, bestSellerProducts: best });
+          dispatchHighlightsReady();
+
+          // If component is mounted, keep state warm too (no visual change unless panel is open).
+          setTrendingProducts(trending.map(normalizeHighlightItem));
+          setBestSellerProducts(best.map(normalizeHighlightItem));
+          setLoadedOnce(true);
+          setHighlightsError(null);
+          setHoverIndex(0);
+          return;
+        }
+
+        // Fallback to Strapi only if API endpoint not available
+        const json = await fetchFromStrapi("/products?populate=*", ac.signal);
+        const payload = unwrapStrapiProxy(json);
+        const products = toProductArrayFromStrapiPayload(payload);
+
+        if (cancelled) return;
+
+        const built = buildHighlightsFromProducts(products);
+        writeHighlightsCache({
+          trendingProducts: built.trendingProducts,
+          bestSellerProducts: built.bestSellerProducts,
+        });
+        dispatchHighlightsReady();
+
+        setTrendingProducts(built.trendingProducts);
+        setBestSellerProducts(built.bestSellerProducts);
+        setLoadedOnce(true);
+        setHoverIndex(0);
+
+        if (
+          (built.trendingProducts?.length || 0) === 0 &&
+          (built.bestSellerProducts?.length || 0) === 0
+        ) {
+          // Keep existing UI logic: error only when truly empty
+          setHighlightsError("Live highlights are temporarily unavailable.");
+        }
+      } catch {
+        // Silent by design; UI must not show "loading later" indicator.
+      } finally {
+        window.clearTimeout(timeoutId);
+        try {
+          ac.abort();
+        } catch {}
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      try {
+        ac.abort();
+      } catch {}
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1011,6 +1223,7 @@ export default function HomePanel({ open, onClose }) {
     return () => window.clearTimeout(id);
   }, [open]);
 
+  // ✅ Open-time behavior: hydrate instantly from cache; refresh silently only if stale.
   useEffect(() => {
     if (!open) return;
 
@@ -1022,10 +1235,38 @@ export default function HomePanel({ open, onClose }) {
       } catch {}
     }, 6500);
 
-    async function loadHighlights() {
-      if (loadedOnce) return;
+    const cache = readHighlightsCache();
+    const cachedHasData = hasHighlightsCacheData(cache);
 
-      setLoadingHighlights(true);
+    // Instant hydrate on open (no loader)
+    if (cachedHasData) {
+      const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
+      const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
+      setTrendingProducts(t.map(normalizeHighlightItem));
+      setBestSellerProducts(b.map(normalizeHighlightItem));
+      setLoadedOnce(true);
+      setLoadingHighlights(false);
+      setHighlightsError(null);
+      setHoverIndex(0);
+
+      // If fresh, do nothing else.
+      if (isFreshHighlightsCache(cache)) {
+        return () => {
+          cancelled = true;
+          clearTimeout(timeoutId);
+          try {
+            ac.abort();
+          } catch {}
+        };
+      }
+    }
+
+    async function silentRefreshIfNeeded() {
+      // If already loaded and cache is fresh enough, skip.
+      if (cachedHasData && isFreshHighlightsCache(cache)) return;
+
+      // No visible loading; keep UI responsive.
+      setLoadingHighlights(false);
       setHighlightsError(null);
 
       try {
@@ -1045,6 +1286,9 @@ export default function HomePanel({ open, onClose }) {
           const trending = Array.isArray(data.trendingProducts) ? data.trendingProducts : [];
           const best = Array.isArray(data.bestSellerProducts) ? data.bestSellerProducts : [];
 
+          writeHighlightsCache({ trendingProducts: trending, bestSellerProducts: best });
+          dispatchHighlightsReady();
+
           setTrendingProducts(trending.map(normalizeHighlightItem));
           setBestSellerProducts(best.map(normalizeHighlightItem));
           setLoadedOnce(true);
@@ -1059,6 +1303,13 @@ export default function HomePanel({ open, onClose }) {
         if (cancelled) return;
 
         const built = buildHighlightsFromProducts(products);
+
+        writeHighlightsCache({
+          trendingProducts: built.trendingProducts,
+          bestSellerProducts: built.bestSellerProducts,
+        });
+        dispatchHighlightsReady();
+
         setTrendingProducts(built.trendingProducts);
         setBestSellerProducts(built.bestSellerProducts);
 
@@ -1073,15 +1324,24 @@ export default function HomePanel({ open, onClose }) {
         }
       } catch {
         if (cancelled) return;
-        setHighlightsError("Live highlights are temporarily unavailable.");
-        setTrendingProducts([]);
-        setBestSellerProducts([]);
+
+        // Only show error if everything is empty; otherwise keep existing cached UI.
+        const stillEmpty =
+          (trendingProducts?.length || 0) === 0 && (bestSellerProducts?.length || 0) === 0;
+
+        if (stillEmpty) {
+          setHighlightsError("Live highlights are temporarily unavailable.");
+          setTrendingProducts([]);
+          setBestSellerProducts([]);
+        }
       } finally {
         if (!cancelled) setLoadingHighlights(false);
       }
     }
 
-    loadHighlights().catch(() => {});
+    // Only attempt refresh if we do not have fresh cache.
+    silentRefreshIfNeeded().catch(() => {});
+
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
@@ -1089,7 +1349,9 @@ export default function HomePanel({ open, onClose }) {
         ac.abort();
       } catch {}
     };
-  }, [open, loadedOnce]);
+    // intentionally not depending on loadedOnce to avoid "load later" behavior
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     setHoverIndex(0);

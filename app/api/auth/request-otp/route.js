@@ -1,7 +1,8 @@
 // FILE: app/api/auth/request-otp/route.js
 // PURPOSE: electric-fast AND reliable OTP delivery.
-// - Responds only after the SMS/Email/WhatsApp provider call is CONFIRMED (accepted) within a hard timeout.
-// - If provider send FAILS or TIMES OUT -> OTP is immediately consumed/expired (never remains active).
+// - Responds after the SMS/Email/WhatsApp provider call is CONFIRMED (accepted) OR the provider-ack hard timeout elapses.
+// - If provider send FAILS (explicit false / error) -> OTP is immediately consumed/expired (never remains active).
+// - If provider ack TIMES OUT -> treat as "PENDING" (unknown outcome): do NOT consume OTP; return ok:true so user can enter OTP if they received it.
 // - Reuse behavior remains: if an active OTP exists, we return it and do NOT re-send.
 // - Keeps existing purpose normalization + Bangladesh phone normalization.
 // - Concurrency-safe per user+purpose via pg advisory lock.
@@ -10,7 +11,7 @@
 // IMPORTANT PERF NOTES:
 // - We still keep RL fast-or-pass (budgeted).
 // - DB + provider call are the only critical path for "new OTP" creation.
-// - Default send timeout is capped to preserve a "blink-of-eye" UX.
+// - Provider ACK timeout is capped to preserve UX while preventing false "OTP failed" when provider is slow.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -455,9 +456,10 @@ async function rateLimitFastOrPass(args) {
 }
 
 /**
- * Single source of truth:
+ * Provider send contract:
  * - Success = provider accepted the send (no throw, no timeout, not explicit false).
- * - Failure = timeout or throw or explicit false.
+ * - Failure = explicit false OR throw (non-timeout).
+ * - Timeout = provider did not acknowledge within sendTimeoutMs (unknown outcome).
  */
 async function sendOtpAndConfirm({
   otpId,
@@ -679,11 +681,11 @@ export async function POST(req) {
 
     const resendCooldownSeconds = Math.max(0, Number.parseInt(process.env.OTP_RESEND_COOLDOWN_SECONDS || "0", 10));
 
-    // Electric-fast hard cap for provider acknowledgement:
+    // Provider acknowledgement hard cap:
     // - Default: 3500ms
     // - Min: 800ms (never lower; avoids false failures)
-    // - Max: 6000ms (keeps UX snappy; prevents long hangs)
-    const SEND_TIMEOUT_MS = clampInt(process.env.OTP_SEND_TIMEOUT_MS || "3500", 800, 6000);
+    // - Max: 10000ms (10s; balances reliability vs UX)
+    const SEND_TIMEOUT_MS = clampInt(process.env.OTP_SEND_TIMEOUT_MS || "3500", 800, 10000);
 
     const now = new Date();
 
@@ -820,7 +822,7 @@ export async function POST(req) {
       }
     }
 
-    // Create OTP row (concurrency-safe). We only return success if provider send is confirmed.
+    // Create OTP row (concurrency-safe).
     const created = await prisma.$transaction(async (tx) => {
       const lockKey = `auth-request-otp:${user.id}:${purpose}`;
       const locked = await advisoryTryLock(tx, lockKey);
@@ -968,7 +970,28 @@ export async function POST(req) {
       mark("provider");
 
       if (!sendRes.ok) {
-        // FULLPROOF RULE: if provider failed/timeout -> consume immediately; never leave active OTP.
+        if (sendRes.reason === "SEND_TIMEOUT") {
+          // PRACTICAL RULE: provider ack timed out => outcome unknown.
+          // Do NOT consume OTP; user may still receive it. Let TTL handle expiry.
+          mark("response_ready");
+          return NextResponse.json({
+            ok: true,
+            purpose,
+            channel: "EMAIL",
+            otpId: created.id,
+            ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
+            expiresAt: created.expiresAt,
+            serverNow: new Date().toISOString(),
+            resendCooldownSeconds,
+            normalizedIdentifier: targetEmail,
+            delivery: "pending",
+            pending: true,
+            providerAckTimeoutMs: SEND_TIMEOUT_MS,
+            timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+          });
+        }
+
+        // FULLPROOF RULE: explicit provider failure/error => consume immediately; never leave active OTP.
         await consumeOtpNow(created.id);
         if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
 
@@ -1029,6 +1052,25 @@ export async function POST(req) {
       mark("provider");
 
       if (!sendRes.ok) {
+        if (sendRes.reason === "SEND_TIMEOUT") {
+          mark("response_ready");
+          return NextResponse.json({
+            ok: true,
+            purpose,
+            channel: "SMS",
+            otpId: created.id,
+            ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
+            expiresAt: created.expiresAt,
+            serverNow: new Date().toISOString(),
+            resendCooldownSeconds,
+            normalizedIdentifier: `+${phoneDigitsOut}`,
+            delivery: "pending",
+            pending: true,
+            providerAckTimeoutMs: SEND_TIMEOUT_MS,
+            timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+          });
+        }
+
         await consumeOtpNow(created.id);
         if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
 
@@ -1089,6 +1131,25 @@ export async function POST(req) {
       mark("provider");
 
       if (!sendRes.ok) {
+        if (sendRes.reason === "SEND_TIMEOUT") {
+          mark("response_ready");
+          return NextResponse.json({
+            ok: true,
+            purpose,
+            channel: "WHATSAPP",
+            otpId: created.id,
+            ttlSeconds: remainingTtlSeconds(created.expiresAt, new Date()),
+            expiresAt: created.expiresAt,
+            serverNow: new Date().toISOString(),
+            resendCooldownSeconds,
+            normalizedIdentifier: phoneE164Out,
+            delivery: "pending",
+            pending: true,
+            providerAckTimeoutMs: SEND_TIMEOUT_MS,
+            timings: process.env.OTP_DEBUG === "1" ? marks : undefined,
+          });
+        }
+
         await consumeOtpNow(created.id);
         if (createdNewUser && createdUserId) await prisma.user.delete({ where: { id: createdUserId } }).catch(() => {});
 

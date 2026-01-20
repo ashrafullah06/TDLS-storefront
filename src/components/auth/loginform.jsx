@@ -36,7 +36,7 @@ const MODE_2FA = "2fa";
    HELPERS (kept + improved)
    =========================== */
 const isPhoneish = (v) => /^\+?\d[\d\s\-()]*$/.test(String(v || "").trim());
-const isEmailish = (v) => /\S+@\S+\.\S+/.test(String(v || ""));
+const isEmailish = (v) => /\S+@\S+\.\S+/.test(String(v || "").trim());
 
 /**
  * Normalize Bangladeshi mobile numbers into E.164:
@@ -418,6 +418,27 @@ export default function LoginForm() {
 
   const needsPassword = mode === MODE_PASSWORD || mode === MODE_2FA;
   const involvesOtp = mode === MODE_OTP || mode === MODE_2FA;
+
+  /* ===========================
+     IDENTIFIER INPUT KEYBOARD FIX (additive, UI-only)
+     - Prevents mobile from defaulting to numeric keypad before email becomes fully "valid".
+     =========================== */
+  const { idInputType, idInputMode } = useMemo(() => {
+    const t = String(identifier || "").trim();
+
+    // Empty/unknown: allow full keyboard so email entry is always possible.
+    if (!t) return { idInputType: "text", idInputMode: "text" };
+
+    // If user has typed any letters or '@', prioritize email keyboard immediately.
+    const hasAlpha = /[a-zA-Z]/.test(t);
+    const hasAt = t.includes("@");
+    if (hasAlpha || hasAt) return { idInputType: "email", idInputMode: "email" };
+
+    // Otherwise, if it is phone-like, prefer tel keypad.
+    if (isPhoneish(t) && !isEmailish(t)) return { idInputType: "tel", idInputMode: "tel" };
+
+    return { idInputType: "text", idInputMode: "text" };
+  }, [identifier]);
 
   /* ===========================
      REDIRECTS (kept)
@@ -1441,13 +1462,17 @@ export default function LoginForm() {
 
                   <div style={{ marginTop: 8, ...fieldWrap(Boolean(fieldErr.id)) }}>
                     <input
+                      type={idInputType}
+                      inputMode={idInputMode}
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
                       onKeyDown={onEnterKey}
                       placeholder="you@example.com or 017… / +8801…"
                       autoComplete="username"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
                       aria-invalid={Boolean(fieldErr.id)}
-                      inputMode={validEmail ? "email" : "tel"}
                       style={{
                         ...inputBase,
                         // Desktop can keep auto-ch sizing; mobile always 100% to eliminate overflow/masking.

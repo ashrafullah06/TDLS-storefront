@@ -1,4 +1,4 @@
-//my-project/app/orders/[id]/receipt/page.jsx
+// my-project/app/orders/[id]/receipt/page.jsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -416,23 +416,25 @@ function dhakaParts(dateLike) {
   }
 }
 
+// Note: "dd/mm/yy" cannot be used in filenames because "/" is invalid on Windows.
+// We use dd-mm-yy (same meaning) and keep everything deterministic and safe.
 function buildReceiptFilename({ placedAt, customerName, orderNumber }) {
   const { dd, mm, yy, HH, MI, SS } = dhakaParts(placedAt || Date.now());
   const who = safeFilenamePart(customerName, "Customer").replace(/\s+/g, "_");
   const ord = safeFilenamePart(orderNumber || "", "").replace(/\s+/g, "_");
-  const base = ord ? `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}-${ord}` : `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}`;
+  const base = ord
+    ? `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}-${ord}`
+    : `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}`;
   return `${base}.pdf`;
 }
 
 /* ───────── server component ───────── */
 
 export default async function ReceiptPage({ params }) {
-  // ✅ FIX: Next.js dynamic params must be awaited before property access
   const p = await params;
   const id = String(p?.id || "");
   if (!id) return notFound();
 
-  // ✅ NEW: determine viewer session (used only to hide "My Orders" CTA for guests)
   const session = await auth().catch(() => null);
   const isLoggedIn = Boolean(session?.user?.id);
 
@@ -464,15 +466,12 @@ export default async function ReceiptPage({ params }) {
   const snapIdx = buildSnapshotIndex(orderSnap);
 
   const currency = String(firstNonEmpty(orderSnap?.currency, orderSnap?.cartSnapshot?.currency, order.currency, "BDT"));
-
   const orderItems = groupOrderItems(order.items || [], snapIdx);
 
   const productsCount = orderItems.length;
   const itemsCount = orderItems.reduce((s, it) => s + Math.max(0, toNum(it?.quantity, 0)), 0);
 
-  // Totals (prefer meaningful snapshot/order totals; fallback to item-sum if needed)
   const t = getMirroredTotals(order, orderSnap);
-
   const itemsSubtotal = computeItemsSubtotal(orderItems);
 
   let subtotal = toNum(t.subtotal, 0);
@@ -482,7 +481,6 @@ export default async function ReceiptPage({ params }) {
   let grand = toNum(t.grandTotal, 0);
 
   if (subtotal === 0 && itemsSubtotal > 0) subtotal = itemsSubtotal;
-
   if (grand === 0 && itemsSubtotal > 0) {
     grand = Math.max(0, subtotal - discountAbs + shipping + tax);
   }
@@ -496,7 +494,6 @@ export default async function ReceiptPage({ params }) {
   const events = Array.isArray(order.events) ? order.events : [];
   const customerTimeline = events.filter((e) => CUSTOMER_SAFE_EVENT_KINDS.has(normalizeEventKind(e?.kind))).slice(0, 10);
 
-  // Raw contact fields (used for guest receipt download verification params)
   const rawName = firstNonEmpty(order.user?.name, order.shippingAddress?.name, order.billingAddress?.name) || "";
   const rawPhone = firstNonEmpty(order.user?.phone, order.shippingAddress?.phone, order.billingAddress?.phone) || "";
   const rawEmail = firstNonEmpty(order.user?.email, order.shippingAddress?.email, order.billingAddress?.email) || "";
@@ -505,23 +502,17 @@ export default async function ReceiptPage({ params }) {
   const displayPhone = rawPhone;
   const displayEmail = rawEmail;
 
-  // ✅ NEW: production-safe direct invoice download link (supports guest verification)
   const downloadParams = new URLSearchParams();
   downloadParams.set("orderNumber", String(order.orderNumber || order.id));
-  if (rawEmail) {
-    downloadParams.set("email", String(rawEmail));
-  } else if (rawPhone) {
-    downloadParams.set("phone", String(rawPhone));
-  }
+  if (rawEmail) downloadParams.set("email", String(rawEmail));
+  else if (rawPhone) downloadParams.set("phone", String(rawPhone));
 
-  // ✅ NEW: deterministic download filename (safe on Windows/Android/iOS)
   const downloadName = buildReceiptFilename({
     placedAt: order.placedAt || order.createdAt,
     customerName: displayName || "Customer",
     orderNumber: String(order.orderNumber || ""),
   });
 
-  // Optional: allow API route to use filename for Content-Disposition (if implemented)
   downloadParams.set("filename", downloadName);
 
   const invoiceHref = `/api/orders/${encodeURIComponent(order.id)}/invoice?${downloadParams.toString()}`;
@@ -808,12 +799,10 @@ export default async function ReceiptPage({ params }) {
               </div>
 
               <div className="actions no-print">
-                {/* ✅ FIX: hardened download — stable filename + no error.txt generation */}
                 <a
                   id="tdls-receipt-download"
                   href={invoiceHref}
                   className="btn"
-                  // download filename is enforced by JS fallback; also works natively in many browsers
                   download={downloadName}
                   data-filename={downloadName}
                 >
@@ -822,7 +811,6 @@ export default async function ReceiptPage({ params }) {
 
                 <ReceiptPrintButton className="btn" />
 
-                {/* ✅ FIX: show "My Orders" ONLY when viewer is logged in */}
                 {isLoggedIn ? (
                   <Link href="/customer/dashboard" className="btn alt">
                     My Orders
@@ -839,7 +827,6 @@ export default async function ReceiptPage({ params }) {
 
         <div aria-hidden="true" className="h-24" />
 
-        {/* ✅ NEW: robust downloader to prevent "site not available" + "error.txt" */}
         <Script
           id="tdls-receipt-download-script"
           strategy="afterInteractive"
@@ -851,17 +838,23 @@ export default async function ReceiptPage({ params }) {
 
   var busy = false;
 
+  function isIOS(){
+    var ua = navigator.userAgent || "";
+    return /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+  }
+
   a.addEventListener("click", function(e){
-    // If browser handles download natively and JS fails, default still works.
-    // Here we intercept to prevent blob-url revoke timing issues and "error.txt" downloads.
     if (busy) { e.preventDefault(); return; }
 
     var href = a.getAttribute("href") || "";
     if (!href) return;
 
+    // iOS Safari: blob-download is unreliable/restricted.
+    // Let the browser handle it (API must set Content-Disposition: attachment).
+    if (isIOS()) return;
+
     var filename = a.getAttribute("download") || (a.dataset && a.dataset.filename) || "TDLS-receipt.pdf";
 
-    // If user holds modifiers (open new tab), let default happen.
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
 
     e.preventDefault();
@@ -883,9 +876,13 @@ export default async function ReceiptPage({ params }) {
         var ct = String(res.headers.get("content-type") || "").toLowerCase();
         var blob = await res.blob();
 
-        // Hard validation: do NOT download server error text/html as a file.
+        // Hard validation: never download HTML/text errors as a file.
+        // Check both content-type and actual PDF signature.
         var looksPdf = ct.indexOf("pdf") !== -1 || (blob && String(blob.type || "").toLowerCase().indexOf("pdf") !== -1);
-        if (!looksPdf && blob && blob.size < 2048) throw new Error("NON_PDF_SMALL");
+        if (!looksPdf) {
+          var head = await blob.slice(0, 4).text().catch(function(){ return ""; });
+          if (head !== "%PDF") throw new Error("NON_PDF");
+        }
 
         var url = URL.createObjectURL(blob);
         var tmp = document.createElement("a");
@@ -894,17 +891,16 @@ export default async function ReceiptPage({ params }) {
         tmp.style.display = "none";
         document.body.appendChild(tmp);
 
-        // Must be in the click call-stack (still within handler async turn).
         tmp.click();
 
-        // Delayed revoke avoids Chrome "site not available" in download history.
+        // Delay revoke: prevents Chrome download history "site not available".
         setTimeout(function(){
           try{ URL.revokeObjectURL(url); }catch(_){}
           try{ tmp.remove(); }catch(_){}
-        }, 4000);
+        }, 6000);
 
       }catch(err){
-        // Fallback: allow native handling (works when API sets Content-Disposition attachment).
+        // Fallback: navigate directly (still same-origin); relies on server headers.
         try{ window.location.assign(href); }catch(_){}
       }finally{
         busy = false;

@@ -5,12 +5,16 @@ export const revalidate = 0;
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import crypto from "crypto";
 
-/* ────────────────────────── shared helpers ────────────────────────── */
+/* ────────────────────────── utilities ────────────────────────── */
 
-function isEmail(v) {
-  return /\S+@\S+\.\S+/.test(String(v || "").trim());
+function getUserIdFromSession(session) {
+  return (
+    session?.user?.id ||
+    session?.user?.uid ||
+    session?.user?.sub ||
+    null
+  );
 }
 
 function normalizePhone(raw) {
@@ -37,323 +41,377 @@ function normalizePhone(raw) {
   return null;
 }
 
-function detectIdentifier(raw) {
-  const val = String(raw || "").trim();
-  if (!val) return { type: null };
-  if (isEmail(val)) return { type: "email", email: val.toLowerCase() };
-  const phone = normalizePhone(val);
-  if (phone) return { type: "phone", phone };
-  return { type: null };
+function strOrNull(v) {
+  const s = v == null ? "" : String(v).trim();
+  return s ? s : null;
 }
 
-function getOtpSecret() {
-  const v = process.env.OTP_SECRET;
-  if (!v) throw new Error("OTP_SECRET is required");
-  return v;
-}
+/**
+ * Accepts BOTH:
+ * - DB-shaped keys: line1/line2/city/state
+ * - UI-shaped keys: streetAddress/address2/upazila/district/division
+ */
+function pickInputAddress(raw = {}) {
+  const a = raw || {};
 
-function hmacFor(userId, purpose, code) {
-  return crypto
-    .createHmac("sha256", getOtpSecret())
-    .update(`${userId}:${purpose}:${code}`)
-    .digest("hex");
-}
+  const line1 = strOrNull(
+    a.line1 ?? a.address1 ?? a.streetAddress ?? a.street_address
+  );
+  const line2 = strOrNull(a.line2 ?? a.address2 ?? a.address_2);
 
-const PURPOSES = {
-  CREATE: "address_create",
-  UPDATE: "address_update",
-  DELETE: "address_delete",
-};
+  // Bangladesh naming: upazila ≈ city, district ≈ state (in your schema usage)
+  const upazila = strOrNull(a.upazila ?? a.city ?? a.area);
+  const district = strOrNull(a.district ?? a.state ?? a.region);
+  const division = strOrNull(a.division ?? a.adminLevel1);
 
-const ADDRESS_MUTATION_PURPOSES = new Set([
-  PURPOSES.CREATE,
-  PURPOSES.UPDATE,
-  PURPOSES.DELETE,
-]);
-
-/** Parse OTP from headers or body. Supports either x-otp-token(base64 json) or discrete headers. */
-function parseOtpFromRequest(req, body, fallbackExpectedPurpose) {
-  const h = req.headers;
-
-  const token =
-    h.get("x-otp-token") ||
-    h.get("X-Otp-Token") ||
-    (body && body.otp && body.otp.token) ||
-    "";
-
-  const parseB64Json = (val) => {
-    if (!val) return null;
-    try {
-      const norm = String(val).trim().replace(/\s+/g, "");
-      const pad =
-        norm.length % 4 === 2 ? "==" : norm.length % 4 === 3 ? "=" : "";
-      const json = Buffer.from(norm + pad, "base64").toString("utf8");
-      return JSON.parse(json);
-    } catch {
-      return null;
-    }
-  };
-
-  const fromToken = parseB64Json(token);
-
-  const purposeRaw =
-    (fromToken && fromToken.purpose) ||
-    (body && body.otp && body.otp.purpose) ||
-    h.get("x-otp-purpose") ||
-    h.get("X-Otp-Purpose") ||
-    fallbackExpectedPurpose ||
-    "";
-
-  const codeRaw =
-    (fromToken && (fromToken.code || fromToken.token)) ||
-    (body && body.otp && (body.otp.code || body.otp.token)) ||
-    h.get("x-otp-code") ||
-    h.get("X-Otp-Code") ||
-    "";
-
-  const identifierRaw =
-    (fromToken && (fromToken.identifier || fromToken.to || fromToken.id)) ||
-    (body && body.otp && (body.otp.identifier || body.otp.to || body.otp.id)) ||
-    h.get("x-otp-identifier") ||
-    h.get("X-Otp-Identifier") ||
-    "";
-
-  const purpose = String(purposeRaw || "").toLowerCase().trim();
-  const code = String(codeRaw || "").trim();
-  const identifier = String(identifierRaw || "").trim();
-
-  if (!purpose && !code && !identifier) return null;
-  return { purpose, code, identifier };
-}
-
-/** Verify OTP for address mutations. (Currently enforces PHONE identifier.) */
-async function verifyAddressOtp({ userId, otp, acceptablePurposes }) {
-  const idRaw = otp?.identifier ?? otp?.id ?? otp?.to ?? null;
-  const code = otp?.code ?? null;
-  const purpose = String(otp?.purpose || "").toLowerCase().trim();
-
-  if (!ADDRESS_MUTATION_PURPOSES.has(purpose)) {
-    return { ok: false, error: "OTP_PURPOSE_INVALID" };
-  }
-  if (
-    Array.isArray(acceptablePurposes) &&
-    acceptablePurposes.length > 0 &&
-    !acceptablePurposes.map((x) => String(x).toLowerCase()).includes(purpose)
-  ) {
-    return { ok: false, error: "OTP_PURPOSE_NOT_ALLOWED" };
-  }
-  if (!/^\d{6}$/.test(String(code || ""))) {
-    return { ok: false, error: "OTP_CODE_REQUIRED" };
-  }
-
-  const parsed = detectIdentifier(idRaw);
-  if (!parsed.type || parsed.type !== "phone") {
-    return { ok: false, error: "OTP_IDENTIFIER_PHONE_REQUIRED" };
-  }
-
-  const now = new Date();
-  const rec = await prisma.otpCode.findFirst({
-    where: {
-      userId,
-      purpose,
-      consumedAt: null,
-      expiresAt: { gte: now },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, codeHash: true, purpose: true },
-  });
-
-  if (!rec) return { ok: false, error: "OTP_NOT_FOUND_OR_EXPIRED" };
-
-  const expectedHash = hmacFor(userId, rec.purpose, String(code));
-  if (rec.codeHash !== expectedHash) {
-    await prisma.otpCode.update({
-      where: { id: rec.id },
-      data: { attemptCount: { increment: 1 } },
-    });
-    return { ok: false, error: "OTP_MISMATCH" };
-  }
-
-  await prisma.otpCode.update({
-    where: { id: rec.id },
-    data: { consumedAt: new Date() },
-  });
-
-  return { ok: true, phoneFromOtp: parsed.phone || null };
-}
-
-/** Canonicalize payload into DB shape (preserves granular identity fields). */
-function canonAddress(input, existing) {
-  const a = input || {};
-  const ex = existing || {};
-
-  const l1 = (a.line1 ?? ex.line1 ?? "").toString().trim();
-  const l2 = (a.line2 ?? ex.line2 ?? "").toString().trim();
-
-  const city = (a.city ?? a.area ?? ex.city ?? "").toString().trim() || null;
-  const state =
-    (a.state ?? a.region ?? ex.state ?? "").toString().trim() || null;
-
-  const postalCode =
-    (a.postalCode ?? a.postcode ?? ex.postalCode ?? "").toString().trim() ||
-    null;
-
-  const countryIso2 = String(a.countryIso2 || a.country || ex.countryIso2 || "BD")
+  const postalCode = strOrNull(a.postalCode ?? a.postcode ?? a.zip);
+  const countryIso2 = String(a.countryIso2 ?? a.country ?? "BD")
     .toUpperCase()
     .trim();
 
-  const name =
-    (a.name ?? ex?.granular?.name ?? null) != null
-      ? String(a.name ?? ex?.granular?.name).trim() || null
-      : null;
+  const phone = normalizePhone(a.phone) || null;
+  const email = strOrNull(a.email) ? String(a.email).trim().toLowerCase() : null;
+  const name = strOrNull(a.name);
+  const label = strOrNull(a.label);
 
-  const phone =
-    normalizePhone(a.phone ?? ex?.granular?.phone ?? null) ||
-    normalizePhone(ex?.granular?.phone ?? null) ||
-    null;
+  const notes = strOrNull(a.notes);
 
-  const email =
-    (a.email ?? ex?.granular?.email ?? null) != null
-      ? String(a.email ?? ex?.granular?.email).trim().toLowerCase() || null
-      : null;
+  // Optional granular UI fields
+  const houseNo = strOrNull(a.houseNo);
+  const houseName = strOrNull(a.houseName);
+  const apartmentNo = strOrNull(a.apartmentNo);
+  const floorNo = strOrNull(a.floorNo);
 
-  const label =
-    (a.label ?? ex?.granular?.label ?? null) != null
-      ? String(a.label ?? ex?.granular?.label).trim() || null
-      : null;
+  const village = strOrNull(a.village);
+  const postOffice = strOrNull(a.postOffice);
+  const union = strOrNull(a.union);
+  const policeStation = strOrNull(a.policeStation ?? a.thana);
 
-  const notes =
-    (a.notes ?? ex?.granular?.notes ?? null) != null
-      ? String(a.notes ?? ex?.granular?.notes).trim() || null
-      : null;
+  const makeDefault = !!(a.makeDefault ?? a.isDefault ?? a.default ?? a.primary);
 
   return {
-    line1: l1 || null,
-    line2: l2 || null,
-    city,
-    state,
+    // Canonical mailing
+    line1,
+    line2,
+    city: upazila,   // required by schema
+    state: district, // optional by schema but treated important in BD
+
     postalCode,
     countryIso2,
-    premise: a.houseName ?? ex.premise ?? null,
-    streetNumber: a.houseNo ?? ex.streetNumber ?? null,
-    subpremise:
-      [a.apartmentNo, a.floorNo].filter(Boolean).join(", ") ||
-      ex.subpremise ||
-      null,
-    sublocality: a.policeStation || a.thana || ex.sublocality || null,
-    adminLevel1: a.division ?? ex.adminLevel1 ?? null,
-    adminLevel2: a.district ?? ex.adminLevel2 ?? null,
-    adminLevel3: a.upazila ?? ex.adminLevel3 ?? null,
-    granular: {
-      ...(ex.granular || {}),
-      name,
-      phone,
-      email,
-      label,
-      notes,
-    },
-  };
-}
 
-/** Normalize DB address into frontend-friendly payload (flatten identity fields). */
-function normalizeAddress(a) {
-  if (!a) return null;
-  const g = a.granular || {};
-  return {
-    id: a.id,
-    isDefault: !!a.isDefault,
+    // Columns
+    phone,
+    label,
 
-    name:
-      (a.name ?? g.name ?? null) != null
-        ? String(a.name ?? g.name).trim() || null
-        : null,
-    phone:
-      normalizePhone(a.phone ?? g.phone ?? null) ||
-      normalizePhone(g.phone ?? null) ||
-      null,
-    email:
-      (a.email ?? g.email ?? null) != null
-        ? String(a.email ?? g.email).trim().toLowerCase() || null
-        : null,
-    label:
-      (a.label ?? g.label ?? null) != null
-        ? String(a.label ?? g.label).trim() || null
-        : null,
-    notes:
-      (a.notes ?? g.notes ?? null) != null
-        ? String(a.notes ?? g.notes).trim() || null
-        : null,
+    // UI-friendly region naming
+    upazila,
+    district,
+    division,
 
-    line1: a.line1,
-    line2: a.line2,
-    city: a.city,
-    state: a.state,
-    postalCode: a.postalCode,
-    countryIso2: a.countryIso2,
+    // Optional / identity
+    name,
+    email,
+    notes,
 
-    houseName: a.premise,
-    houseNo: a.streetNumber,
-    apartmentNo: a.subpremise || null,
+    // Optional granular
+    houseNo,
+    houseName,
+    apartmentNo,
+    floorNo,
+    village,
+    postOffice,
+    union,
+    policeStation,
 
-    division: a.adminLevel1,
-    district: a.adminLevel2,
-    upazila: a.adminLevel3,
-    policeStation: a.sublocality || null,
-
-    granular: g,
-    createdAt: a.createdAt,
-    updatedAt: a.updatedAt,
+    // Derived
+    makeDefault,
   };
 }
 
 /**
- * IMPORTANT:
- * This helper MUST NOT be exported from a route module,
- * otherwise Next.js will fail type-checking the route exports.
+ * Validates required Prisma fields: Address.line1, Address.city, Address.countryIso2
+ * Returns { ok, error } instead of throwing to keep responses clean.
  */
-async function loadListAndDefault(userId) {
-  const list = await prisma.address.findMany({
-    where: { userId, archivedAt: null },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
-  });
+function validateForWrite(picked) {
+  if (!picked?.line1) return { ok: false, error: "LINE1_REQUIRED" };
+  if (!picked?.city) return { ok: false, error: "UPAZILA_REQUIRED" }; // city in DB
+  if (!picked?.countryIso2 || picked.countryIso2.length !== 2) {
+    return { ok: false, error: "COUNTRY_ISO2_REQUIRED" };
+  }
+  return { ok: true };
+}
 
-  const addresses = list.map(normalizeAddress).filter(Boolean);
-  const def = addresses.find((x) => x.isDefault) || addresses[0] || null;
+/**
+ * Maps UI payload → Prisma Address update/create object.
+ * Keeps a rich "granular" record so UI can round-trip fields reliably.
+ */
+function toPrismaAddressData(picked, existing = null) {
+  const ex = existing || {};
+  const g = (ex.granular && typeof ex.granular === "object") ? ex.granular : {};
+
+  const houseBits = [picked.apartmentNo, picked.floorNo].filter(Boolean).join(", ") || null;
 
   return {
-    addresses,
-    defaultAddress: def,
-    defaultId: def?.id ?? null,
-    data: addresses, // legacy
+    // required + canonical mailing
+    line1: String(picked.line1).trim(),
+    line2: picked.line2 ? String(picked.line2).trim() : null,
+    city: String(picked.city).trim(),
+    state: picked.state ? String(picked.state).trim() : null,
+    postalCode: picked.postalCode ? String(picked.postalCode).trim() : null,
+    countryIso2: String(picked.countryIso2).toUpperCase().trim(),
+
+    // columns
+    phone: picked.phone,
+    label: picked.label,
+
+    // geo-ish fields that you already use for BD hierarchy
+    adminLevel1: picked.division,
+    adminLevel2: picked.district,
+    adminLevel3: picked.upazila,
+
+    // optional mapping to existing schema fields
+    premise: picked.houseName ?? ex.premise ?? null,
+    streetNumber: picked.houseNo ?? ex.streetNumber ?? null,
+    subpremise: houseBits ?? ex.subpremise ?? null,
+    sublocality: picked.policeStation ?? ex.sublocality ?? null,
+
+    // keep UI fields + identity in granular for perfect round-trip
+    granular: {
+      ...(g || {}),
+      name: picked.name ?? g.name ?? null,
+      email: picked.email ?? g.email ?? null,
+      notes: picked.notes ?? g.notes ?? null,
+
+      houseNo: picked.houseNo ?? g.houseNo ?? null,
+      houseName: picked.houseName ?? g.houseName ?? null,
+      apartmentNo: picked.apartmentNo ?? g.apartmentNo ?? null,
+      floorNo: picked.floorNo ?? g.floorNo ?? null,
+
+      village: picked.village ?? g.village ?? null,
+      postOffice: picked.postOffice ?? g.postOffice ?? null,
+      union: picked.union ?? g.union ?? null,
+      policeStation: picked.policeStation ?? g.policeStation ?? null,
+
+      // store UI alias keys too (harmless, prevents future client drift)
+      streetAddress: picked.line1 ?? g.streetAddress ?? null,
+      address2: picked.line2 ?? g.address2 ?? null,
+      upazila: picked.upazila ?? g.upazila ?? null,
+      district: picked.district ?? g.district ?? null,
+      division: picked.division ?? g.division ?? null,
+    },
   };
 }
 
-/** hard/soft delete helper (used internally by this route). */
-async function deleteAddressForUser(userId, id) {
-  const existing = await prisma.address.findFirst({
-    where: { id, userId, archivedAt: null },
-  });
-  if (!existing) {
-    const e = new Error("NOT_FOUND");
-    e.code = "NOT_FOUND";
-    throw e;
+function normalizeAddressRow(a, defaultId) {
+  if (!a) return null;
+  const g = (a.granular && typeof a.granular === "object") ? a.granular : {};
+
+  const isDefault = defaultId ? String(a.id) === String(defaultId) : !!a.isDefault;
+
+  return {
+    id: a.id,
+    isDefault,
+
+    // UI-friendly canonical keys
+    name: strOrNull(g.name),
+    phone: normalizePhone(a.phone ?? g.phone) || null,
+    email: strOrNull(g.email) ? String(g.email).trim().toLowerCase() : null,
+    label: strOrNull(a.label ?? g.label),
+    notes: strOrNull(g.notes),
+
+    streetAddress: a.line1,
+    address2: a.line2,
+    upazila: a.adminLevel3 ?? a.city,
+    district: a.adminLevel2 ?? a.state,
+    division: a.adminLevel1 ?? null,
+    postalCode: a.postalCode,
+    countryIso2: a.countryIso2,
+
+    // also return DB keys for compatibility
+    line1: a.line1,
+    line2: a.line2,
+    city: a.city,
+    state: a.state,
+
+    // optional extras
+    houseName: a.premise ?? g.houseName ?? null,
+    houseNo: a.streetNumber ?? g.houseNo ?? null,
+    apartmentNo: g.apartmentNo ?? null,
+    floorNo: g.floorNo ?? null,
+
+    village: g.village ?? null,
+    postOffice: g.postOffice ?? null,
+    union: g.union ?? null,
+    policeStation: a.sublocality ?? g.policeStation ?? null,
+
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt,
+    archivedAt: a.archivedAt,
+
+    granular: g,
+  };
+}
+
+/**
+ * Ensures consistency between:
+ * - User.defaultAddressId (canonical pointer)
+ * - Address.isDefault (denormalized flag)
+ *
+ * Auto-heals only if mismatch is detected.
+ */
+async function loadListAndDefault(userId) {
+  const [user, list] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { defaultAddressId: true },
+    }),
+    prisma.address.findMany({
+      where: { userId, archivedAt: null },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+    }),
+  ]);
+
+  const userDefaultId = user?.defaultAddressId || null;
+  const hasUserDefault = userDefaultId && list.some((x) => String(x.id) === String(userDefaultId));
+
+  // determine desired default
+  let desiredDefaultId = null;
+
+  if (hasUserDefault) {
+    desiredDefaultId = userDefaultId;
+  } else {
+    const flagged = list.filter((x) => !!x.isDefault);
+    if (flagged.length > 0) {
+      desiredDefaultId = flagged[0].id;
+    } else if (list.length > 0) {
+      desiredDefaultId = list[0].id;
+    } else {
+      desiredDefaultId = null;
+    }
   }
 
+  // detect mismatch
+  const defaultsFlagged = list.filter((x) => !!x.isDefault).map((x) => String(x.id));
+  const desiredStr = desiredDefaultId ? String(desiredDefaultId) : null;
+
+  const mismatch =
+    (String(userDefaultId || "") !== String(desiredDefaultId || "")) ||
+    (desiredStr
+      ? !(defaultsFlagged.length === 1 && defaultsFlagged[0] === desiredStr)
+      : defaultsFlagged.length > 0);
+
+  if (mismatch) {
+    // heal in a transaction
+    await prisma.$transaction(async (tx) => {
+      await tx.address.updateMany({
+        where: { userId, archivedAt: null },
+        data: { isDefault: false },
+      });
+
+      if (desiredDefaultId) {
+        await tx.address.update({
+          where: { id: desiredDefaultId },
+          data: { isDefault: true },
+        });
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: desiredDefaultId },
+        });
+      } else {
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: null },
+        });
+      }
+    });
+
+    // re-load after heal
+    const [u2, l2] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { defaultAddressId: true },
+      }),
+      prisma.address.findMany({
+        where: { userId, archivedAt: null },
+        orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+      }),
+    ]);
+
+    const defId2 = u2?.defaultAddressId || null;
+    const normalized2 = l2.map((x) => normalizeAddressRow(x, defId2)).filter(Boolean);
+    const def2 = normalized2.find((x) => x.isDefault) || normalized2[0] || null;
+
+    return {
+      addresses: normalized2,
+      defaultId: def2?.id || null,
+      defaultAddress: def2,
+      data: normalized2, // legacy alias
+    };
+  }
+
+  const normalized = list.map((x) => normalizeAddressRow(x, desiredDefaultId)).filter(Boolean);
+  const def = normalized.find((x) => x.isDefault) || normalized[0] || null;
+
+  return {
+    addresses: normalized,
+    defaultId: def?.id || null,
+    defaultAddress: def,
+    data: normalized, // legacy alias
+  };
+}
+
+async function setDefaultAddress(userId, addressId) {
   await prisma.$transaction(async (tx) => {
+    const target = await tx.address.findFirst({
+      where: { id: addressId, userId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!target) {
+      const e = new Error("NOT_FOUND");
+      e.code = "NOT_FOUND";
+      throw e;
+    }
+
+    await tx.address.updateMany({
+      where: { userId, archivedAt: null },
+      data: { isDefault: false },
+    });
+    await tx.address.update({
+      where: { id: addressId },
+      data: { isDefault: true },
+    });
+    await tx.user.update({
+      where: { id: userId },
+      data: { defaultAddressId: addressId },
+    });
+  });
+}
+
+async function softDeleteAddress(userId, id) {
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.address.findFirst({
+      where: { id, userId, archivedAt: null },
+      select: { id: true, isDefault: true },
+    });
+
+    if (!existing) {
+      const e = new Error("NOT_FOUND");
+      e.code = "NOT_FOUND";
+      throw e;
+    }
+
+    // archive
     await tx.address.update({
       where: { id },
       data: { archivedAt: new Date(), isDefault: false },
     });
 
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { defaultAddressId: true },
-    });
-
-    if (user?.defaultAddressId === id) {
+    // if deleted was default, choose new default
+    if (existing.isDefault) {
       const candidate = await tx.address.findFirst({
         where: { userId, archivedAt: null },
-        orderBy: [{ updatedAt: "desc" }],
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+        select: { id: true },
       });
 
       if (candidate) {
@@ -371,19 +429,32 @@ async function deleteAddressForUser(userId, id) {
           data: { defaultAddressId: null },
         });
       }
+    } else {
+      // if not default, keep user pointer as-is
+      const u = await tx.user.findUnique({
+        where: { id: userId },
+        select: { defaultAddressId: true },
+      });
+      // if pointer referenced this id (mismatch case), clear it and heal on next read
+      if (u?.defaultAddressId && String(u.defaultAddressId) === String(id)) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultAddressId: null },
+        });
+      }
     }
   });
-
-  const { addresses, defaultId } = await loadListAndDefault(userId);
-  return { addresses, defaultId };
 }
 
-/* ────────────────────────── GET (list or default) ────────────────────────── */
-
+/* ────────────────────────── GET ──────────────────────────
+   - GET /api/customers/address-book          -> list + default
+   - GET /api/customers/address-book?default=1 -> default only (optional convenience)
+*/
 export async function GET(req) {
   try {
     const session = await auth();
-    const userId = session?.user?.id;
+    const userId = getUserIdFromSession(session);
+
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
     }
@@ -400,7 +471,7 @@ export async function GET(req) {
     return NextResponse.json(
       {
         ok: true,
-        data: loaded.addresses, // legacy alias
+        data: loaded.addresses, // legacy alias for older clients
         addresses: loaded.addresses,
         defaultAddress: loaded.defaultAddress,
         defaultId: loaded.defaultId,
@@ -413,43 +484,41 @@ export async function GET(req) {
   }
 }
 
-/* ────────────────────────── POST (create / update / set default) ────────────────────────── */
-
+/* ────────────────────────── POST ──────────────────────────
+   Single source of truth for:
+   - create: { ...fields }
+   - update (compat): { id, ...fields }
+   - set default: { id, makeDefault: true } (no other fields needed)
+*/
 export async function POST(req) {
   try {
     const session = await auth();
-    const userId = session?.user?.id;
+    const userId = getUserIdFromSession(session);
+
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
     }
 
     const body = await req.json().catch(() => ({}));
-    const { id, makeDefault, otp, ...rest } = body || {};
+    const id = body?.id ? String(body.id) : null;
 
-    // If only setting default, allow without OTP
-    if (id && makeDefault && !rest.line1 && !rest.city) {
-      const target = await prisma.address.findFirst({
-        where: { id, userId, archivedAt: null },
-      });
-      if (!target) {
-        return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
-      }
+    // default-only operation
+    const makeDefault = !!(body?.makeDefault ?? body?.isDefault ?? body?.default ?? body?.primary);
+    const hasAnyAddressFields =
+      body?.line1 ||
+      body?.streetAddress ||
+      body?.address1 ||
+      body?.city ||
+      body?.upazila ||
+      body?.district ||
+      body?.division ||
+      body?.postalCode ||
+      body?.phone ||
+      body?.label ||
+      body?.notes;
 
-      await prisma.$transaction(async (tx) => {
-        await tx.address.updateMany({
-          where: { userId, archivedAt: null },
-          data: { isDefault: false },
-        });
-        await tx.address.update({
-          where: { id },
-          data: { isDefault: true },
-        });
-        await tx.user.update({
-          where: { id: userId },
-          data: { defaultAddressId: id },
-        });
-      });
-
+    if (id && makeDefault && !hasAnyAddressFields) {
+      await setDefaultAddress(userId, id);
       const loaded = await loadListAndDefault(userId);
       return NextResponse.json(
         {
@@ -464,44 +533,15 @@ export async function POST(req) {
       );
     }
 
-    const expectedPurpose = id ? PURPOSES.UPDATE : PURPOSES.CREATE;
-    const otpParsed = otp || parseOtpFromRequest(req, body, expectedPurpose);
+    const picked = pickInputAddress(body);
 
-    if (!otpParsed) {
-      return NextResponse.json({ ok: false, error: "OTP_CODE_REQUIRED" }, { status: 400 });
+    const v = validateForWrite(picked);
+    if (!v.ok) {
+      return NextResponse.json({ ok: false, error: v.error }, { status: 400 });
     }
 
-    const otpResult = await verifyAddressOtp({
-      userId,
-      otp: otpParsed,
-      acceptablePurposes: [expectedPurpose],
-    });
+    let saved = null;
 
-    if (!otpResult.ok) {
-      return NextResponse.json({ ok: false, error: otpResult.error }, { status: 400 });
-    }
-
-    // Ensure user's phone is verified and stored
-    const me = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { phone: true, phoneVerifiedAt: true },
-    });
-
-    if (!me?.phoneVerifiedAt) {
-      const candidatePhone = normalizePhone(me?.phone || otpResult.phoneFromOtp);
-      if (!candidatePhone) {
-        return NextResponse.json(
-          { ok: false, error: "PHONE_VERIFICATION_REQUIRED" },
-          { status: 400 }
-        );
-      }
-      await prisma.user.update({
-        where: { id: userId },
-        data: { phone: candidatePhone, phoneVerifiedAt: new Date() },
-      });
-    }
-
-    let updated;
     if (id) {
       const existing = await prisma.address.findFirst({
         where: { id, userId, archivedAt: null },
@@ -510,38 +550,39 @@ export async function POST(req) {
         return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
       }
 
-      const v = canonAddress(rest, existing);
-      updated = await prisma.address.update({
+      const data = toPrismaAddressData(picked, existing);
+
+      saved = await prisma.address.update({
         where: { id },
-        data: v,
+        data,
       });
     } else {
-      const v = canonAddress(rest, {});
-      updated = await prisma.address.create({
+      // create
+      const data = toPrismaAddressData(picked, null);
+
+      // auto-default if this is first address OR makeDefault was requested
+      const existingCount = await prisma.address.count({
+        where: { userId, archivedAt: null },
+      });
+      const shouldDefault = makeDefault || existingCount === 0;
+
+      saved = await prisma.address.create({
         data: {
-          ...v,
+          ...data,
           userId,
-          isDefault: false,
           archivedAt: null,
+          isDefault: false, // set below transactionally if needed
         },
       });
+
+      if (shouldDefault) {
+        await setDefaultAddress(userId, saved.id);
+      }
     }
 
-    if (makeDefault) {
-      await prisma.$transaction(async (tx) => {
-        await tx.address.updateMany({
-          where: { userId, archivedAt: null },
-          data: { isDefault: false },
-        });
-        await tx.address.update({
-          where: { id: updated.id },
-          data: { isDefault: true },
-        });
-        await tx.user.update({
-          where: { id: userId },
-          data: { defaultAddressId: updated.id },
-        });
-      });
+    // If makeDefault requested on update
+    if (id && makeDefault) {
+      await setDefaultAddress(userId, saved.id);
     }
 
     const loaded = await loadListAndDefault(userId);
@@ -550,7 +591,7 @@ export async function POST(req) {
       {
         ok: true,
         message: id ? "Address updated." : "Address saved.",
-        address: normalizeAddress(updated),
+        address: loaded.addresses.find((x) => String(x.id) === String(saved.id)) || null,
         addresses: loaded.addresses,
         defaultAddress: loaded.defaultAddress,
         defaultId: loaded.defaultId,
@@ -560,25 +601,39 @@ export async function POST(req) {
     );
   } catch (err) {
     console.error("Address-book POST error", err);
+    if (err && (err.code === "NOT_FOUND" || err.message === "NOT_FOUND")) {
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
+    }
     return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }
 
-/* ────────────────────────── DELETE (compat — body.id) ────────────────────────── */
-/* Prefer using /api/customers/address-book/:id, but this keeps old callers working. */
-
-export async function DELETE(req) {
+/* ────────────────────────── PUT (compat) ──────────────────────────
+   Optional: allows clients to call PUT /api/customers/address-book with { id, ...fields }.
+   This is useful if you want to remove reliance on /address-book/[id].
+*/
+export async function PUT(req) {
   try {
     const session = await auth();
-    const userId = session?.user?.id;
+    const userId = getUserIdFromSession(session);
+
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
     }
 
     const body = await req.json().catch(() => ({}));
-    const id = body?.id;
+    const id = body?.id ? String(body.id) : null;
     if (!id) {
       return NextResponse.json({ ok: false, error: "ID_REQUIRED" }, { status: 400 });
+    }
+
+    // Reuse POST logic by calling it internally is not possible cleanly; implement directly.
+    const makeDefault = !!(body?.makeDefault ?? body?.isDefault ?? body?.default ?? body?.primary);
+
+    const picked = pickInputAddress(body);
+    const v = validateForWrite(picked);
+    if (!v.ok) {
+      return NextResponse.json({ ok: false, error: v.error }, { status: 400 });
     }
 
     const existing = await prisma.address.findFirst({
@@ -588,45 +643,79 @@ export async function DELETE(req) {
       return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
     }
 
-    // For default address, require delete OTP
-    if (existing.isDefault) {
-      const otpParsed = body?.otp || parseOtpFromRequest(req, body, PURPOSES.DELETE);
-      if (!otpParsed) {
-        return NextResponse.json({ ok: false, error: "OTP_CODE_REQUIRED" }, { status: 400 });
-      }
-      const otpResult = await verifyAddressOtp({
-        userId,
-        otp: otpParsed,
-        acceptablePurposes: [PURPOSES.DELETE, PURPOSES.UPDATE],
-      });
-      if (!otpResult.ok) {
-        return NextResponse.json({ ok: false, error: otpResult.error }, { status: 400 });
-      }
+    const data = toPrismaAddressData(picked, existing);
+
+    await prisma.address.update({
+      where: { id },
+      data,
+    });
+
+    if (makeDefault) {
+      await setDefaultAddress(userId, id);
     }
 
-    const { addresses, defaultId } = await deleteAddressForUser(userId, String(id));
+    const loaded = await loadListAndDefault(userId);
 
-    const def = addresses.find((a) => String(a.id) === String(defaultId)) || null;
+    return NextResponse.json(
+      {
+        ok: true,
+        message: "Address updated.",
+        address: loaded.addresses.find((x) => String(x.id) === String(id)) || null,
+        addresses: loaded.addresses,
+        defaultAddress: loaded.defaultAddress,
+        defaultId: loaded.defaultId,
+        data: loaded.addresses,
+      },
+      { status: 200 }
+    );
+  } catch (err) {
+    console.error("Address-book PUT error", err);
+    if (err && (err.code === "NOT_FOUND" || err.message === "NOT_FOUND")) {
+      return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
+  }
+}
+
+/* ────────────────────────── DELETE (compat — body.id) ──────────────────────────
+   Prefer /api/customers/address-book/[id] for REST, but this keeps old callers working.
+*/
+export async function DELETE(req) {
+  try {
+    const session = await auth();
+    const userId = getUserIdFromSession(session);
+
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const id = body?.id ? String(body.id) : null;
+
+    if (!id) {
+      return NextResponse.json({ ok: false, error: "ID_REQUIRED" }, { status: 400 });
+    }
+
+    await softDeleteAddress(userId, id);
+
+    const loaded = await loadListAndDefault(userId);
 
     return NextResponse.json(
       {
         ok: true,
         message: "Address deleted.",
-        addresses,
-        defaultId,
-        defaultAddress: def,
-        data: addresses,
+        addresses: loaded.addresses,
+        defaultAddress: loaded.defaultAddress,
+        defaultId: loaded.defaultId,
+        data: loaded.addresses,
       },
       { status: 200 }
     );
   } catch (err) {
-    console.error("Address-book DELETE (root) error", err);
+    console.error("Address-book DELETE error", err);
     if (err && (err.code === "NOT_FOUND" || err.message === "NOT_FOUND")) {
       return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
     }
-    return NextResponse.json(
-      { ok: false, error: "INTERNAL_ERROR_ADDRESS_DELETE" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }

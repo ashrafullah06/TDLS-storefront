@@ -65,6 +65,10 @@ export default function CartPanel() {
   const [hovered, setHovered] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
+  // NEW: mobile "hold/interaction" state to pause auto-close
+  const [interacting, setInteracting] = useState(false);
+  const scrollHoldRef = useRef(null);
+
   const closeTimerRef = useRef(null);
   const lastActiveElRef = useRef(null);
   const closeBtnRef = useRef(null);
@@ -75,6 +79,7 @@ export default function CartPanel() {
 
   const close = useCallback(() => {
     setOpen(false);
+    setInteracting(false);
   }, []);
 
   // only portal on client
@@ -107,6 +112,7 @@ export default function CartPanel() {
       lastActiveElRef.current = document.activeElement;
       setOpen(true);
       setHovered(false);
+      setInteracting(false);
     };
 
     window.addEventListener("cart:open-panel", handleOpen);
@@ -153,20 +159,41 @@ export default function CartPanel() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, close]);
 
-  // auto-close logic (unless hovered) — disable on mobile for better UX
+  // auto-close logic:
+  // - desktop: same as before (3.5s) unless hovered
+  // - mobile: also auto-close after a few seconds, but PAUSE while user is touching/scrolling
   useEffect(() => {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
     }
 
-    if (!open || hovered) return;
-    if (isMobile) return;
+    if (!open) return;
+
+    // desktop behavior preserved
+    if (!isMobile) {
+      if (hovered) return;
+
+      closeTimerRef.current = setTimeout(() => {
+        setOpen(false);
+        closeTimerRef.current = null;
+      }, 3500);
+
+      return () => {
+        if (closeTimerRef.current) {
+          clearTimeout(closeTimerRef.current);
+          closeTimerRef.current = null;
+        }
+      };
+    }
+
+    // mobile: pause timer while interacting (touch/hold/scroll)
+    if (interacting) return;
 
     closeTimerRef.current = setTimeout(() => {
       setOpen(false);
       closeTimerRef.current = null;
-    }, 3500);
+    }, 4200); // "few seconds" on mobile (slightly longer than desktop for usability)
 
     return () => {
       if (closeTimerRef.current) {
@@ -174,7 +201,7 @@ export default function CartPanel() {
         closeTimerRef.current = null;
       }
     };
-  }, [open, hovered, isMobile]);
+  }, [open, hovered, isMobile, interacting]);
 
   // ───────────────── derive cart data from context ─────────────────
   const items = Array.isArray(cartCtx?.items) ? cartCtx.items : [];
@@ -215,6 +242,8 @@ export default function CartPanel() {
 
   // swipe close (mobile: drag down; desktop: drag right)
   const onTouchStart = (e) => {
+    if (isMobile) setInteracting(true);
+
     const t = e.touches?.[0];
     if (!t) return;
     touchMovedRef.current = false;
@@ -239,6 +268,9 @@ export default function CartPanel() {
   };
 
   const onTouchEnd = (e) => {
+    // IMPORTANT: always clear interacting when finger is removed
+    if (isMobile) setInteracting(false);
+
     if (!touchMovedRef.current) return;
 
     const changed = e.changedTouches?.[0];
@@ -261,6 +293,28 @@ export default function CartPanel() {
     }
   };
 
+  const onTouchCancel = () => {
+    if (isMobile) setInteracting(false);
+  };
+
+  // body scroll pause (mobile): keep open while user is actively scrolling
+  const onBodyScroll = () => {
+    if (!isMobile) return;
+
+    setInteracting(true);
+    if (scrollHoldRef.current) clearTimeout(scrollHoldRef.current);
+
+    scrollHoldRef.current = setTimeout(() => {
+      setInteracting(false);
+      scrollHoldRef.current = null;
+    }, 240);
+  };
+
+  // overlay close handler (mobile-safe)
+  const onOverlayDown = (e) => {
+    if (e.target === e.currentTarget) close();
+  };
+
   // ───────────────── render via portal ─────────────────
   const variant = isMobile ? "sheet" : "side";
   const state = open ? "open" : "closed";
@@ -272,9 +326,9 @@ export default function CartPanel() {
         className="tdlcCartOverlay"
         data-state={state}
         aria-hidden="true"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) close();
-        }}
+        onPointerDown={onOverlayDown}
+        onMouseDown={onOverlayDown}
+        onTouchStart={onOverlayDown}
       />
 
       <aside
@@ -293,6 +347,8 @@ export default function CartPanel() {
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchCancel}
+        onScroll={onBodyScroll}
         style={{
           // keep your existing safe offsets as CSS vars
           ["--tdlc-top-safe"]: `${NAVBAR_SAFE_TOP}px`,
@@ -328,7 +384,7 @@ export default function CartPanel() {
         </div>
 
         {/* Body */}
-        <div className="tdlcCartBody">
+        <div className="tdlcCartBody" onScroll={onBodyScroll}>
           {loading ? (
             <div className="tdlcStateBlock">
               <div className="tdlcStateTitle">Updating cart…</div>
@@ -418,7 +474,12 @@ export default function CartPanel() {
               View Cart
             </button>
 
-            <button type="button" onClick={onCheckout} disabled={empty || loading} className="tdlcPrimaryBtn">
+            <button
+              type="button"
+              onClick={onCheckout}
+              disabled={empty || loading}
+              className="tdlcPrimaryBtn"
+            >
               Checkout
             </button>
           </div>
@@ -432,7 +493,11 @@ export default function CartPanel() {
             position: fixed;
             inset: 0;
             z-index: 11900;
-            background: radial-gradient(circle at 20% 0%, rgba(2, 6, 23, 0.52), rgba(2, 6, 23, 0.62));
+            background: radial-gradient(
+              circle at 20% 0%,
+              rgba(2, 6, 23, 0.52),
+              rgba(2, 6, 23, 0.62)
+            );
             opacity: 0;
             pointer-events: none;
             transition: opacity 220ms ease;
@@ -449,10 +514,16 @@ export default function CartPanel() {
             flex-direction: column;
             overflow: hidden;
             border: 1px solid rgba(224, 228, 242, 0.75);
-            background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(240, 244, 255, 0.98));
+            background: linear-gradient(
+              145deg,
+              rgba(255, 255, 255, 0.92),
+              rgba(240, 244, 255, 0.98)
+            );
             backdrop-filter: blur(14px);
-            box-shadow: 0 28px 80px rgba(15, 33, 71, 0.34), 0 0 0 1px rgba(226, 232, 240, 0.65);
-            transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 240ms ease;
+            box-shadow: 0 28px 80px rgba(15, 33, 71, 0.34),
+              0 0 0 1px rgba(226, 232, 240, 0.65);
+            transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              opacity 240ms ease;
             opacity: 0;
             pointer-events: none;
           }
@@ -464,7 +535,9 @@ export default function CartPanel() {
             bottom: var(--tdlc-bottom-safe);
             width: min(420px, calc(100vw - 36px));
             border-radius: 26px;
-            max-height: calc(100vh - (var(--tdlc-top-safe) + var(--tdlc-bottom-safe)));
+            max-height: calc(
+              100vh - (var(--tdlc-top-safe) + var(--tdlc-bottom-safe))
+            );
             transform: translateX(110%);
           }
           .tdlcCartPanel[data-variant="side"][data-state="open"] {
@@ -474,10 +547,11 @@ export default function CartPanel() {
           }
 
           /* Bottom sheet variant (mobile)
-             Fix: lift the entire sheet above BottomFloatingBar + iOS safe-area.
-             This prevents the panel/footer/CTA from being hidden underneath the bar. */
+             Adjusted: not full-screen + still above BottomFloatingBar + iOS safe-area */
           .tdlcCartPanel[data-variant="sheet"] {
-            --tdlc-sheet-bottom: calc(var(--tdlc-bottom-safe) + env(safe-area-inset-bottom, 0px));
+            --tdlc-sheet-bottom: calc(
+              var(--tdlc-bottom-safe) + env(safe-area-inset-bottom, 0px)
+            );
 
             left: 0;
             right: 0;
@@ -485,9 +559,9 @@ export default function CartPanel() {
             top: auto;
             width: 100vw;
 
-            /* keep premium proportions while guaranteeing no overflow */
-            height: min(82vh, calc(100dvh - var(--tdlc-sheet-bottom) - 10px));
-            height: min(82vh, calc(100vh - var(--tdlc-sheet-bottom) - 10px));
+            /* reduced height so it does NOT feel full-screen */
+            height: min(68vh, calc(100dvh - var(--tdlc-sheet-bottom) - 84px));
+            height: min(68vh, calc(100vh - var(--tdlc-sheet-bottom) - 84px));
 
             border-radius: 26px 26px 0 0;
             transform: translateY(110%);
@@ -508,7 +582,11 @@ export default function CartPanel() {
           .tdlcCartHeader {
             position: relative;
             padding: 14px 16px 12px;
-            background: radial-gradient(circle at top left, rgba(229, 231, 255, 0.95), rgba(248, 250, 252, 0.98));
+            background: radial-gradient(
+              circle at top left,
+              rgba(229, 231, 255, 0.95),
+              rgba(248, 250, 252, 0.98)
+            );
             border-bottom: 1px solid rgba(224, 228, 242, 0.95);
           }
 
@@ -546,7 +624,8 @@ export default function CartPanel() {
             font-weight: 900;
             cursor: pointer;
             box-shadow: 0 12px 26px rgba(2, 6, 23, 0.12);
-            transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+            transition: transform 120ms ease, box-shadow 120ms ease,
+              border-color 120ms ease;
           }
           .tdlcCloseBtn:hover {
             transform: translateY(-1px);
@@ -612,7 +691,11 @@ export default function CartPanel() {
             padding: 18px 12px;
             border: 1px solid rgba(224, 228, 242, 0.9);
             border-radius: 20px;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 246, 255, 0.98));
+            background: linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.98),
+              rgba(239, 246, 255, 0.98)
+            );
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
           }
           .tdlcStateTitle {
@@ -651,9 +734,14 @@ export default function CartPanel() {
             padding: 10px;
             border-radius: 20px;
             border: 1px solid rgba(148, 163, 184, 0.35);
-            background: linear-gradient(140deg, rgba(249, 250, 251, 1), rgba(239, 246, 255, 1));
+            background: linear-gradient(
+              140deg,
+              rgba(249, 250, 251, 1),
+              rgba(239, 246, 255, 1)
+            );
             box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
-            transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+            transition: transform 140ms ease, box-shadow 140ms ease,
+              border-color 140ms ease;
           }
           .tdlcItem:hover {
             transform: translateY(-1px);
@@ -743,14 +831,23 @@ export default function CartPanel() {
           .tdlcCartFooter {
             padding: 12px 14px 14px;
             border-top: 1px solid rgba(224, 228, 242, 0.85);
-            background: radial-gradient(circle at top left, #020617, #020617 45%, #111827 100%);
+            background: radial-gradient(
+              circle at top left,
+              #020617,
+              #020617 45%,
+              #111827 100%
+            );
             color: #e5e7eb;
           }
           .tdlcFooterLine {
             height: 3px;
             border-radius: 999px;
             margin-bottom: 10px;
-            background: linear-gradient(90deg, rgba(250, 204, 21, 0.85), rgba(166, 124, 55, 0.7));
+            background: linear-gradient(
+              90deg,
+              rgba(250, 204, 21, 0.85),
+              rgba(166, 124, 55, 0.7)
+            );
             box-shadow: 0 0 14px rgba(250, 204, 21, 0.45);
           }
 
@@ -794,7 +891,7 @@ export default function CartPanel() {
             color: ${NAVY};
             font-weight: 950;
             font-size: 12px;
-            letter-spacing: 0.10em;
+            letter-spacing: 0.1em;
             text-transform: uppercase;
             cursor: pointer;
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
@@ -820,7 +917,8 @@ export default function CartPanel() {
             text-transform: uppercase;
             cursor: pointer;
             box-shadow: 0 14px 34px rgba(250, 204, 21, 0.46);
-            transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+            transition: transform 120ms ease, box-shadow 120ms ease,
+              opacity 120ms ease;
           }
           .tdlcPrimaryBtn:hover {
             transform: translateY(-1px);
@@ -914,8 +1012,11 @@ export default function CartPanel() {
           /* Landscape phones: keep height stable and non-overflow */
           @media (max-height: 420px) and (max-width: 920px) {
             .tdlcCartPanel[data-variant="sheet"] {
-              height: min(78vh, calc(100dvh - var(--tdlc-sheet-bottom) - 8px));
-              height: min(78vh, calc(100vh - var(--tdlc-sheet-bottom) - 8px));
+              height: min(
+                62vh,
+                calc(100dvh - var(--tdlc-sheet-bottom) - 72px)
+              );
+              height: min(62vh, calc(100vh - var(--tdlc-sheet-bottom) - 72px));
             }
           }
         `}</style>

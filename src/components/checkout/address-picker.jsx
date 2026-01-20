@@ -51,74 +51,94 @@ const compactLines = (a = {}) => {
 };
 
 async function fetchJSON(url, init) {
-  const r = await fetch(url, { credentials: "include", cache: "no-store", ...init });
+  const r = await fetch(url, {
+    credentials: "include",
+    cache: "no-store",
+    ...init,
+  });
+
   const ct = r.headers.get("content-type") || "";
   const isJson = ct.includes("json");
   const body = isJson ? await r.json().catch(() => ({})) : await r.text();
-  if (!r.ok) throw new Error((isJson ? body?.error || body?.message : body) || `HTTP ${r.status}`);
+
+  if (!r.ok) {
+    const msg = isJson ? body?.error || body?.message : body;
+    throw new Error(msg || `HTTP ${r.status}`);
+  }
   return body;
 }
 
-/* ───────────────── Address CRUD API ─────────────────
-   Tries multiple endpoints to remain compatible with existing backends. */
+function pickArrayFromResponse(j) {
+  if (!j) return [];
+  if (Array.isArray(j?.addresses)) return j.addresses;
+  if (Array.isArray(j?.data)) return j.data;
+  if (Array.isArray(j?.items)) return j.items;
+  if (Array.isArray(j)) return j;
+  return [];
+}
+
+function normalizeList(arr) {
+  const list = Array.isArray(arr) ? arr : [];
+  return list
+    .filter(Boolean)
+    .map((x, i) => ({
+      ...x,
+      id: x.id ?? x._id ?? x.uuid ?? `addr_${i}`,
+      isDefault: !!x.isDefault,
+    }));
+}
+
+function needsOtpFromErrorMessage(msg = "") {
+  const m = String(msg || "").trim();
+  if (!m) return false;
+  // backend-style codes we should treat as "OTP required or OTP related"
+  const codes = [
+    "OTP_CODE_REQUIRED",
+    "OTP_IDENTIFIER_PHONE_REQUIRED",
+    "OTP_NOT_FOUND_OR_EXPIRED",
+    "OTP_MISMATCH",
+    "OTP_PURPOSE_INVALID",
+    "PHONE_VERIFICATION_REQUIRED",
+  ];
+  return codes.some((c) => m.includes(c));
+}
+
+/* ───────────────── Canonical Address CRUD API (single source) ───────────────── */
 const AddressAPI = {
   async list() {
-    const endpoints = ["/api/customers/address-book", "/api/account/addresses", "/api/addresses"];
-    for (const u of endpoints) {
-      try {
-        const j = await fetchJSON(u);
-        const arr = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : j?.items || [];
-        if (Array.isArray(arr)) {
-          return arr.map((x, i) => ({
-
-            ...x,
-            id: x.id ?? x._id ?? x.uuid ?? `addr_${i}`,
-            isDefault: !!(x.isDefault || x.default || x.primary),
-          }));
-        }
-      } catch {
-        /* try next */
-      }
-    }
-    return [];
+    const j = await fetchJSON("/api/customers/address-book");
+    return normalizeList(pickArrayFromResponse(j));
   },
+
   async create(payload) {
     return fetchJSON("/api/customers/address-book", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload || {}),
     });
   },
+
   async update(id, payload) {
     return fetchJSON(`/api/customers/address-book/${id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload || {}),
     });
   },
-  async remove(id) {
-    // Try hard DELETE first
-    try {
-      return await fetchJSON(`/api/customers/address-book/${id}`, { method: "DELETE" });
-    } catch (e) {
-      // Soft delete fallback (archive)
-      const archivedAt = new Date().toISOString();
-      return await fetchJSON(`/api/customers/address-book/${id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ archivedAt }),
-      });
-    }
+
+  async remove(id, payload) {
+    // DELETE with JSON body (supported; backend reads req.json())
+    return fetchJSON(`/api/customers/address-book/${id}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
   },
 };
 
-/* ───────────────── OTP helpers ─────────────────
-   IMPORTANT: We follow your decision matrix:
-   - For changing the existing mobile number or editing/deleting any address,
-     the OTP must go to the DEFAULT/EXISTING verified contact (previous phone) or existing email.
-   - We DO NOT send OTP to the new phone for verification of the change itself. */
+/* ───────────────── OTP (request only; consume happens in address mutation endpoint) ───────────────── */
 async function requestOtp(identifier, channel = "sms", purpose = "address_update") {
-  const res = await fetch("/api/request-otp", {
+  const res = await fetch("/api/auth/request-otp", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -126,28 +146,7 @@ async function requestOtp(identifier, channel = "sms", purpose = "address_update
   });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j?.error || "OTP send failed");
-  return j?.ttlSeconds || 90;
-}
-
-async function verifyOtp(identifier, code, purpose = "address_update") {
-  const res = await fetch("/api/verify-otp", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identifier, code, purpose }),
-  });
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok || !(j?.ok || j?.verified)) {
-    const errCode = j?.error;
-    if (errCode === "OTP_NOT_FOUND_OR_EXPIRED") {
-      throw new Error("This code has expired. Please request a new one.");
-    }
-    if (errCode === "OTP_MISMATCH") {
-      throw new Error("That code didn’t match. Please try again.");
-    }
-    throw new Error(j?.error || "OTP verification failed.");
-  }
-  return true;
+  return Number(j?.ttlSeconds || j?.ttl || 90) || 90;
 }
 
 /* ───────────────── Component ───────────────── */
@@ -168,13 +167,80 @@ export default function AddressPicker({
     identifier: "",
     channel: "sms",
     ttl: 90,
-    purpose: "address_update", // ✔ keep purpose so verify uses the same
+    purpose: "address_update",
   });
   const [otpCode, setOtpCode] = useState("");
   const otpResolverRef = useRef(null);
 
+  function getDefaultIdentifier() {
+    const phone = String(defaultProfile?.phone || "").trim();
+    // Your backend verifyOtpRequired() requires PHONE identifier for mutations.
+    // If you later expand backend to allow email, you can relax this.
+    return phone || "";
+  }
+
+  async function promptOtp({ purpose = "address_update" } = {}) {
+    setErr("");
+    setOtpCode("");
+
+    const identifier = getDefaultIdentifier();
+    if (!identifier) {
+      setErr("Phone verification is required to update/delete addresses.");
+      return null;
+    }
+
+    const channel = "sms";
+    try {
+      const ttl = await requestOtp(identifier, channel, purpose);
+      setOtpAsk({ open: true, identifier, channel, ttl, purpose });
+
+      return await new Promise((resolve) => {
+        otpResolverRef.current = resolve;
+      });
+    } catch (e) {
+      setErr(e?.message || "Could not send OTP.");
+      return null;
+    }
+  }
+
+  function resolveOtp(value) {
+    if (otpResolverRef.current) {
+      otpResolverRef.current(value);
+      otpResolverRef.current = null;
+    }
+  }
+
+  function handleOtpClose() {
+    setOtpAsk({
+      open: false,
+      identifier: "",
+      channel: "sms",
+      ttl: 90,
+      purpose: "address_update",
+    });
+    setOtpCode("");
+    resolveOtp(null);
+  }
+
+  function handleOtpConfirm() {
+    if (otpCode.length !== 6) {
+      setErr("Enter the 6-digit code.");
+      return;
+    }
+    const code = String(otpCode || "").trim();
+    setOtpAsk({
+      open: false,
+      identifier: "",
+      channel: "sms",
+      ttl: 90,
+      purpose: "address_update",
+    });
+    setOtpCode("");
+    resolveOtp(code);
+  }
+
   // On mount: fetch list and rehydrate selected tile from localStorage first, fallback to default
-  async function hydrate(initial = false) {
+  async function hydrate() {
     setErr("");
     const list = await AddressAPI.list();
     setItems(list);
@@ -190,28 +256,31 @@ export default function AddressPicker({
       }
     } catch {}
 
-    const chosen =
-      selectedFromStorage || list.find((a) => a.isDefault) || list[0] || null;
+    const chosen = selectedFromStorage || list.find((a) => a.isDefault) || list[0] || null;
 
     if (chosen) {
       setSelId(chosen.id);
-      const samePhone =
-        !!chosen.phone && chosen.phone === (defaultProfile?.phone || "");
-      const payload = {
-        ...chosen,
-        phoneVerified: !!defaultProfile?.phoneVerified || samePhone,
-      };
+
+      const samePhone = !!chosen.phone && chosen.phone === (defaultProfile?.phone || "");
+      const phoneVerified =
+        !!defaultProfile?.phoneVerified || samePhone || !!chosen.phoneVerifiedAt;
+
+      const payload = { ...chosen, phoneVerified };
       onSelectedAddress?.(payload);
+
       try {
         localStorage.setItem(`checkout_${type}_address`, JSON.stringify(payload));
       } catch {}
     } else {
       setSelId(null);
+      try {
+        localStorage.removeItem(`checkout_${type}_address`);
+      } catch {}
     }
   }
 
   useEffect(() => {
-    hydrate(true).catch(() => setErr("Could not load addresses."));
+    hydrate().catch(() => setErr("Could not load addresses."));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -220,6 +289,7 @@ export default function AddressPicker({
     setOpen(true);
     setErr("");
   }
+
   function openEdit(a) {
     const merged = {
       ...a,
@@ -227,176 +297,106 @@ export default function AddressPicker({
       email: a.email || defaultProfile?.email || "",
       phone: a.phone || defaultProfile?.phone || "",
       phoneVerified:
-        !!defaultProfile?.phoneVerified || (a.phone && a.phone === defaultProfile?.phone),
+        !!defaultProfile?.phoneVerified ||
+        (a.phone && a.phone === defaultProfile?.phone) ||
+        !!a.phoneVerifiedAt,
+
       streetAddress: a.streetAddress || a.address1 || a.line1 || "",
       address2: a.address2 || a.line2 || "",
       countryIso2: (a.countryIso2 || a.country || "BD").toUpperCase(),
       postalCode: a.postalCode || a.postcode || "",
     };
+
     setEditing(merged);
     setOpen(true);
     setErr("");
   }
 
-  /** Send OTP to the existing verified contact (phone → SMS, else email) and
-   *  wait for the user to enter it. Purpose is important:
-   *   - "address_update" when editing
-   *   - "address_delete" when deleting
-   */
-  async function ensureOtpAgainstDefaultContact({
-    preferPhone = true,
-    purpose = "address_update",
-  } = {}) {
-    setErr("");
-    setOtpCode("");
-
-    const prevPhone = (defaultProfile?.phone || "").trim();
-    const email = (defaultProfile?.email || "").trim();
-
-    const identifier =
-      (preferPhone && prevPhone) || prevPhone || email || ""; // fallback to email if no phone
-    if (!identifier) {
-      // No verified default contact → allow, backend may still enforce.
-      return true;
-    }
-
-    const channel = identifier.includes("@") ? "email" : "sms";
-
-    try {
-      const ttl = await requestOtp(identifier, channel, purpose);
-      setOtpAsk({
-        open: true,
-        identifier,
-        channel,
-        ttl,
-        purpose, // ✔ carry the exact purpose forward
-      });
-
-      // Wait until user verifies or cancels
-      return await new Promise((resolve) => {
-        otpResolverRef.current = resolve;
-      });
-    } catch (e) {
-      setErr(e?.message || "Could not send OTP.");
-      return false;
-    }
-  }
-
-  async function handleOtpVerify() {
-    try {
-      if (!otpAsk.identifier) {
-        setErr("Missing verification target.");
-        if (otpResolverRef.current) {
-          otpResolverRef.current(false);
-          otpResolverRef.current = null;
-        }
-        setOtpAsk({
-          open: false,
-          identifier: "",
-          channel: "sms",
-          ttl: 90,
-          purpose: "address_update",
-        });
-        setOtpCode("");
-        return;
-      }
-      if (otpCode.length !== 6) {
-        setErr("Enter the 6-digit code.");
-        return;
-      }
-
-      await verifyOtp(
-        otpAsk.identifier,
-        otpCode,
-        otpAsk.purpose || "address_update"
-      );
-
-      // Success → close dialog and resolve true
-      setOtpAsk({
-        open: false,
-        identifier: "",
-        channel: "sms",
-        ttl: 90,
-        purpose: "address_update",
-      });
-      setOtpCode("");
-      if (otpResolverRef.current) {
-        otpResolverRef.current(true);
-        otpResolverRef.current = null;
-      }
-    } catch (e) {
-      setErr(e?.message || "OTP verification failed.");
-    }
-  }
-
-  function handleOtpClose() {
-    setOtpAsk({
-      open: false,
-      identifier: "",
-      channel: "sms",
-      ttl: 90,
-      purpose: "address_update",
-    });
-    setOtpCode("");
-    if (otpResolverRef.current) {
-      otpResolverRef.current(false);
-      otpResolverRef.current = null;
-    }
-  }
-
-  /** Save (create/update) with mandatory OTP to default contact if changing number or any edit */
+  /* Save (create/update) aligned to backend:
+     - UPDATE: always requires OTP (backend enforces).
+     - CREATE: try without OTP; if backend requires OTP, prompt and retry. */
   async function saveAddress(payload) {
     setErr("");
+
+    const isEdit = !!payload?.id;
+    const purpose = isEdit ? "address_update" : "address_create";
+
     try {
-      const isEdit = !!payload.id;
+      if (isEdit) {
+        const code = await promptOtp({ purpose });
+        if (!code) return false;
 
-      // Normalize numbers for comparison (old vs new)
-      const phoneBefore = (editing?.phone || defaultProfile?.phone || "").replace(/\s|-/g, "");
-      const phoneAfter = (payload?.phone || "").replace(/\s|-/g, "");
-      const changedPhone = !!phoneAfter && phoneAfter !== phoneBefore;
-
-      if (isEdit || changedPhone) {
-        const ok = await ensureOtpAgainstDefaultContact({
-          preferPhone: true,
-          purpose: "address_update",
+        const identifier = getDefaultIdentifier();
+        await AddressAPI.update(payload.id, {
+          ...payload,
+          otp: { identifier, code, purpose },
         });
-        if (!ok) return;
-        if (changedPhone) payload.phoneVerified = true;
-      }
+      } else {
+        // optimistic create (no OTP step unless backend requires)
+        try {
+          await AddressAPI.create(payload);
+        } catch (e) {
+          if (!needsOtpFromErrorMessage(e?.message)) throw e;
 
-      if (isEdit) await AddressAPI.update(payload.id, payload);
-      else await AddressAPI.create(payload);
+          const code = await promptOtp({ purpose });
+          if (!code) return false;
+
+          const identifier = getDefaultIdentifier();
+          await AddressAPI.create({
+            ...payload,
+            otp: { identifier, code, purpose },
+          });
+        }
+      }
 
       await hydrate();
       setOpen(false);
       setEditing(null);
+      return true;
     } catch (e) {
-      setErr(e?.message || "Could not save address.");
+      const msg = e?.message || "Could not save address.";
+      if (msg.includes("OTP_NOT_FOUND_OR_EXPIRED")) {
+        setErr("This code expired. Please request a new one and try again.");
+      } else if (msg.includes("OTP_MISMATCH")) {
+        setErr("That code didn’t match. Please try again.");
+      } else {
+        setErr(msg);
+      }
+      return false;
     }
   }
 
-  /** Delete requires OTP to default phone/email */
+  /* Delete aligned to backend:
+     - If deleting DEFAULT: OTP required.
+     - If deleting non-default: try without OTP, prompt only if backend demands. */
   async function removeAddress(a) {
     setErr("");
+    if (!a?.id) return;
+
+    const purpose = "address_delete";
+
     try {
       if (a.isDefault) {
-        setErr("Set another address as default before deleting this one.");
-        return;
-      }
-      const ok = await ensureOtpAgainstDefaultContact({
-        preferPhone: true,
-        purpose: "address_delete",
-      });
-      if (!ok) return;
+        const code = await promptOtp({ purpose });
+        if (!code) return;
 
-      await AddressAPI.remove(a.id);
-      await hydrate();
-      if (selId === a.id) {
-        setSelId(null);
+        const identifier = getDefaultIdentifier();
+        await AddressAPI.remove(a.id, { otp: { identifier, code, purpose } });
+      } else {
         try {
-          localStorage.removeItem(`checkout_${type}_address`);
-        } catch {}
+          await AddressAPI.remove(a.id, {});
+        } catch (e) {
+          if (!needsOtpFromErrorMessage(e?.message)) throw e;
+
+          const code = await promptOtp({ purpose });
+          if (!code) return;
+
+          const identifier = getDefaultIdentifier();
+          await AddressAPI.remove(a.id, { otp: { identifier, code, purpose } });
+        }
       }
+
+      await hydrate();
     } catch (e) {
       setErr(e?.message || "Delete failed.");
     }
@@ -419,14 +419,13 @@ export default function AddressPicker({
             {items.map((a) => {
               const { first, l1, l2, l3 } = compactLines(a);
               const isDefault = !!a.isDefault;
+
               return (
                 <div key={a.id} className={`tile ${isDefault ? "def" : ""}`}>
                   <div className="head">
                     <div className="badges">
                       {isDefault && <span className="pill default">Default</span>}
-                      {isDefault && (
-                        <span className="pill linked">Linked to your account</span>
-                      )}
+                      {isDefault && <span className="pill linked">Linked to your account</span>}
                     </div>
                     <div className="sel">
                       <input
@@ -435,13 +434,14 @@ export default function AddressPicker({
                         checked={selId === a.id}
                         onChange={() => {
                           setSelId(a.id);
-                          const samePhone =
-                            !!a.phone && a.phone === (defaultProfile?.phone || "");
-                          const payload = {
-                            ...a,
-                            phoneVerified: !!defaultProfile?.phoneVerified || samePhone,
-                          };
+
+                          const samePhone = !!a.phone && a.phone === (defaultProfile?.phone || "");
+                          const phoneVerified =
+                            !!defaultProfile?.phoneVerified || samePhone || !!a.phoneVerifiedAt;
+
+                          const payload = { ...a, phoneVerified };
                           onSelectedAddress?.(payload);
+
                           try {
                             localStorage.setItem(
                               `checkout_${type}_address`,
@@ -484,20 +484,15 @@ export default function AddressPicker({
                       <button type="button" onClick={() => openEdit(a)} className="muted">
                         Edit
                       </button>
-                      {!isDefault && (
-                        <button
-                          type="button"
-                          onClick={() => removeAddress(a)}
-                          className="danger"
-                        >
-                          Delete
-                        </button>
-                      )}
+                      <button type="button" onClick={() => removeAddress(a)} className="danger">
+                        Delete
+                      </button>
                     </div>
                   </div>
                 </div>
               );
             })}
+
             <div>
               <button onClick={openAdd} className="btn mt-2">
                 + Add new address
@@ -532,7 +527,7 @@ export default function AddressPicker({
         </div>
       )}
 
-      {/* Inline OTP dialog (no navbar popups) */}
+      {/* Inline OTP dialog (no separate verify endpoint; mutation consumes OTP) */}
       {otpAsk.open && (
         <div className="otp-overlay">
           <div className="otp-sheet">
@@ -550,10 +545,10 @@ export default function AddressPicker({
             </div>
             <div className="otp-body">
               <div className="otp-line">
-                For your security, we sent a 6-digit code to{" "}
-                <b>{otpAsk.identifier}</b> via{" "}
+                For your security, we sent a 6-digit code to <b>{otpAsk.identifier}</b> via{" "}
                 <b>{otpAsk.channel === "email" ? "email" : "SMS"}</b>.
               </div>
+
               <input
                 className="otp-input"
                 value={otpCode}
@@ -564,14 +559,15 @@ export default function AddressPicker({
                 inputMode="numeric"
                 autoFocus
               />
+
               <button
                 id="otp-ok-btn"
                 className="otp-submit"
                 disabled={otpCode.length !== 6}
                 type="button"
-                onClick={handleOtpVerify}
+                onClick={handleOtpConfirm}
               >
-                Verify
+                Continue
               </button>
             </div>
           </div>
@@ -659,6 +655,7 @@ export default function AddressPicker({
         .actions {
           display: flex;
           gap: 10px;
+          flex-wrap: wrap;
         }
         .muted {
           border: 1px solid ${BORDER};
@@ -694,6 +691,16 @@ export default function AddressPicker({
           border: 1px solid ${BORDER};
           overflow: hidden;
           box-shadow: 0 16px 40px rgba(15, 33, 71, 0.25);
+
+          /* Ensure visible within navbar + bottom bar safe zones */
+          max-height: calc(
+            100vh -
+              (env(safe-area-inset-top) + var(--navbar-h, 96px)) -
+              (env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))) -
+              24px
+          );
+          display: flex;
+          flex-direction: column;
         }
         .sheet-head {
           display: flex;
@@ -701,6 +708,7 @@ export default function AddressPicker({
           gap: 8px;
           padding: 12px 14px;
           border-bottom: 1px solid ${BORDER};
+          flex: 0 0 auto;
         }
         .title {
           font-weight: 800;
@@ -708,6 +716,8 @@ export default function AddressPicker({
         }
         .sheet-body {
           padding: 16px;
+          overflow: auto;
+          flex: 1 1 auto;
         }
 
         .otp-overlay {
@@ -726,6 +736,15 @@ export default function AddressPicker({
           border-radius: 16px;
           border: 1px solid ${BORDER};
           box-shadow: 0 16px 40px rgba(15, 33, 71, 0.25);
+
+          max-height: calc(
+            100vh -
+              (env(safe-area-inset-top) + var(--navbar-h, 96px)) -
+              (env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))) -
+              24px
+          );
+          display: flex;
+          flex-direction: column;
         }
         .otp-head {
           display: flex;
@@ -733,6 +752,7 @@ export default function AddressPicker({
           justify-content: space-between;
           padding: 12px 14px;
           border-bottom: 1px solid ${BORDER};
+          flex: 0 0 auto;
         }
         .otp-ttl {
           font-weight: 900;
@@ -751,6 +771,8 @@ export default function AddressPicker({
           padding: 16px;
           display: grid;
           gap: 10px;
+          overflow: auto;
+          flex: 1 1 auto;
         }
         .otp-line {
           color: ${NAVY};
