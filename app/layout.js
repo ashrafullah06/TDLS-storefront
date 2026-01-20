@@ -131,20 +131,16 @@ export default function RootLayout({ children }) {
             <>
               <AutoSignoutGuard />
 
+              {/* ✅ Preloaders run as early as possible on site load (no UI) */}
+              <SlidingMenuBarPreloader />
+              <HomePanelPreloader />
+              <BottomFloatingBarPreloader />
+
               <Providers>
                 <CartProvider>
                   <OptionsProvider>
                     <SwrProvider>
                       <Promobar />
-
-                      {/* ✅ Preload Slidingmenubar data at website load (no click loading) */}
-                      <SlidingMenuBarPreloader />
-
-                      {/* ✅ Preload HomePanel highlights + warm critical routes on site load */}
-                      <HomePanelPreloader />
-
-                      {/* ✅ NEW: Preload BFBar datasets at website load (no click loading) */}
-                      <BottomFloatingBarPreloader />
 
                       {/* Global mirror slider, reading from real cart */}
                       <CartPanel />

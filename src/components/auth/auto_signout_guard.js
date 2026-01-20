@@ -33,9 +33,10 @@ import { getSession, signOut } from "next-auth/react";
  */
 const MIN_IDLE_MINUTES = 60;
 const RAW_IDLE_MINUTES = Number(process.env.NEXT_PUBLIC_AUTO_SIGNOUT_MINUTES);
-const IDLE_MINUTES = Number.isFinite(RAW_IDLE_MINUTES) && RAW_IDLE_MINUTES > 0
-  ? Math.max(MIN_IDLE_MINUTES, Math.floor(RAW_IDLE_MINUTES))
-  : MIN_IDLE_MINUTES;
+const IDLE_MINUTES =
+  Number.isFinite(RAW_IDLE_MINUTES) && RAW_IDLE_MINUTES > 0
+    ? Math.max(MIN_IDLE_MINUTES, Math.floor(RAW_IDLE_MINUTES))
+    : MIN_IDLE_MINUTES;
 
 const IDLE_MS = IDLE_MINUTES * 60 * 1000;
 
@@ -137,6 +138,9 @@ export default function AutoSignoutGuard() {
   const bcRef = useRef(null);
   const sessionKnownAuthedRef = useRef(false);
 
+  // Ensure we only run signout once per mount
+  const signingOutRef = useRef(false);
+
   // Activity throttles (keep cheap but reliable)
   const lastHiFreqMarkRef = useRef(0);
   const lastActivitySyncRef = useRef(0);
@@ -148,6 +152,13 @@ export default function AutoSignoutGuard() {
       } catch {}
       intervalRef.current = null;
     }
+  };
+
+  const triggerIdleSignoutOnce = () => {
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    stopIdleLoop();
+    void customerSignOut({ broadcast: true });
   };
 
   const applyActivity = (at) => {
@@ -178,6 +189,18 @@ export default function AutoSignoutGuard() {
 
   const markActivity = () => {
     const now = Date.now();
+
+    // HARD RULE: if already idle for >= 1 hour, do NOT reset timer—sign out.
+    if (
+      sessionKnownAuthedRef.current &&
+      !inAuthFlow() &&
+      !manualSignoutInProgress() &&
+      now - lastActivityRef.current >= IDLE_MS
+    ) {
+      triggerIdleSignoutOnce();
+      return;
+    }
+
     applyActivity(now);
     syncActivityCrossTab(now);
   };
@@ -185,8 +208,21 @@ export default function AutoSignoutGuard() {
   const markActivityThrottled = () => {
     // For scroll/move/wheel/touchmove: mark activity max 1x per 1000ms
     const now = Date.now();
+
+    // HARD RULE: if already idle for >= 1 hour, do NOT reset timer—sign out.
+    if (
+      sessionKnownAuthedRef.current &&
+      !inAuthFlow() &&
+      !manualSignoutInProgress() &&
+      now - lastActivityRef.current >= IDLE_MS
+    ) {
+      triggerIdleSignoutOnce();
+      return;
+    }
+
     if (now - lastHiFreqMarkRef.current < 1000) return;
     lastHiFreqMarkRef.current = now;
+
     applyActivity(now);
     syncActivityCrossTab(now);
   };
@@ -218,8 +254,8 @@ export default function AutoSignoutGuard() {
         return authed;
       } catch {
         if (!mounted) return false;
-        sessionKnownAuthedRef.current = false;
-        return false;
+        // Preserve last-known state; do NOT disable guard due to transient fetch failures.
+        return sessionKnownAuthedRef.current;
       }
     };
 
@@ -237,6 +273,7 @@ export default function AutoSignoutGuard() {
 
         if (type === MSG_SIGNOUT) {
           stopIdleLoop();
+          if (!signingOutRef.current) signingOutRef.current = true;
           void customerSignOut({ broadcast: false });
           return;
         }
@@ -261,12 +298,19 @@ export default function AutoSignoutGuard() {
     };
 
     const onVisibilityChange = () => {
-      // Visibility changes are NOT inactivity; they just should not reset timers incorrectly.
-      // When returning to the tab, consider it activity so users are not “logout on return”.
       if (inAuthFlow() || manualSignoutInProgress()) return;
       if (!sessionKnownAuthedRef.current) return;
 
       if (document.visibilityState !== "hidden") {
+        const now = Date.now();
+        const idleFor = now - lastActivityRef.current;
+
+        // HARD RULE: returning to the tab does NOT “save” an already-idle session.
+        if (idleFor >= IDLE_MS) {
+          triggerIdleSignoutOnce();
+          return;
+        }
+
         markActivity();
       }
     };
@@ -292,6 +336,7 @@ export default function AutoSignoutGuard() {
         }
 
         if (inAuthFlow() || manualSignoutInProgress()) return;
+        if (signingOutRef.current) return;
 
         const now = Date.now();
         const idleFor = now - lastActivityRef.current;
@@ -310,8 +355,7 @@ export default function AutoSignoutGuard() {
           }
           if (now - pendingSignoutRef.current < 5_000) return;
 
-          stopIdleLoop();
-          void customerSignOut({ broadcast: true });
+          triggerIdleSignoutOnce();
           return;
         }
 

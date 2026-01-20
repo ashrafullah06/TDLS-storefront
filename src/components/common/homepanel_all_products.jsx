@@ -566,27 +566,57 @@ function buildSeasonal(products, seasonSlug, labels) {
   const sections = [];
 
   const kidsPrefix = `/collections/${seasonalKey}/kids`;
-  const kids = buildKidsYoung(seasonal.filter((p) => hasAudience(p, "kids")), "kids", labels, kidsPrefix);
+  const kids = buildKidsYoung(
+    seasonal.filter((p) => hasAudience(p, "kids")),
+    "kids",
+    labels,
+    kidsPrefix
+  );
   if (kids.length) sections.push({ label: "Kids", href: kidsPrefix, children: kids });
 
   const youngPrefix = `/collections/${seasonalKey}/young`;
-  const young = buildKidsYoung(seasonal.filter((p) => hasAudience(p, "young")), "young", labels, youngPrefix);
+  const young = buildKidsYoung(
+    seasonal.filter((p) => hasAudience(p, "young")),
+    "young",
+    labels,
+    youngPrefix
+  );
   if (young.length) sections.push({ label: "Young", href: youngPrefix, children: young });
 
   const accessoriesPrefix = `/collections/${seasonalKey}/accessories`;
-  const accessories = buildAccessories(seasonal.filter((p) => hasAudience(p, "accessories")), labels, accessoriesPrefix);
-  if (accessories.length) sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
+  const accessories = buildAccessories(
+    seasonal.filter((p) => hasAudience(p, "accessories")),
+    labels,
+    accessoriesPrefix
+  );
+  if (accessories.length)
+    sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
-  const men = buildMWHD(seasonal.filter((p) => hasAudience(p, "men")), "men", labels, menPrefix);
+  const men = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "men")),
+    "men",
+    labels,
+    menPrefix
+  );
   if (men.length) sections.push({ label: "Men", href: menPrefix, children: men });
 
   const womenPrefix = `/collections/${seasonalKey}/women`;
-  const women = buildMWHD(seasonal.filter((p) => hasAudience(p, "women")), "women", labels, womenPrefix);
+  const women = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "women")),
+    "women",
+    labels,
+    womenPrefix
+  );
   if (women.length) sections.push({ label: "Women", href: womenPrefix, children: women });
 
   const homePrefix = `/collections/${seasonalKey}/home-decor`;
-  const home = buildMWHD(seasonal.filter((p) => hasAudience(p, "home-decor")), "home-decor", labels, homePrefix);
+  const home = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "home-decor")),
+    "home-decor",
+    labels,
+    homePrefix
+  );
   if (home.length) sections.push({ label: "Home Décor", href: homePrefix, children: home });
 
   return sections;
@@ -597,6 +627,11 @@ const LS_DATA_KEY = "tdls:homepanel:allproducts:data:v1";
 const LS_DATA_TS = "tdls:homepanel:allproducts:ts:v1";
 const TTL_MS = 6 * 60 * 60 * 1000; // 6h
 const LS_LAST_KEY = "tdls:homepanel:allproducts:last_audience:v1";
+
+/* ---- preload coordination (so flyout never “loads later”) ---- */
+const LS_READY_EVENT = "tdls:homepanel:allproductsReady";
+const LS_LOCK_KEY = "tdls:homepanel:allproducts:lock:v1";
+const LOCK_TTL_MS = 25 * 1000; // 25s
 
 function readJson(key) {
   try {
@@ -633,6 +668,37 @@ function isFresh(ts) {
   return Date.now() - t < TTL_MS;
 }
 
+function dispatchReady() {
+  try {
+    window.dispatchEvent(new Event(LS_READY_EVENT));
+  } catch {}
+}
+
+function acquireLock() {
+  try {
+    const raw = window.localStorage.getItem(LS_LOCK_KEY);
+    const t = raw ? Number(raw) : 0;
+    if (Number.isFinite(t) && t > 0 && Date.now() - t < LOCK_TTL_MS) return false;
+    window.localStorage.setItem(LS_LOCK_KEY, String(Date.now()));
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function releaseLock() {
+  try {
+    window.localStorage.removeItem(LS_LOCK_KEY);
+  } catch {}
+}
+
+function hasUsableCachedDataset(cached) {
+  const p = Array.isArray(cached?.products) ? cached.products : [];
+  const c = Array.isArray(cached?.categories) ? cached.categories : [];
+  // Products are the core; categories help labels; audienceCategories help extras.
+  return p.length > 0 && c.length > 0;
+}
+
 function toLiteProduct(p) {
   const node = p?.attributes ? { id: p.id, ...p.attributes, attributes: p.attributes } : p || {};
   return {
@@ -644,6 +710,89 @@ function toLiteProduct(p) {
     age_groups_slugs: extractRelSlugs(node, "age_groups"),
     gender_groups_slugs: extractRelSlugs(node, "gender_groups"),
   };
+}
+
+/* ===================== PRELOADER (mount in app/layout.js for zero-wait flyout) ===================== */
+export function HomePanelAllProductsPreloader() {
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    if (typeof window === "undefined") return;
+
+    const cached = readJson(LS_DATA_KEY);
+    const ts = readTs(LS_DATA_TS);
+
+    // If cache is fresh and usable, announce readiness and do nothing else.
+    if (cached && isFresh(ts) && hasUsableCachedDataset(cached)) {
+      dispatchReady();
+      return;
+    }
+
+    // Avoid stampede across tabs / double mounts.
+    if (!acquireLock()) return;
+
+    let cancelled = false;
+    const ac = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      try {
+        ac.abort();
+      } catch {}
+    }, 6500);
+
+    (async () => {
+      try {
+        const [ps, ags, cats, auds] = await Promise.allSettled([
+          fetchProductsClient(),
+          fetchAgeGroupsClient(),
+          fetchCategoriesClient(),
+          fetchAudienceCategoriesClient(),
+        ]);
+
+        if (cancelled) return;
+
+        const nextProductsRaw =
+          ps.status === "fulfilled" && Array.isArray(ps.value) ? ps.value : [];
+        const nextProducts = nextProductsRaw.map(toLiteProduct);
+
+        const nextAge = ags.status === "fulfilled" && Array.isArray(ags.value) ? ags.value : [];
+        const nextCats = cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
+        const nextAud = auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
+
+        if (nextProducts.length && nextCats.length) {
+          writeJson(LS_DATA_KEY, {
+            products: nextProducts,
+            ageGroups: nextAge,
+            categories: nextCats,
+            audienceCategories: nextAud,
+          });
+          writeTs(LS_DATA_TS);
+          dispatchReady();
+        }
+      } catch {
+        // Silent by design (flyout will still use any existing cache)
+      } finally {
+        window.clearTimeout(timeoutId);
+        releaseLock();
+        try {
+          ac.abort();
+        } catch {}
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      releaseLock();
+      try {
+        ac.abort();
+      } catch {}
+    };
+  }, []);
+
+  return null;
 }
 
 /* ===================== MAIN COMPONENT ===================== */
@@ -682,8 +831,12 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     if (!e || e.pointerType !== "touch") return;
     if (!gestureRef.current.active) return;
 
-    const dx = Math.abs((typeof e.clientX === "number" ? e.clientX : 0) - gestureRef.current.x);
-    const dy = Math.abs((typeof e.clientY === "number" ? e.clientY : 0) - gestureRef.current.y);
+    const dx = Math.abs(
+      (typeof e.clientX === "number" ? e.clientX : 0) - gestureRef.current.x
+    );
+    const dy = Math.abs(
+      (typeof e.clientY === "number" ? e.clientY : 0) - gestureRef.current.y
+    );
 
     // Small threshold: treat as scroll intent, then ignore the synthetic click
     if (dx > 8 || dy > 8) gestureRef.current.moved = true;
@@ -715,22 +868,36 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const cached = readJson(LS_DATA_KEY);
     const ts = readTs(LS_DATA_TS);
 
-    if (cached && typeof cached === "object") {
-      const p = Array.isArray(cached.products) ? cached.products : [];
-      const ag = Array.isArray(cached.ageGroups) ? cached.ageGroups : [];
-      const c = Array.isArray(cached.categories) ? cached.categories : [];
-      const ac = Array.isArray(cached.audienceCategories) ? cached.audienceCategories : [];
+    const bootProducts = Array.isArray(cached?.products) ? cached.products : [];
+    const bootAge = Array.isArray(cached?.ageGroups) ? cached.ageGroups : [];
+    const bootCats = Array.isArray(cached?.categories) ? cached.categories : [];
+    const bootAud = Array.isArray(cached?.audienceCategories) ? cached.audienceCategories : [];
 
-      if (p.length) setProducts(p);
-      if (ag.length) setAgeGroups(ag);
-      if (c.length) setCategoriesList(c);
-      if (ac.length) setAudienceCategories(ac);
-    }
+    // Instant hydration if cache exists (no waiting UI)
+    if (bootProducts.length) setProducts(bootProducts);
+    if (bootAge.length) setAgeGroups(bootAge);
+    if (bootCats.length) setCategoriesList(bootCats);
+    if (bootAud.length) setAudienceCategories(bootAud);
 
     const stale = !isFresh(ts);
+    const usable = cached && hasUsableCachedDataset(cached);
 
     let cancelled = false;
-    if (!stale && cached) return;
+
+    // If cache is fresh and usable, do not fetch here.
+    // (Preloader owns warm-load; this component stays instant.)
+    if (!stale && usable) return;
+
+    // Avoid overwrite with empty arrays when partial fetch fails.
+    const fallback = {
+      products: bootProducts,
+      ageGroups: bootAge,
+      categories: bootCats,
+      audienceCategories: bootAud,
+    };
+
+    // If preloader is already fetching, don't stampede.
+    if (!acquireLock()) return;
 
     (async () => {
       try {
@@ -751,29 +918,72 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         const nextCats = cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
         const nextAud = auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
 
-        if (!nextProducts.length) setFetchError(true);
+        const finalProducts = nextProducts.length ? nextProducts : fallback.products;
+        const finalAge = nextAge.length ? nextAge : fallback.ageGroups;
+        const finalCats = nextCats.length ? nextCats : fallback.categories;
+        const finalAud = nextAud.length ? nextAud : fallback.audienceCategories;
 
-        if (nextProducts.length) setProducts(nextProducts);
-        if (nextAge.length) setAgeGroups(nextAge);
-        if (nextCats.length) setCategoriesList(nextCats);
-        if (nextAud.length) setAudienceCategories(nextAud);
+        // Only mark error if we truly have nothing to show.
+        if (!finalProducts.length || !finalCats.length) {
+          if (!fallback.products.length && !fallback.categories.length) setFetchError(true);
+        }
+
+        if (finalProducts.length) setProducts(finalProducts);
+        if (finalAge.length) setAgeGroups(finalAge);
+        if (finalCats.length) setCategoriesList(finalCats);
+        if (finalAud.length) setAudienceCategories(finalAud);
 
         writeJson(LS_DATA_KEY, {
-          products: nextProducts.length ? nextProducts : products,
-          ageGroups: nextAge.length ? nextAge : ageGroups,
-          categories: nextCats.length ? nextCats : categoriesList,
-          audienceCategories: nextAud.length ? nextAud : audienceCategories,
+          products: finalProducts,
+          ageGroups: finalAge,
+          categories: finalCats,
+          audienceCategories: finalAud,
         });
         writeTs(LS_DATA_TS);
+
+        // Notify any listener (and keep behavior consistent with preloader).
+        dispatchReady();
       } catch {
-        if (!cancelled) setFetchError(true);
+        // Only show error state if there's no cache to rely on.
+        if (!cancelled) {
+          const stillCached = readJson(LS_DATA_KEY);
+          if (!stillCached || !hasUsableCachedDataset(stillCached)) setFetchError(true);
+        }
+      } finally {
+        releaseLock();
       }
     })();
 
     return () => {
       cancelled = true;
+      releaseLock();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // If preloader finishes while flyout is open/mounted, hydrate instantly.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onReady = () => {
+      const cached = readJson(LS_DATA_KEY);
+      if (!cached || typeof cached !== "object") return;
+
+      const p = Array.isArray(cached.products) ? cached.products : [];
+      const ag = Array.isArray(cached.ageGroups) ? cached.ageGroups : [];
+      const c = Array.isArray(cached.categories) ? cached.categories : [];
+      const ac = Array.isArray(cached.audienceCategories) ? cached.audienceCategories : [];
+
+      if (p.length) setProducts(p);
+      if (ag.length) setAgeGroups(ag);
+      if (c.length) setCategoriesList(c);
+      if (ac.length) setAudienceCategories(ac);
+
+      if (p.length && c.length) setFetchError(false);
+    };
+
+    window.addEventListener(LS_READY_EVENT, onReady);
+    return () => window.removeEventListener(LS_READY_EVENT, onReady);
   }, []);
 
   const labels = useMemo(
@@ -853,7 +1063,9 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       options = buildAccessories(products, labels);
     } else if (["kids", "young"].includes(key)) {
       options = buildKidsYoung(products, key, labels);
-    } else if (["new-arrival", "on-sale", "monsoon", "summer", "winter"].includes(key)) {
+    } else if (
+      ["new-arrival", "on-sale", "monsoon", "summer", "winter"].includes(key)
+    ) {
       options = buildSeasonal(products, key, labels);
     } else {
       options = buildMWHD(products, key, labels);
@@ -1441,7 +1653,13 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                 </div>
 
                 <div className="hpFly-mobileBody hpFly-right" ref={rightPaneRef}>
-                  <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 2px 10px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      padding: "2px 2px 10px",
+                    }}
+                  >
                     <Link className="hpFly-link" href={activeHref} prefetch>
                       See all ↗
                     </Link>
