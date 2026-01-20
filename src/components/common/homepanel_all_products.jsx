@@ -1,4 +1,4 @@
-//src/components/common/homepanel_all_products.jsx
+// PATH: src/components/common/homepanel_all_products.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -128,7 +128,13 @@ function pickSlugs(obj) {
     const d = obj.data;
     if (Array.isArray(d)) {
       return d
-        .map((x) => x?.attributes?.slug || x?.slug || x?.attributes?.name || x?.name)
+        .map(
+          (x) =>
+            x?.attributes?.slug ||
+            x?.slug ||
+            x?.attributes?.name ||
+            x?.name
+        )
         .filter(Boolean)
         .map(normSlug);
     }
@@ -158,7 +164,13 @@ const FIELD_ALIASES = {
     "categories_slugs",
     "category_slugs",
   ],
-  sub_categories: ["sub_categories", "sub_category", "subCategories", "subcategory", "subCategory"],
+  sub_categories: [
+    "sub_categories",
+    "sub_category",
+    "subCategories",
+    "subcategory",
+    "subCategory",
+  ],
   super_categories: [
     "super_categories",
     "super_category",
@@ -388,7 +400,8 @@ function buildAccessories(products, labels, prefix = "/collections/accessories")
       }
     }
 
-    if (children.length) options.push({ label: supLabel, href: `${prefix}${supSegment}`, children });
+    if (children.length)
+      options.push({ label: supLabel, href: `${prefix}${supSegment}`, children });
   }
   return options.sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -534,27 +547,57 @@ function buildSeasonal(products, seasonSlug, labels) {
   const sections = [];
 
   const kidsPrefix = `/collections/${seasonalKey}/kids`;
-  const kids = buildKidsYoung(seasonal.filter((p) => hasAudience(p, "kids")), "kids", labels, kidsPrefix);
+  const kids = buildKidsYoung(
+    seasonal.filter((p) => hasAudience(p, "kids")),
+    "kids",
+    labels,
+    kidsPrefix
+  );
   if (kids.length) sections.push({ label: "Kids", href: kidsPrefix, children: kids });
 
   const youngPrefix = `/collections/${seasonalKey}/young`;
-  const young = buildKidsYoung(seasonal.filter((p) => hasAudience(p, "young")), "young", labels, youngPrefix);
+  const young = buildKidsYoung(
+    seasonal.filter((p) => hasAudience(p, "young")),
+    "young",
+    labels,
+    youngPrefix
+  );
   if (young.length) sections.push({ label: "Young", href: youngPrefix, children: young });
 
   const accessoriesPrefix = `/collections/${seasonalKey}/accessories`;
-  const accessories = buildAccessories(seasonal.filter((p) => hasAudience(p, "accessories")), labels, accessoriesPrefix);
-  if (accessories.length) sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
+  const accessories = buildAccessories(
+    seasonal.filter((p) => hasAudience(p, "accessories")),
+    labels,
+    accessoriesPrefix
+  );
+  if (accessories.length)
+    sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
-  const men = buildMWHD(seasonal.filter((p) => hasAudience(p, "men")), "men", labels, menPrefix);
+  const men = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "men")),
+    "men",
+    labels,
+    menPrefix
+  );
   if (men.length) sections.push({ label: "Men", href: menPrefix, children: men });
 
   const womenPrefix = `/collections/${seasonalKey}/women`;
-  const women = buildMWHD(seasonal.filter((p) => hasAudience(p, "women")), "women", labels, womenPrefix);
+  const women = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "women")),
+    "women",
+    labels,
+    womenPrefix
+  );
   if (women.length) sections.push({ label: "Women", href: womenPrefix, children: women });
 
   const homePrefix = `/collections/${seasonalKey}/home-decor`;
-  const home = buildMWHD(seasonal.filter((p) => hasAudience(p, "home-decor")), "home-decor", labels, homePrefix);
+  const home = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "home-decor")),
+    "home-decor",
+    labels,
+    homePrefix
+  );
   if (home.length) sections.push({ label: "Home Décor", href: homePrefix, children: home });
 
   return sections;
@@ -632,6 +675,40 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   const [mobilePane, setMobilePane] = useState("audience"); // "audience" | "options"
   const rightPaneRef = useRef(null);
 
+  /* ------------------- Touch scroll guard (prevents accidental taps) ------------------- */
+  const ignoreClickUntilRef = useRef(0);
+  const gestureRef = useRef({ active: false, x: 0, y: 0, moved: false });
+
+  const shouldIgnoreClick = () => Date.now() < (ignoreClickUntilRef.current || 0);
+
+  const onPointerDownCapture = (e) => {
+    if (!e || e.pointerType !== "touch") return;
+    gestureRef.current.active = true;
+    gestureRef.current.moved = false;
+    gestureRef.current.x = typeof e.clientX === "number" ? e.clientX : 0;
+    gestureRef.current.y = typeof e.clientY === "number" ? e.clientY : 0;
+  };
+
+  const onPointerMoveCapture = (e) => {
+    if (!e || e.pointerType !== "touch") return;
+    if (!gestureRef.current.active) return;
+
+    const dx = Math.abs((typeof e.clientX === "number" ? e.clientX : 0) - gestureRef.current.x);
+    const dy = Math.abs((typeof e.clientY === "number" ? e.clientY : 0) - gestureRef.current.y);
+
+    // Small threshold: treat as scroll intent, then ignore the synthetic click
+    if (dx > 8 || dy > 8) gestureRef.current.moved = true;
+  };
+
+  const onPointerUpCapture = (e) => {
+    if (!e || e.pointerType !== "touch") return;
+    const moved = Boolean(gestureRef.current.moved);
+    gestureRef.current.active = false;
+
+    // If user was scrolling, ignore click events that follow immediately (mobile browsers)
+    if (moved) ignoreClickUntilRef.current = Date.now() + 320;
+  };
+
   // detect mobile
   useEffect(() => {
     const mq = window.matchMedia?.("(max-width: 768px)");
@@ -680,10 +757,15 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         if (cancelled) return;
 
         const nextProducts =
-          ps.status === "fulfilled" && Array.isArray(ps.value) ? ps.value.map(toLiteProduct) : [];
-        const nextAge = ags.status === "fulfilled" && Array.isArray(ags.value) ? ags.value : [];
-        const nextCats = cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
-        const nextAud = auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
+          ps.status === "fulfilled" && Array.isArray(ps.value)
+            ? ps.value.map(toLiteProduct)
+            : [];
+        const nextAge =
+          ags.status === "fulfilled" && Array.isArray(ags.value) ? ags.value : [];
+        const nextCats =
+          cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
+        const nextAud =
+          auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
 
         if (!nextProducts.length) setFetchError(true);
 
@@ -835,6 +917,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   }, [isMobile, active?.key]);
 
   const toggleAudience = (item) => {
+    if (shouldIgnoreClick()) return;
     if (!item?.key) return;
 
     if (active?.key === item.key) {
@@ -974,8 +1057,23 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           touch-action: pan-y;
           background: rgba(255,255,255,.80);
           min-width: 0; /* critical for long labels */
+
+          /* Ensure text never flips into vertical writing modes */
+          writing-mode: horizontal-tb;
+          text-orientation: mixed;
         }
         .hpFly-right::-webkit-scrollbar{ width: 0px; height: 0px; }
+
+        /* Keep labels readable without affecting layout containers */
+        .hpFly-right a,
+        .hpFly-right button{
+          white-space: normal;
+          overflow-wrap: anywhere;
+          word-break: normal;
+          hyphens: auto;
+          min-width: 0;
+          max-width: 100%;
+        }
 
         .hpFly-kicker{
           font-family: ${SYS_FONT};
@@ -1035,18 +1133,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           border: 1px dashed rgba(231,227,218,.95);
           border-radius: 16px;
           background: rgba(255,255,255,.92);
-        }
-
-        /* --- Force horizontal readable names; allow 2-line wrap; prevent vertical letter stacking --- */
-        .hpFly-right *{
-          writing-mode: horizontal-tb !important;
-          text-orientation: mixed !important;
-          white-space: normal !important;
-          word-break: keep-all !important;
-          overflow-wrap: anywhere !important;
-          hyphens: auto;
-          min-width: 0;
-          max-width: 100%;
         }
 
         /* ---------- Mobile: 2-step navigation (Audience -> Options) ---------- */
@@ -1110,6 +1196,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           padding: 10px 10px 8px;
           -webkit-overflow-scrolling: touch;
           scrollbar-width: none;
+          touch-action: pan-x;
         }
         .hpFly-chipRow::-webkit-scrollbar{ width: 0px; height: 0px; }
 
@@ -1188,7 +1275,18 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
         <div
           className="hpFly-wrap"
+          onPointerDownCapture={onPointerDownCapture}
+          onPointerMoveCapture={onPointerMoveCapture}
+          onPointerUpCapture={onPointerUpCapture}
+          onPointerCancelCapture={onPointerUpCapture}
           onClickCapture={(e) => {
+            // If the user is scrolling on touch, ignore the synthetic click.
+            if (shouldIgnoreClick()) {
+              e.preventDefault?.();
+              e.stopPropagation?.();
+              return;
+            }
+
             const a = e?.target?.closest?.("a");
             if (!a) return;
             const href = String(a.getAttribute("href") || "");
@@ -1205,7 +1303,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                   <button
                     type="button"
                     className="hpFly-backBtn"
-                    onClick={() => onAfterNavigate?.()}
+                    onClick={() => {
+                      if (shouldIgnoreClick()) return;
+                      onAfterNavigate?.();
+                    }}
                     aria-label="Close"
                   >
                     Close
@@ -1255,7 +1356,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                   <button
                     type="button"
                     className="hpFly-backBtn"
-                    onClick={() => setMobilePane("audience")}
+                    onClick={() => {
+                      if (shouldIgnoreClick()) return;
+                      setMobilePane("audience");
+                    }}
                     aria-label="Back to collections"
                   >
                     ← Back
@@ -1266,7 +1370,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                   <button
                     type="button"
                     className="hpFly-backBtn"
-                    onClick={() => onAfterNavigate?.()}
+                    onClick={() => {
+                      if (shouldIgnoreClick()) return;
+                      onAfterNavigate?.();
+                    }}
                     aria-label="Close"
                   >
                     Close

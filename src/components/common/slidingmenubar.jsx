@@ -395,6 +395,8 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
         overflowX: "auto",
         overflowY: "hidden",
         WebkitOverflowScrolling: "touch",
+        overscrollBehaviorX: "contain",
+        touchAction: "pan-x",
         paddingBottom: 2,
         maxWidth: "100%",
       }}
@@ -470,7 +472,16 @@ function Shell({ title, right, children }) {
 
 function ScrollBody({ children, compact = false }) {
   return (
-    <div style={{ padding: compact ? 8 : 10, minHeight: 0, overflow: "auto" }}>
+    <div
+      style={{
+        padding: compact ? 8 : 10,
+        minHeight: 0,
+        overflow: "auto",
+        WebkitOverflowScrolling: "touch",
+        overscrollBehavior: "contain",
+        touchAction: "pan-y",
+      }}
+    >
       <div style={{ display: "grid", gap: compact ? 7 : 8 }}>{children}</div>
     </div>
   );
@@ -960,6 +971,8 @@ export default function Slidingmenubar({ open, onClose }) {
 
   const [mobileSection, setMobileSection] = useState("audiences"); // audiences | categories | products
 
+  const panelRef = useRef(null);
+
   const anyTierSignals = useMemo(() => computeAnyTierSignals(productIndex, audienceRows), [productIndex, audienceRows]);
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
@@ -1166,29 +1179,70 @@ export default function Slidingmenubar({ open, onClose }) {
     onClose?.();
   }, [onClose]);
 
+  /**
+   * ✅ Mobile hypersensitivity fix:
+   * - Close ONLY on true OUTSIDE "tap" (pointer up) that started outside the panel.
+   * - Ignore drags/swipes (movement threshold) so scrolling near edges won't close.
+   * - Use composedPath so taps on panel edges/children never count as outside.
+   */
   useEffect(() => {
     if (!open) return;
 
+    let active = null;
+    const MOVE_PX = 10;
+
+    const isInsidePanel = (evt) => {
+      const panelEl = panelRef.current || document.getElementById("tdlc-slidingmenubar-panel");
+      if (!panelEl) return false;
+      const t = evt?.target;
+      if (panelEl === t) return true;
+      if (t && panelEl.contains(t)) return true;
+      const path = typeof evt?.composedPath === "function" ? evt.composedPath() : null;
+      if (path && Array.isArray(path) && path.includes(panelEl)) return true;
+      return false;
+    };
+
     const onPointerDownCapture = (e) => {
-      const panel = document.getElementById("tdlc-slidingmenubar-panel");
-      if (panel && panel.contains(e.target)) return;
+      if (!e?.isPrimary) return;
+      if (isInsidePanel(e)) return; // started inside -> never close
+      active = {
+        id: e.pointerId,
+        x: e.clientX,
+        y: e.clientY,
+        moved: false,
+      };
+    };
 
-      const y = e?.clientY ?? 0;
+    const onPointerMoveCapture = (e) => {
+      if (!active || e.pointerId !== active.id) return;
+      const dx = (e.clientX ?? 0) - active.x;
+      const dy = (e.clientY ?? 0) - active.y;
+      if (dx * dx + dy * dy >= MOVE_PX * MOVE_PX) active.moved = true;
+    };
 
-      if (y >= 0 && y <= clickShieldHeight) {
-        handleClose();
-        return;
-      }
+    const onPointerUpCapture = (e) => {
+      if (!active || e.pointerId !== active.id) return;
+      const shouldClose = !active.moved; // "tap" only
+      active = null;
+      if (shouldClose) handleClose();
+    };
 
-      const bottomZoneStart = window.innerHeight - bottomBarHeight;
-      if (y >= bottomZoneStart) {
-        handleClose();
-      }
+    const onPointerCancelCapture = () => {
+      active = null;
     };
 
     document.addEventListener("pointerdown", onPointerDownCapture, true);
-    return () => document.removeEventListener("pointerdown", onPointerDownCapture, true);
-  }, [open, handleClose, clickShieldHeight, bottomBarHeight]);
+    document.addEventListener("pointermove", onPointerMoveCapture, true);
+    document.addEventListener("pointerup", onPointerUpCapture, true);
+    document.addEventListener("pointercancel", onPointerCancelCapture, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDownCapture, true);
+      document.removeEventListener("pointermove", onPointerMoveCapture, true);
+      document.removeEventListener("pointerup", onPointerUpCapture, true);
+      document.removeEventListener("pointercancel", onPointerCancelCapture, true);
+    };
+  }, [open, handleClose]);
 
   const switchTier = useCallback((nextTierSlug) => {
     const s = normSlug(nextTierSlug);
@@ -1442,10 +1496,8 @@ export default function Slidingmenubar({ open, onClose }) {
 
   return (
     <>
+      {/* Click shield kept for compatibility, but MUST NOT block panel interactions */}
       <div
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) handleClose();
-        }}
         style={{
           position: "fixed",
           top: 0,
@@ -1454,14 +1506,11 @@ export default function Slidingmenubar({ open, onClose }) {
           height: clickShieldHeight,
           zIndex: Z_CLICK_SHIELD,
           background: "transparent",
-          pointerEvents: "auto",
+          pointerEvents: "none",
         }}
       />
 
       <div
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) handleClose();
-        }}
         style={{
           position: "fixed",
           top: 0,
@@ -1472,11 +1521,13 @@ export default function Slidingmenubar({ open, onClose }) {
           background: "rgba(10, 14, 24, 0.38)",
           backdropFilter: "blur(7px)",
           WebkitBackdropFilter: "blur(7px)",
+          touchAction: "manipulation",
         }}
       />
 
       <div
         id="tdlc-slidingmenubar-panel"
+        ref={panelRef}
         style={{
           position: "fixed",
           top: panelTop,
@@ -1495,6 +1546,7 @@ export default function Slidingmenubar({ open, onClose }) {
           overflow: "hidden",
           pointerEvents: "auto",
           isolation: "isolate",
+          touchAction: "pan-x pan-y",
           ...(panelMaxHeightStyle || {}),
         }}
         role="dialog"
@@ -1638,7 +1690,16 @@ export default function Slidingmenubar({ open, onClose }) {
                       </Pill>
                     </div>
 
-                    <div style={{ maxHeight: 340, overflow: "auto", padding: 8 }}>
+                    <div
+                      style={{
+                        maxHeight: 340,
+                        overflow: "auto",
+                        padding: 8,
+                        WebkitOverflowScrolling: "touch",
+                        overscrollBehavior: "contain",
+                        touchAction: "pan-y",
+                      }}
+                    >
                       {suggestions.map((s, idx) => {
                         const active = idx === suggestIndex;
                         const tag = s.type === "PRODUCT" ? "Product" : s.type === "CATEGORY" ? "Category" : "Audience";
@@ -1962,7 +2023,17 @@ export default function Slidingmenubar({ open, onClose }) {
                     minWidth: 0,
                   }}
                 >
-                  <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 10 }}>
+                  <div
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      overflow: "auto",
+                      padding: 10,
+                      WebkitOverflowScrolling: "touch",
+                      overscrollBehavior: "contain",
+                      touchAction: "pan-y",
+                    }}
+                  >
                     {filteredProducts.length ? (
                       <div
                         style={{
@@ -2322,7 +2393,17 @@ export default function Slidingmenubar({ open, onClose }) {
                     }}
                   >
                     {/* ✅ Mobile list: add breathing space above + below (inside scroll), keep everything else intact */}
-                    <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 0 }}>
+                    <div
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: "auto",
+                        padding: 0,
+                        WebkitOverflowScrolling: "touch",
+                        overscrollBehavior: "contain",
+                        touchAction: "pan-y",
+                      }}
+                    >
                       <div
                         style={{
                           paddingTop: 12,

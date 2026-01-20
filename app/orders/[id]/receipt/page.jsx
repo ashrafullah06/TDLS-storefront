@@ -1,4 +1,3 @@
-// PATH: app/orders/[id]/receipt/page.jsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -7,10 +6,12 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 
 import CartClearOnReceipt from "@/components/checkout/cart-clear-on-receipt";
-import ReceiptDownloadButton from "@/components/checkout/receipt-download-button";
+// import ReceiptDownloadButton from "@/components/checkout/receipt-download-button"; // replaced with direct <a> for production-safe download
 import ReceiptPrintButton from "@/components/checkout/receipt-print-button";
 import Navbar from "@/components/common/navbar";
 import BottomFloatingBar from "@/components/common/bottomfloatingbar";
+
+import { auth } from "@/lib/auth";
 
 /* ───────── helpers ───────── */
 
@@ -136,7 +137,6 @@ function getMirroredTotals(order, snap) {
     const taxTotal = toNum(t.taxTotal ?? t.vat ?? t.tax, NaN);
     const grandTotal = toNum(t.grandTotal ?? t.total, NaN);
 
-    // keep only if it has meaningful info (not an all-zero snapshot)
     const meaningful =
       (Number.isFinite(subtotal) && subtotal > 0) ||
       (Number.isFinite(grandTotal) && grandTotal > 0) ||
@@ -281,17 +281,14 @@ function extractSnapshotPricing(it, snapshotLine) {
   let unitPrice = Number.isFinite(unitPriceCandidate) ? unitPriceCandidate : NaN;
   let lineTotal = Number.isFinite(lineTotalCandidate) ? lineTotalCandidate : NaN;
 
-  // If lineTotal is missing, compute from unitPrice
   if (!Number.isFinite(lineTotal) && Number.isFinite(unitPrice) && qty > 0) {
     lineTotal = Number((unitPrice * qty).toFixed(2));
   }
 
-  // ✅ FIX: If lineTotal is explicitly 0 but unitPrice is meaningful, trust unitPrice*qty
   if (Number.isFinite(lineTotal) && lineTotal === 0 && Number.isFinite(unitPrice) && unitPrice > 0 && qty > 0) {
     lineTotal = Number((unitPrice * qty).toFixed(2));
   }
 
-  // If unitPrice missing, compute from lineTotal
   if (!Number.isFinite(unitPrice) && Number.isFinite(lineTotal) && qty > 0) {
     unitPrice = Number((lineTotal / qty).toFixed(2));
   }
@@ -335,7 +332,6 @@ function computeItemsSubtotal(orderItems) {
     const unit = toNum(it?._unitPrice, 0);
     const line = toNum(it?._lineTotal, NaN);
 
-    // ✅ FIX: if line is 0 but unit is >0, use unit*qty
     const effectiveLine =
       Number.isFinite(line) && !(line === 0 && unit > 0 && qty > 0) ? line : Number((unit * qty).toFixed(2));
 
@@ -382,6 +378,10 @@ export default async function ReceiptPage({ params }) {
   const id = String(p?.id || "");
   if (!id) return notFound();
 
+  // ✅ NEW: determine viewer session (used only to hide "My Orders" CTA for guests)
+  const session = await auth().catch(() => null);
+  const isLoggedIn = Boolean(session?.user?.id);
+
   const order = await prisma.order.findUnique({
     where: { id },
     include: {
@@ -427,7 +427,6 @@ export default async function ReceiptPage({ params }) {
   let tax = toNum(t.taxTotal, 0);
   let grand = toNum(t.grandTotal, 0);
 
-  // ✅ FIX: if totals are zero but items have value, compute from items
   if (subtotal === 0 && itemsSubtotal > 0) subtotal = itemsSubtotal;
 
   if (grand === 0 && itemsSubtotal > 0) {
@@ -443,15 +442,29 @@ export default async function ReceiptPage({ params }) {
   const events = Array.isArray(order.events) ? order.events : [];
   const customerTimeline = events.filter((e) => CUSTOMER_SAFE_EVENT_KINDS.has(normalizeEventKind(e?.kind))).slice(0, 10);
 
-  const displayName = firstNonEmpty(order.user?.name, order.shippingAddress?.name, order.billingAddress?.name);
-  const displayPhone = firstNonEmpty(order.user?.phone, order.shippingAddress?.phone, order.billingAddress?.phone);
-  const displayEmail = firstNonEmpty(order.user?.email, order.shippingAddress?.email, order.billingAddress?.email);
+  // Raw contact fields (used for guest receipt download verification params)
+  const rawName = firstNonEmpty(order.user?.name, order.shippingAddress?.name, order.billingAddress?.name) || "";
+  const rawPhone = firstNonEmpty(order.user?.phone, order.shippingAddress?.phone, order.billingAddress?.phone) || "";
+  const rawEmail = firstNonEmpty(order.user?.email, order.shippingAddress?.email, order.billingAddress?.email) || "";
+
+  const displayName = rawName;
+  const displayPhone = rawPhone;
+  const displayEmail = rawEmail;
+
+  // ✅ NEW: production-safe direct invoice download link (supports guest verification)
+  const downloadParams = new URLSearchParams();
+  downloadParams.set("orderNumber", String(order.orderNumber || order.id));
+  if (rawEmail) {
+    downloadParams.set("email", String(rawEmail));
+  } else if (rawPhone) {
+    downloadParams.set("phone", String(rawPhone));
+  }
+  const invoiceHref = `/api/orders/${encodeURIComponent(order.id)}/invoice?${downloadParams.toString()}`;
 
   return (
     <>
       <Navbar />
 
-      {/* ✅ FIX: more top padding (navbar-safe) + more bottom padding (bottombar-safe) */}
       <main id="receipt-main" className="bg-[#F6F8FC] pt-32 pb-[260px] print:bg-white print:pt-0 print:pb-0">
         <CartClearOnReceipt />
 
@@ -600,7 +613,6 @@ export default async function ReceiptPage({ params }) {
                   const unit = toNum(it._unitPrice, 0);
                   const rawLine = toNum(it._lineTotal, NaN);
 
-                  // ✅ FIX: if stored line is 0 but unit is >0, show unit*qty
                   const effectiveLine =
                     Number.isFinite(rawLine) && !(rawLine === 0 && unit > 0 && qty > 0)
                       ? rawLine
@@ -731,11 +743,27 @@ export default async function ReceiptPage({ params }) {
               </div>
 
               <div className="actions no-print">
-                <ReceiptDownloadButton orderNumber={order.orderNumber || order.id} createdAt={order.createdAt} />
+                {/* ✅ FIX: production-safe download (direct link with guest verification params) */}
+                <a
+                  href={invoiceHref}
+                  className="btn"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  // download attr is best-effort; Content-Disposition on API route enforces attachment
+                  download
+                >
+                  Download Receipt
+                </a>
+
                 <ReceiptPrintButton className="btn" />
-                <Link href="/customer/dashboard" className="btn alt">
-                  My Orders
-                </Link>
+
+                {/* ✅ FIX: show "My Orders" ONLY when viewer is logged in */}
+                {isLoggedIn ? (
+                  <Link href="/customer/dashboard" className="btn alt">
+                    My Orders
+                  </Link>
+                ) : null}
+
                 <Link href="/product" className="btn">
                   Continue Shopping
                 </Link>
@@ -744,7 +772,6 @@ export default async function ReceiptPage({ params }) {
           </div>
         </div>
 
-        {/* ✅ FIX: extra scroll spacer so bottomfloatingbar never covers receipt end */}
         <div aria-hidden="true" className="h-24" />
 
         <style>{`

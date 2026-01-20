@@ -1,6 +1,14 @@
+// PATH: src/components/common/homepanel.jsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
@@ -348,14 +356,28 @@ function PillButton({
 
   const color = variant === "dark" ? "#FFFFFF" : NAVY;
 
+  const handleEnter = (e) => {
+    if (!disabled) {
+      e.currentTarget.style.transform = "translateY(-1px)";
+      e.currentTarget.style.filter = "saturate(1.05)";
+    }
+    onMouseEnter?.(e);
+  };
+
+  const handleLeave = (e) => {
+    e.currentTarget.style.transform = "translateY(0)";
+    e.currentTarget.style.filter = "none";
+    onMouseLeave?.(e);
+  };
+
   return (
     <button
       ref={buttonRef}
       type="button"
       onClick={onClick}
       disabled={disabled}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
       onFocus={onFocus}
       onBlur={onBlur}
       aria-expanded={ariaExpanded}
@@ -376,15 +398,6 @@ function PillButton({
         transition: "transform .12s ease, box-shadow .12s ease, filter .12s ease",
         textAlign: "left",
         touchAction: "manipulation",
-      }}
-      onMouseEnterCapture={(e) => {
-        if (disabled) return;
-        e.currentTarget.style.transform = "translateY(-1px)";
-        e.currentTarget.style.filter = "saturate(1.05)";
-      }}
-      onMouseLeaveCapture={(e) => {
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.filter = "none";
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
@@ -458,7 +471,7 @@ function PillButton({
   );
 }
 
-/* ---------- extracted UI components (avoid nested-component lint/reset) ---------- */
+/* ---------- extracted UI components ---------- */
 function TabButton({ id, label, labelSub, active, onSelect }) {
   const isActive = !!active;
   return (
@@ -499,7 +512,15 @@ function TabButton({ id, label, labelSub, active, onSelect }) {
     >
       <span>{label}</span>
       {labelSub ? (
-        <span style={{ fontSize: 10, fontWeight: 800, textTransform: "none", opacity: 0.85, letterSpacing: 0 }}>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            textTransform: "none",
+            opacity: 0.85,
+            letterSpacing: 0,
+          }}
+        >
           {labelSub}
         </span>
       ) : null}
@@ -629,7 +650,7 @@ function Portal({ children, zIndex = 2147483647 }) {
     el.style.position = "fixed";
     el.style.inset = "0";
     el.style.zIndex = String(zIndex);
-    el.style.pointerEvents = "none"; // children opt-in with pointer-events
+    el.style.pointerEvents = "none";
     document.body.appendChild(el);
     setHost(el);
     return () => {
@@ -649,6 +670,8 @@ export default function HomePanel({ open, onClose }) {
 
   const panelRef = useRef(null);
   const previewRef = useRef(null);
+  const bodyRef = useRef(null);
+
   const swallowNextOutsideClickRef = useRef(false);
 
   const [vw, setVw] = useState(1024);
@@ -668,18 +691,30 @@ export default function HomePanel({ open, onClose }) {
   const [navH, setNavH] = useState(89);
   const [bottomH, setBottomH] = useState(86);
 
-  // ✅ NEW: Collections flyout (anchored; no “new window” overlay)
+  // ✅ Collections flyout
   const collectionsBtnRef = useRef(null);
   const collectionsFlyRef = useRef(null);
+
   const openIntentRef = useRef(null);
   const closeIntentRef = useRef(null);
 
   const [collectionsOpen, setCollectionsOpen] = useState(false);
+  const [collectionsReady, setCollectionsReady] = useState(false);
   const [collectionsGeom, setCollectionsGeom] = useState({
-    top: 120,
+    top: 140,
     left: 24,
-    width: 560,
-    height: 520,
+    width: 760,
+    maxHeight: 620,
+    height: null,
+    side: "left",
+  });
+
+  // ✅ Gesture guard
+  const flyGestureRef = useRef({
+    active: false,
+    moved: false,
+    sx: 0,
+    sy: 0,
   });
 
   useEffect(() => {
@@ -696,7 +731,6 @@ export default function HomePanel({ open, onClose }) {
       setNavH(readCssPxVar("--nav-h", 89));
       setBottomH(readCssPxVar("--bottom-bar-h", 86));
 
-      // Mobile includes small-height landscape too.
       const mobile = w < 768 || h < 520;
       setIsMobile(mobile);
       setIsCompactHeight(h < 640);
@@ -708,7 +742,6 @@ export default function HomePanel({ open, onClose }) {
     window.addEventListener("resize", onResize, { passive: true });
     window.addEventListener("orientationchange", onResize, { passive: true });
 
-    // iOS Safari: visualViewport changes when address bar expands/collapses
     const vv = window.visualViewport;
     if (vv?.addEventListener) {
       vv.addEventListener("resize", onResize, { passive: true });
@@ -725,9 +758,20 @@ export default function HomePanel({ open, onClose }) {
     };
   }, []);
 
-  // close collections flyout when panel closes
   useEffect(() => {
-    if (!open) setCollectionsOpen(false);
+    if (!open) {
+      setCollectionsOpen(false);
+      setCollectionsReady(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      if (openIntentRef.current) window.clearTimeout(openIntentRef.current);
+      if (closeIntentRef.current) window.clearTimeout(closeIntentRef.current);
+      openIntentRef.current = null;
+      closeIntentRef.current = null;
+    }
   }, [open]);
 
   const isAuthed = status === "authenticated" && !!session?.user;
@@ -738,7 +782,7 @@ export default function HomePanel({ open, onClose }) {
     const customerDashboard = "/customer/dashboard";
     const customerLogin = `/login?redirect=${encodeURIComponent(customerDashboard)}`;
     const customerForgot = "/forgot-password";
-    const allProducts = "/product"; // kept for compatibility with existing prefetch + fallback
+    const allProducts = "/product";
     const cart = "/cart";
     const adminLogin = "/admin/login";
     return { customerDashboard, customerLogin, customerForgot, allProducts, cart, adminLogin };
@@ -746,6 +790,7 @@ export default function HomePanel({ open, onClose }) {
 
   const handleNavigate = (path) => {
     setCollectionsOpen(false);
+    setCollectionsReady(false);
     onClose?.();
     setTimeout(() => router.push(path), 0);
   };
@@ -763,7 +808,6 @@ export default function HomePanel({ open, onClose }) {
     } catch {}
   }, [router, routes]);
 
-  // Scroll lock while open (hard viewport safety)
   useEffect(() => {
     if (!open) return;
     const prevHtml = document.documentElement.style.overflow;
@@ -781,13 +825,13 @@ export default function HomePanel({ open, onClose }) {
     };
   }, [open]);
 
-  // Close on Escape (flyout first, then panel)
   useEffect(() => {
     if (!open) return;
     const onEsc = (e) => {
       if (e.key !== "Escape") return;
       if (collectionsOpen) {
         setCollectionsOpen(false);
+        setCollectionsReady(false);
         return;
       }
       onClose?.();
@@ -796,7 +840,6 @@ export default function HomePanel({ open, onClose }) {
     return () => document.removeEventListener("keydown", onEsc, true);
   }, [open, onClose, collectionsOpen]);
 
-  // Close on outside click (include flyout as "inside" so clicking flyout does NOT close panel)
   useEffect(() => {
     if (!open) return;
 
@@ -825,31 +868,26 @@ export default function HomePanel({ open, onClose }) {
       swallowNextOutsideClickRef.current = true;
       swallow(e);
       setCollectionsOpen(false);
+      setCollectionsReady(false);
       onClose?.();
     };
 
     const onClickCapture = (e) => {
       if (!swallowNextOutsideClickRef.current) return;
-
       const t = e?.target;
       if (t && isOutside(t)) swallow(e);
       swallowNextOutsideClickRef.current = false;
     };
 
     document.addEventListener("pointerdown", onDownCapture, true);
-    document.addEventListener("mousedown", onDownCapture, true);
-    document.addEventListener("touchstart", onDownCapture, true);
     document.addEventListener("click", onClickCapture, true);
 
     return () => {
       document.removeEventListener("pointerdown", onDownCapture, true);
-      document.removeEventListener("mousedown", onDownCapture, true);
-      document.removeEventListener("touchstart", onDownCapture, true);
       document.removeEventListener("click", onClickCapture, true);
     };
   }, [open, onClose]);
 
-  // Swipe to close (right -> left)
   useEffect(() => {
     if (!open) return;
 
@@ -891,6 +929,7 @@ export default function HomePanel({ open, onClose }) {
       if (dx < -70 || vx < -0.55) {
         tracking = false;
         setCollectionsOpen(false);
+        setCollectionsReady(false);
         onClose?.();
       }
     };
@@ -912,7 +951,6 @@ export default function HomePanel({ open, onClose }) {
     };
   }, [open, onClose]);
 
-  // Focus panel when opened
   useEffect(() => {
     if (!open) return;
     const id = window.setTimeout(() => {
@@ -923,7 +961,6 @@ export default function HomePanel({ open, onClose }) {
     return () => window.clearTimeout(id);
   }, [open]);
 
-  // Load highlights once per open session
   useEffect(() => {
     if (!open) return;
 
@@ -978,7 +1015,10 @@ export default function HomePanel({ open, onClose }) {
         setLoadedOnce(true);
         setHoverIndex(0);
 
-        if ((built.trendingProducts?.length || 0) === 0 && (built.bestSellerProducts?.length || 0) === 0) {
+        if (
+          (built.trendingProducts?.length || 0) === 0 &&
+          (built.bestSellerProducts?.length || 0) === 0
+        ) {
           setHighlightsError("Live highlights are temporarily unavailable.");
         }
       } catch {
@@ -1025,59 +1065,144 @@ export default function HomePanel({ open, onClose }) {
     return { top, bottom, maxH, panelW, showPreview };
   }, [navH, bottomH, isMobile, isCompactHeight, vw]);
 
-  // ✅ Collections flyout geometry (anchored to the Collections button; no backdrop)
+  const computeCollectionsGeom = useCallback(() => {
+    if (typeof window === "undefined") return null;
+    const btn = collectionsBtnRef.current;
+    if (!btn) return null;
+
+    const rect = btn.getBoundingClientRect();
+    const vwNow = window.innerWidth || 0;
+    const vhNow = window.innerHeight || 0;
+
+    const safe = 10;
+    const gap = 14;
+
+    const drawerRect = panelRef.current?.getBoundingClientRect?.() || null;
+
+    if (!isMobile && drawerRect) {
+      const top = Math.round(drawerRect.top);
+      const height = Math.max(320, Math.round(drawerRect.height));
+
+      const preferred = clampInt(Math.round(vwNow * 0.46), 560, 900);
+
+      const leftSpace = Math.max(0, Math.round(drawerRect.left - safe - gap));
+      const rightSpace = Math.max(0, Math.round(vwNow - safe - gap - drawerRect.right));
+
+      let side = "left";
+      let width = Math.min(preferred, leftSpace);
+      let left = Math.round(drawerRect.left - width - gap);
+
+      if (width < 440 && rightSpace >= 440) {
+        side = "right";
+        width = Math.min(preferred, rightSpace);
+        left = Math.round(drawerRect.right + gap);
+      }
+
+      width = clampInt(width || preferred, 420, Math.max(420, vwNow - safe * 2));
+      left = clampInt(left || safe, safe, Math.max(safe, vwNow - width - safe));
+
+      return {
+        top,
+        left,
+        width,
+        height,
+        maxHeight: height,
+        side,
+      };
+    }
+
+    const topLimit = Math.max(safe + 2, navH + 10);
+
+    // ✅ Increased bottom clearance so mobile expanded lists are less likely to hide under bottom bar.
+    const bottomLimit = Math.max(topLimit + 260, vhNow - (bottomH + 24));
+
+    const width = Math.min(vwNow - safe * 2, 720);
+    let side = "left";
+    let left = Math.max(safe, Math.round((vwNow - width) / 2));
+
+    const gapY = 10;
+    const spaceBelow = bottomLimit - (rect.bottom + gapY);
+    const spaceAbove = (rect.top - gapY) - topLimit;
+
+    const desiredMax = clampInt(Math.round((bottomLimit - topLimit) * 0.92), 360, 780);
+
+    let top;
+    if (spaceBelow >= 320 || spaceBelow >= spaceAbove) {
+      top = Math.round(rect.bottom + gapY);
+      top = clampInt(top, topLimit, bottomLimit - 260);
+    } else {
+      top = Math.round(rect.top - gapY - Math.min(desiredMax, Math.max(320, spaceAbove)));
+      top = clampInt(top, topLimit, bottomLimit - 260);
+    }
+
+    const maxHeight = clampInt(bottomLimit - top, 320, desiredMax);
+
+    return { top, left, width, maxHeight, height: null, side };
+  }, [isMobile, navH, bottomH]);
+
+  const openCollections = useCallback(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("tdls:homepanel:closeFlyouts", { detail: { except: "collections" } })
+      );
+    } catch {}
+
+    const g = computeCollectionsGeom();
+    if (g) setCollectionsGeom(g);
+    setCollectionsReady(true);
+    setCollectionsOpen(true);
+  }, [computeCollectionsGeom]);
+
+  const closeCollections = useCallback(() => {
+    setCollectionsOpen(false);
+    setCollectionsReady(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || !collectionsOpen) return;
+    const g = computeCollectionsGeom();
+    if (g) setCollectionsGeom(g);
+  }, [open, collectionsOpen, computeCollectionsGeom]);
+
   useEffect(() => {
-    if (!open) return;
-    if (!collectionsOpen) return;
-    if (typeof window === "undefined") return;
+    if (!open || !collectionsOpen) return;
 
-    const compute = () => {
-      const btn = collectionsBtnRef.current;
-      if (!btn) return;
-
-      const rect = btn.getBoundingClientRect();
-      const safe = 10;
-
-      const viewportPx = (window.innerHeight || 0);
-      const vwNow = window.innerWidth || 0;
-
-      const maxW = Math.min(600, Math.max(340, vwNow - safe * 2));
-      const width = isMobile ? Math.min(vwNow - safe * 2, 600) : Math.min(560, maxW);
-
-      const maxH = Math.max(320, Math.min(640, Math.round(viewportPx * 0.66)));
-      const height = isMobile ? Math.max(320, Math.min(Math.round(viewportPx * 0.62), 620)) : maxH;
-
-      // Prefer open to LEFT of the drawer (premium flyout), else open to the inside-left of button
-      let left = Math.round(rect.left - width - 12);
-      if (left < safe) left = Math.round(Math.max(safe, rect.right - width)); // fallback
-      left = Math.min(left, vwNow - width - safe);
-      left = Math.max(safe, left);
-
-      // Align top with button; clamp to viewport
-      let top = Math.round(rect.top - 6);
-      const minTop = safe + 4;
-      const maxTop = Math.max(minTop, viewportPx - height - safe - 4);
-      top = Math.min(Math.max(top, minTop), maxTop);
-
-      setCollectionsGeom({ top, left, width, height });
+    let raf = 0;
+    const tick = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        const g = computeCollectionsGeom();
+        if (g) setCollectionsGeom(g);
+      });
     };
 
-    compute();
+    const body = bodyRef.current;
+    body?.addEventListener("scroll", tick, { passive: true });
 
-    window.addEventListener("resize", compute, { passive: true });
-    window.addEventListener("orientationchange", compute, { passive: true });
-    window.addEventListener("scroll", compute, { passive: true, capture: true });
+    window.addEventListener("resize", tick, { passive: true });
+    window.addEventListener("orientationchange", tick, { passive: true });
+
+    const vv = window.visualViewport;
+    if (vv?.addEventListener) {
+      vv.addEventListener("resize", tick, { passive: true });
+      vv.addEventListener("scroll", tick, { passiveive: true });
+    }
 
     return () => {
-      window.removeEventListener("resize", compute);
-      window.removeEventListener("orientationchange", compute);
-      window.removeEventListener("scroll", compute, true);
+      try {
+        if (raf) window.cancelAnimationFrame(raf);
+      } catch {}
+      body?.removeEventListener("scroll", tick);
+      window.removeEventListener("resize", tick);
+      window.removeEventListener("orientationchange", tick);
+      if (vv?.removeEventListener) {
+        vv.removeEventListener("resize", tick);
+        vv.removeEventListener("scroll", tick);
+      }
     };
-  }, [open, collectionsOpen, isMobile]);
+  }, [open, collectionsOpen, computeCollectionsGeom]);
 
-  const closeCollections = () => setCollectionsOpen(false);
-
-  // Desktop hover behavior (delayed open/close; prevents hypersensitive jitter)
   const scheduleOpenCollections = () => {
     if (isMobile) return;
     if (closeIntentRef.current) {
@@ -1085,22 +1210,34 @@ export default function HomePanel({ open, onClose }) {
       closeIntentRef.current = null;
     }
     if (collectionsOpen) return;
+
+    if (openIntentRef.current) window.clearTimeout(openIntentRef.current);
     openIntentRef.current = window.setTimeout(() => {
-      setCollectionsOpen(true);
+      openCollections();
       openIntentRef.current = null;
     }, 120);
   };
 
-  const scheduleCloseCollections = () => {
+  // ✅ Safer close: do not close if moving into flyout/trigger; slightly longer delay.
+  const scheduleCloseCollections = (e) => {
     if (isMobile) return;
+
+    const next = e?.relatedTarget;
+    const fly = collectionsFlyRef.current;
+    const trig = collectionsBtnRef.current;
+
+    if (next && (fly?.contains(next) || trig?.contains(next))) return;
+
     if (openIntentRef.current) {
       window.clearTimeout(openIntentRef.current);
       openIntentRef.current = null;
     }
+
+    if (closeIntentRef.current) window.clearTimeout(closeIntentRef.current);
     closeIntentRef.current = window.setTimeout(() => {
-      setCollectionsOpen(false);
+      closeCollections();
       closeIntentRef.current = null;
-    }, 160);
+    }, 420);
   };
 
   const cancelCloseCollections = () => {
@@ -1111,16 +1248,42 @@ export default function HomePanel({ open, onClose }) {
   };
 
   const toggleCollectionsClick = () => {
-    // tap/click toggles; no accidental close on scroll
-    setCollectionsOpen((v) => !v);
+    if (collectionsOpen) closeCollections();
+    else openCollections();
   };
 
   const handleSignOut = async () => {
     try {
-      setCollectionsOpen(false);
+      closeCollections();
       onClose?.();
       await signOut({ redirect: true, callbackUrl: "/" });
     } catch {}
+  };
+
+  const onFlyPointerDownCapture = (e) => {
+    const g = flyGestureRef.current;
+    g.active = true;
+    g.moved = false;
+    g.sx = e.clientX;
+    g.sy = e.clientY;
+  };
+  const onFlyPointerMoveCapture = (e) => {
+    const g = flyGestureRef.current;
+    if (!g.active) return;
+    if (Math.abs(e.clientX - g.sx) > 8 || Math.abs(e.clientY - g.sy) > 8) g.moved = true;
+  };
+  const onFlyPointerUpCapture = () => {
+    const g = flyGestureRef.current;
+    g.active = false;
+    window.setTimeout(() => {
+      g.moved = false;
+    }, 0);
+  };
+  const onFlyClickCapture = (e) => {
+    if (flyGestureRef.current.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
   };
 
   if (!open) return null;
@@ -1289,7 +1452,6 @@ export default function HomePanel({ open, onClose }) {
           background: linear-gradient(180deg, #ffffff 0%, #fbfbff 100%);
         }
 
-        /* ✅ Collections flyout (anchored popover, no backdrop/new window) */
         .tdls-collections-flyout{
           pointer-events: auto;
           position: fixed;
@@ -1300,6 +1462,17 @@ export default function HomePanel({ open, onClose }) {
           overflow: hidden;
           display: flex;
           flex-direction: column;
+          height: var(--fly-h, auto);
+          max-height: var(--fly-max-h, 640px);
+          z-index: 2147483647;
+          transform-origin: var(--fly-origin, left top);
+          animation: tdlsFlyIn .14s ease-out;
+          touch-action: pan-y;
+        }
+
+        @keyframes tdlsFlyIn{
+          from { opacity: .0; transform: translateY(4px) scale(.992); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
         }
 
         .tdls-collections-flyhead{
@@ -1310,6 +1483,7 @@ export default function HomePanel({ open, onClose }) {
           align-items:center;
           justify-content: space-between;
           gap: 10px;
+          flex: 0 0 auto;
         }
 
         .tdls-collections-flytitle{
@@ -1342,11 +1516,22 @@ export default function HomePanel({ open, onClose }) {
         .tdls-collections-flybody{
           padding: 12px;
           overflow: auto;
+          overflow-x: hidden;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
+          flex: 1 1 auto;
+          min-height: 0;
         }
         .tdls-collections-flybody::-webkit-scrollbar{ width: 0px; height: 0px; }
 
+        /* ✅ Desktop: extra bottom padding so last clickable items are fully visible */
+        @media (min-width: 769px){
+          .tdls-collections-flybody{
+            padding-bottom: 30px;
+          }
+        }
+
+        /* ✅ Mobile: ensure bottom bar + safe-area never hides last options */
         @media (max-width: 768px){
           .tdls-homepanel-drawer{
             left: max(10px, env(safe-area-inset-left));
@@ -1357,11 +1542,15 @@ export default function HomePanel({ open, onClose }) {
           .tdls-homepanel-body{
             padding: 12px 14px 14px;
           }
+          .tdls-collections-flybody{
+            padding-bottom: calc(26px + env(safe-area-inset-bottom));
+          }
         }
 
         @media (prefers-reduced-motion: reduce){
           .tdls-homepanel-close{ transition: none; }
           .tdls-collections-flyclose{ transition: none; }
+          .tdls-collections-flyout{ animation: none; }
         }
       `}</style>
 
@@ -1541,7 +1730,7 @@ export default function HomePanel({ open, onClose }) {
               className="tdls-homepanel-close"
               aria-label="Close home panel"
               onClick={() => {
-                setCollectionsOpen(false);
+                closeCollections();
                 onClose?.();
               }}
             >
@@ -1551,7 +1740,7 @@ export default function HomePanel({ open, onClose }) {
             </button>
           </div>
 
-          <div className="tdls-homepanel-body">
+          <div ref={bodyRef} className="tdls-homepanel-body">
             <div className="tdls-homepanel-section">
               <div className="tdls-homepanel-section-title">Quick actions</div>
               <div className="tdls-homepanel-grid">
@@ -1573,7 +1762,6 @@ export default function HomePanel({ open, onClose }) {
                   />
                 )}
 
-                {/* ✅ Collections: hover-to-open flyout (desktop), tap-to-toggle (mobile) */}
                 <PillButton
                   title="Collections"
                   subtitle={collectionsOpen ? "Browse categories (open)" : "Browse categories"}
@@ -1821,8 +2009,7 @@ export default function HomePanel({ open, onClose }) {
           </div>
         </aside>
 
-        {/* ✅ Anchored Collections Flyout (hover/tap) */}
-        {collectionsOpen ? (
+        {collectionsOpen && collectionsReady ? (
           <div
             ref={collectionsFlyRef}
             id="tdls-collections-flyout"
@@ -1833,14 +2020,16 @@ export default function HomePanel({ open, onClose }) {
               top: collectionsGeom.top,
               left: collectionsGeom.left,
               width: collectionsGeom.width,
-              height: collectionsGeom.height,
+              ["--fly-h"]: collectionsGeom.height ? `${collectionsGeom.height}px` : undefined,
+              ["--fly-max-h"]: `${collectionsGeom.maxHeight}px`,
+              ["--fly-origin"]: collectionsGeom.side === "right" ? "left top" : "right top",
             }}
-            onMouseEnter={() => {
-              cancelCloseCollections();
-            }}
-            onMouseLeave={() => {
-              scheduleCloseCollections();
-            }}
+            onMouseEnter={() => cancelCloseCollections()}
+            onMouseLeave={(e) => scheduleCloseCollections(e)}
+            onPointerDownCapture={onFlyPointerDownCapture}
+            onPointerMoveCapture={onFlyPointerMoveCapture}
+            onPointerUpCapture={onFlyPointerUpCapture}
+            onClickCapture={onFlyClickCapture}
           >
             <div className="tdls-collections-flyhead">
               <div className="tdls-collections-flytitle">Collections</div>
@@ -1860,11 +2049,17 @@ export default function HomePanel({ open, onClose }) {
             <div className="tdls-collections-flybody">
               <HomePanelAllProducts
                 onAfterNavigate={() => {
-                  // close flyout + panel after any link click (no interference with Link navigation)
-                  setCollectionsOpen(false);
+                  closeCollections();
                   onClose?.();
                 }}
+                /* ✅ safe hints for selection/nav behavior inside the flyout */
+                isMobile={isMobile}
+                interactionMode={isMobile ? "tap" : "hover"}
+                onRequestNavigate={handleNavigate}
               />
+
+              {/* ✅ Bottom spacer: ensures the last clickable options are visible comfortably */}
+              <div aria-hidden="true" style={{ height: isMobile ? 18 : 14 }} />
             </div>
           </div>
         ) : null}
