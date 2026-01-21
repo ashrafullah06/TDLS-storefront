@@ -1,4 +1,15 @@
 // FILE: app/api/admin/auth/request-otp/route.js
+// PURPOSE (Admin OTP):
+// - Responds after the provider call is CONFIRMED (accepted) OR the provider-ack hard timeout elapses.
+// - If provider send FAILS (explicit false / error) -> OTP is immediately consumed/expired (never remains active).
+// - If provider ack TIMES OUT -> treat as "PENDING" (unknown outcome): do NOT consume OTP; return ok:true.
+// - If an active OTP exists, we return it and do NOT re-send (single-OTP rule, cross-channel).
+// - Concurrency-safe per user+purpose using PG advisory lock (try-lock + short poll; avoids request pile-ups).
+//
+// IMPORTANT (production reliability):
+// - No fire-and-forget sending after the HTTP response. Background tasks are not reliable on serverless.
+//   This route sends synchronously with a bounded ack timeout (same contract as customer OTP).
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -40,10 +51,13 @@ function requireEnv(name) {
   return v;
 }
 
-function jsonNoStore(body, status = 200) {
+function jsonNoStore(body, status = 200, extraHeaders = undefined) {
   return NextResponse.json(body ?? null, {
     status,
-    headers: { "Cache-Control": "no-store, max-age=0" },
+    headers: {
+      "Cache-Control": "no-store, max-age=0",
+      ...(extraHeaders || {}),
+    },
   });
 }
 
@@ -55,28 +69,77 @@ function getClientIp(req) {
   return "0.0.0.0";
 }
 
+function getUserAgent(req) {
+  return req.headers.get("user-agent") || "";
+}
+
 function isEmail(value) {
   const s = String(value || "").trim();
   return !!s && /\S+@\S+\.\S+/.test(s);
 }
 
+/**
+ * Phone normalization:
+ * - Prefers Bangladesh mobile normalization (same as customer flow) to avoid provider rejects.
+ * - For non-BD numbers: accepts E.164-like digits length 8–15 IF user includes country code (+CC...).
+ * Returns digits-only (no "+") or null.
+ */
 function normalizePhone(raw) {
   if (!raw) return null;
 
   let s = String(raw).trim();
+  if (!s) return null;
+
+  // keep digits and "+"
   s = s.replace(/[^\d+]/g, "");
 
-  if (/^0\d{10}$/.test(s)) {
-    s = "880" + s.slice(1);
-  } else if (/^\+880\d{10}$/.test(s)) {
-    s = s.replace(/^\+/, "");
-  } else if (/^880\d{10}$/.test(s)) {
-    // ok
+  // 00-prefixed international -> +
+  if (s.startsWith("00")) s = "+" + s.slice(2);
+
+  // "+0..." -> treat as local "0..."
+  if (s.startsWith("+0")) s = s.slice(1);
+
+  // strip "+"
+  let digits = s.startsWith("+") ? s.slice(1) : s;
+
+  // --- Bangladesh normalization (preferred) ---
+  // common legacy mistake: 8800 1XXXXXXXXX -> 8801XXXXXXXXX
+  const m8800 = digits.match(/^8800(1\d{9})$/);
+  if (m8800) digits = "880" + m8800[1];
+
+  // 08801XXXXXXXXX -> 8801XXXXXXXXX
+  if (/^0880\d{10}$/.test(digits)) digits = "880" + digits.slice(4);
+
+  // 008801XXXXXXXXX -> 8801XXXXXXXXX (some UIs keep leading 00 in digits-only)
+  if (/^00880\d{10}$/.test(digits)) digits = "880" + digits.slice(5);
+
+  // 01XXXXXXXXX -> 8801XXXXXXXXX
+  if (/^0\d{10}$/.test(digits)) digits = "880" + digits.slice(1);
+
+  // 1XXXXXXXXX (10 digits) -> 8801XXXXXXXXX
+  if (/^1\d{9}$/.test(digits)) digits = "880" + digits;
+
+  // If it looks like BD mobile, enforce strict BD pattern.
+  if (digits.startsWith("8801") || digits.startsWith("01") || digits.startsWith("1")) {
+    if (!/^8801\d{9}$/.test(digits)) return null;
+
+    // operator/prefix sanity (013–019; 011 legacy)
+    const prefix = digits.slice(3, 5);
+    const allowed = new Set(["13", "14", "15", "16", "17", "18", "19", "11"]);
+    if (!allowed.has(prefix)) return null;
+
+    return digits;
   }
 
-  const digits = s.replace(/\+/g, "");
-  if (digits.length < 8 || digits.length > 15) return null;
-  return digits;
+  // --- Fallback: accept non-BD E.164 digits (must include country code) ---
+  // If the user provided "+CC..." we already stripped '+' above.
+  // Guard to prevent sending local-only numbers without country code.
+  if (s.startsWith("+")) {
+    const len = digits.length;
+    if (len >= 8 && len <= 15) return digits;
+  }
+
+  return null;
 }
 
 function detectIdentifier(raw) {
@@ -142,12 +205,42 @@ function buildCodeHash({ userId, identifier, purpose, code, secret }) {
 }
 
 function ttlRemainingSeconds(expiresAt, now = new Date()) {
-  const ms = expiresAt.getTime() - now.getTime();
-  return Math.max(0, Math.ceil(ms / 1000));
+  try {
+    const ms = new Date(expiresAt).getTime() - new Date(now).getTime();
+    return Math.max(0, Math.ceil(ms / 1000));
+  } catch {
+    return 0;
+  }
 }
 
-async function advisoryLock(tx, key) {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+function clampInt(n, lo, hi) {
+  const x = Number.parseInt(String(n), 10);
+  if (!Number.isFinite(x)) return lo;
+  return Math.max(lo, Math.min(hi, x));
+}
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label}_TIMEOUT_${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+function isTimeoutErrorMessage(msg) {
+  const s = String(msg || "");
+  return /_TIMEOUT_\d+ms$/.test(s);
+}
+
+async function advisoryTryLock(tx, key) {
+  // Non-blocking advisory lock (same pattern as customer OTP).
+  const rows = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${key})) AS locked`;
+  const locked = Array.isArray(rows) ? rows?.[0]?.locked : rows?.locked;
+  return !!locked;
 }
 
 async function auditOtpEvent(event) {
@@ -160,58 +253,19 @@ async function auditOtpEvent(event) {
   } catch {
     // swallow, fallback to console
   }
-  console.info("[otp-audit]", event);
+  try {
+    console.info("[otp-audit]", { ...event, ts: new Date().toISOString() });
+  } catch {}
 }
 
-/**
- * Guard any provider call so the request cannot hang too long.
- */
-async function withTimeout(promise, ms, label) {
-  const t = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(`${label}_TIMEOUT_${ms}ms`)), ms)
-  );
-  return Promise.race([promise, t]);
-}
-
-function isTimeoutErrorMessage(msg) {
-  const s = String(msg || "");
-  return /_TIMEOUT_\d+ms$/.test(s);
-}
-
-/**
- * Provider send wrapper:
- * - SUCCESS if promise resolves (even if it resolves undefined)
- * - FAILURE only if it throws / times out / or returns explicit false
- * - retries without artificial delay (fast)
- */
-async function safeProviderSend({
-  label,
-  timeoutMs,
-  attempts = 2,
-  fn, // () => Promise<any>
-}) {
-  let lastErr = null;
-
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      const val = await withTimeout(Promise.resolve().then(fn), timeoutMs, label);
-
-      if (val === false) {
-        lastErr = new Error(`${label}_RETURNED_FALSE`);
-      } else {
-        return { ok: true, attempt: i };
-      }
-    } catch (e) {
-      lastErr = e;
-    }
-    // IMPORTANT: no backoff delay
+function auditOtpEventAsync(event) {
+  try {
+    setImmediate(() => {
+      auditOtpEvent(event).catch(() => {});
+    });
+  } catch {
+    // ignore
   }
-
-  return {
-    ok: false,
-    attempt: attempts,
-    error: lastErr ? String(lastErr?.message || lastErr) : `${label}_FAILED`,
-  };
 }
 
 /* ------------------- Upstash RL: cache imports + instances ------------------- */
@@ -315,8 +369,6 @@ function userAdminRoleNames(user) {
   for (const ur of roles) {
     const r = ur?.role || {};
     if (r?.name) names.push(r.name);
-    else if (r?.slug) names.push(r.slug);
-    else if (r?.key) names.push(r.key);
   }
 
   return names.map(normalizeRoleName).filter(Boolean);
@@ -430,20 +482,146 @@ async function verifyPasswordOrFail({
   return { ok: true };
 }
 
+/**
+ * Provider send contract (same semantics as customer):
+ * - ok:true  => accepted/confirmed (no throw, no timeout, not explicit false)
+ * - ok:false + reason: SEND_TIMEOUT => provider ack did not arrive (unknown outcome)
+ * - ok:false + reason: SEND_ERROR / SEND_FAILED => explicit failure (consume OTP)
+ */
+async function sendOtpAndConfirm({
+  otpId,
+  channel,
+  purpose,
+  brand,
+  code,
+  ttlSeconds,
+  email,
+  phoneDigits,
+  phoneE164,
+  ip,
+  ua,
+  sendTimeoutMs,
+  attempts = 1,
+}) {
+  const identifier = email || phoneDigits || phoneE164 || "";
+
+  let sawTimeout = false;
+  let lastNonTimeoutErr = null;
+
+  for (let i = 1; i <= Math.max(1, attempts); i++) {
+    try {
+      let res;
+
+      if (channel === "EMAIL") {
+        res = await withTimeout(
+          Promise.resolve().then(() =>
+            sendOtpEmail({
+              to: email,
+              code,
+              ttlSeconds,
+              purpose,
+              brand,
+              meta: { otpId, purpose, scope: "admin" },
+            })
+          ),
+          sendTimeoutMs,
+          "EMAIL_SEND"
+        );
+      } else if (channel === "SMS") {
+        res = await withTimeout(
+          Promise.resolve().then(() =>
+            sendOtpSms({ to: phoneDigits, code, ttlSeconds, purpose, brand })
+          ),
+          sendTimeoutMs,
+          "SMS_SEND"
+        );
+      } else if (channel === "WHATSAPP") {
+        res = await withTimeout(
+          Promise.resolve().then(() =>
+            sendOtpWhatsApp({ to: phoneE164, code, ttlSeconds, purpose, brand })
+          ),
+          sendTimeoutMs,
+          "WHATSAPP_SEND"
+        );
+      } else {
+        return { ok: false, reason: "CHANNEL_UNSUPPORTED" };
+      }
+
+      // accepted if not explicit false
+      const ok = res !== false;
+
+      auditOtpEventAsync({
+        scope: "admin",
+        event: ok ? "sent" : "send_failed",
+        purpose,
+        identifier,
+        channel,
+        ip,
+        ua,
+        otpId,
+        meta: ok ? { attempt: i } : { attempt: i, returnedFalse: true },
+      });
+
+      if (ok) return { ok: true, reason: null, attempt: i };
+      lastNonTimeoutErr = new Error("RETURNED_FALSE");
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (isTimeoutErrorMessage(msg)) {
+        sawTimeout = true;
+        auditOtpEventAsync({
+          scope: "admin",
+          event: "send_timeout",
+          purpose,
+          identifier,
+          channel,
+          ip,
+          ua,
+          otpId,
+          meta: { attempt: i, message: msg.slice(0, 220) },
+        });
+        // no backoff; try next attempt if available
+        continue;
+      }
+
+      lastNonTimeoutErr = e;
+      auditOtpEventAsync({
+        scope: "admin",
+        event: "send_error",
+        purpose,
+        identifier,
+        channel,
+        ip,
+        ua,
+        otpId,
+        meta: { attempt: i, message: msg.slice(0, 220) },
+      });
+      // try next attempt (fast)
+    }
+  }
+
+  if (sawTimeout && !lastNonTimeoutErr) return { ok: false, reason: "SEND_TIMEOUT" };
+  if (sawTimeout) return { ok: false, reason: "SEND_TIMEOUT" }; // timeout dominates (unknown outcome)
+  return { ok: false, reason: lastNonTimeoutErr ? "SEND_ERROR" : "SEND_FAILED" };
+}
+
+async function consumeOtpNow(otpId) {
+  const now = new Date();
+  try {
+    await prisma.otpCode.update({
+      where: { id: otpId },
+      data: { consumedAt: now, expiresAt: now },
+    });
+  } catch {}
+}
+
 /* ------------------------------ route ------------------------------ */
 export async function POST(req) {
   const ip = getClientIp(req);
-  const ua = req.headers.get("user-agent") || "";
+  const ua = getUserAgent(req);
 
   const t0 = Date.now();
   const timingsMs = {};
   const mark = (k) => (timingsMs[k] = Date.now() - t0);
-
-  // ✅ DEFAULT ASYNC for admin OTP (instant response). Opt-out only if explicitly false.
-  const ASYNC_SEND_ENV = String(process.env.ADMIN_OTP_ASYNC_SEND || "").toLowerCase().trim();
-  const ASYNC_SEND = ASYNC_SEND_ENV
-    ? !(ASYNC_SEND_ENV === "0" || ASYNC_SEND_ENV === "false" || ASYNC_SEND_ENV === "no")
-    : true;
 
   try {
     const body = await req.json().catch(() => ({}));
@@ -476,9 +654,26 @@ export async function POST(req) {
 
     const TTL_MIN = 60;
     const TTL_MAX = 210; // 3.5 minutes
-    const ttl = Math.min(TTL_MAX, Math.max(TTL_MIN, ttlFromEnv));
+    const ttlSeconds = Math.min(TTL_MAX, Math.max(TTL_MIN, ttlFromEnv));
+
+    // Provider acknowledgement hard cap:
+    // - Default: 6500ms (admin email can include provider failover)
+    // - Min: 800ms
+    // - Max: 12000ms
+    const SEND_TIMEOUT_MS = clampInt(
+      process.env.ADMIN_OTP_SEND_TIMEOUT_MS || "6500",
+      800,
+      12000
+    );
+
+    const SEND_ATTEMPTS = clampInt(
+      process.env.ADMIN_OTP_SEND_ATTEMPTS || "2",
+      1,
+      3
+    );
 
     // schema-safe role select (no slug/key)
+    // NOTE: phone lookup uses canonical digits-only; require user input to include country code or BD patterns.
     const user =
       parsed.type === "email"
         ? await prisma.user.findFirst({
@@ -517,8 +712,9 @@ export async function POST(req) {
       resolvedChannel = upper === "WHATSAPP" ? "WHATSAPP" : "SMS";
     }
 
+    const idKey = parsed.type === "email" ? parsed.email : parsed.phone;
+
     if (!isAdminEligibleUser(user)) {
-      const idKey = parsed.type === "email" ? parsed.email : parsed.phone;
       await auditOtpEvent({
         scope: "admin",
         event: "not_admin",
@@ -541,7 +737,7 @@ export async function POST(req) {
         ip,
         ua,
         purpose,
-        identifierKey: parsed.type === "email" ? parsed.email : parsed.phone,
+        identifierKey: idKey,
       });
       mark("passwordVerify");
       if (!v.ok) {
@@ -549,11 +745,9 @@ export async function POST(req) {
       }
     }
 
-    const idKey = parsed.type === "email" ? parsed.email : parsed.phone;
-
     const rl = await rateLimitOrPass({
       namespace: "otp:admin",
-      key: `${ip}:${idKey}`,
+      key: `${ip}:${idKey}:${purpose}`,
       limit: Number.parseInt(process.env.ADMIN_OTP_RATELIMIT_PER_MIN || "8", 10),
       windowSeconds: 60,
     });
@@ -571,7 +765,8 @@ export async function POST(req) {
       });
       return jsonNoStore(
         { error: "RATE_LIMITED", retryAfterSeconds: rl.retryAfterSeconds, timingsMs },
-        429
+        429,
+        { "retry-after": String(rl.retryAfterSeconds) }
       );
     }
 
@@ -579,9 +774,40 @@ export async function POST(req) {
 
     // SINGLE-OTP RULE:
     // If an active OTP exists, do NOT send a new one. Return remaining seconds.
+    // (Cross-channel: prevents confusion where EMAIL active blocks SMS and vice versa.)
     const result = await prisma.$transaction(async (tx) => {
       const lockKey = `admin-otp:${user.id}:${purpose}`;
-      await advisoryLock(tx, lockKey);
+      const locked = await advisoryTryLock(tx, lockKey);
+
+      if (!locked) {
+        // Another request is currently creating/refreshing OTP.
+        // Poll briefly for an active OTP row instead of waiting on the lock.
+        for (let i = 0; i < 8; i++) {
+          const active2 = await tx.otpCode.findFirst({
+            where: {
+              userId: user.id,
+              purpose,
+              consumedAt: null,
+              expiresAt: { gt: now },
+            },
+            orderBy: { createdAt: "desc" },
+            select: { id: true, expiresAt: true, channel: true },
+          });
+          if (active2?.id) {
+            const remaining = ttlRemainingSeconds(active2.expiresAt, now);
+            return {
+              kind: "alreadyActive",
+              ttlSeconds: remaining,
+              resendAfterSeconds: remaining,
+              channel: active2.channel || resolvedChannel,
+              existingId: active2.id,
+              locked: false,
+            };
+          }
+          await sleepMs(15);
+        }
+        return { kind: "busy" };
+      }
 
       const existing = await tx.otpCode.findFirst({
         where: {
@@ -602,8 +828,15 @@ export async function POST(req) {
           resendAfterSeconds: remaining,
           channel: existing.channel || resolvedChannel,
           existingId: existing.id,
+          locked: true,
         };
       }
+
+      // Ensure no other active OTPs remain for this user+purpose (defensive).
+      await tx.otpCode.updateMany({
+        where: { userId: user.id, purpose, consumedAt: null, expiresAt: { gt: now } },
+        data: { consumedAt: now, expiresAt: now },
+      });
 
       const code = String(crypto.randomInt(100000, 1000000));
       const canonicalIdentifier =
@@ -619,7 +852,7 @@ export async function POST(req) {
         secret: OTP_SECRET,
       });
 
-      const expiresAt = new Date(now.getTime() + ttl * 1000);
+      const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
 
       const created = await tx.otpCode.create({
         data: {
@@ -634,17 +867,18 @@ export async function POST(req) {
             alg: "HMAC-SHA256",
             base64: altBase64.slice(0, 16),
             rawsha: rawSha256Hex.slice(0, 16),
-            v: 3,
+            v: 7,
             scope: "admin",
+            mode: "sync_send_confirm",
           }),
         },
-        select: { id: true },
+        select: { id: true, expiresAt: true },
       });
 
       return {
         kind: "created",
-        ttlSeconds: ttl,
-        resendAfterSeconds: ttl,
+        ttlSeconds: ttlSeconds,
+        resendAfterSeconds: ttlSeconds,
         code,
         channel: resolvedChannel,
         createdId: created.id,
@@ -654,8 +888,22 @@ export async function POST(req) {
 
     mark("dbTransaction");
 
+    if (result.kind === "busy") {
+      await auditOtpEventAsync({
+        scope: "admin",
+        event: "busy",
+        purpose,
+        identifier: idKey,
+        channel: resolvedChannel,
+        ip,
+        ua,
+      });
+      mark("done");
+      return jsonNoStore({ error: "OTP_BUSY_RETRY", timingsMs }, 409);
+    }
+
     if (result.kind === "alreadyActive") {
-      await auditOtpEvent({
+      await auditOtpEventAsync({
         scope: "admin",
         event: "already_active",
         purpose,
@@ -682,7 +930,7 @@ export async function POST(req) {
       );
     }
 
-    await auditOtpEvent({
+    await auditOtpEventAsync({
       scope: "admin",
       event: "requested",
       purpose,
@@ -693,18 +941,89 @@ export async function POST(req) {
       otpId: result.createdId,
     });
 
-    const brand = process.env.BRAND_NAME || "TDLC";
+    const brand = process.env.BRAND_NAME || "TDLS";
 
-    async function invalidateCreatedOtp(reason) {
-      try {
-        await prisma.otpCode.update({
-          where: { id: result.createdId },
-          data: { consumedAt: now, expiresAt: now },
+    // Targets
+    const targetEmail = String(user.email || parsed.email || "").toLowerCase();
+    const phoneDigitsOut =
+      parsed.type === "phone"
+        ? normalizePhone(user.phone || parsed.phone || identifier) || parsed.phone
+        : null;
+    const phoneE164Out = phoneDigitsOut ? `+${phoneDigitsOut}` : null;
+
+    // Guard targets
+    if (result.channel === "EMAIL" && !targetEmail) {
+      await consumeOtpNow(result.createdId);
+      mark("done");
+      return jsonNoStore({ error: "EMAIL_TARGET_MISSING", timingsMs }, 400);
+    }
+    if (result.channel === "SMS" && !phoneDigitsOut) {
+      await consumeOtpNow(result.createdId);
+      mark("done");
+      return jsonNoStore({ error: "PHONE_TARGET_MISSING", timingsMs }, 400);
+    }
+    if (result.channel === "WHATSAPP" && !phoneE164Out) {
+      await consumeOtpNow(result.createdId);
+      mark("done");
+      return jsonNoStore({ error: "WHATSAPP_TARGET_MISSING", timingsMs }, 400);
+    }
+
+    // Send (sync + bounded ack timeout) — same rule-set as customer OTP.
+    const sendRes = await sendOtpAndConfirm({
+      otpId: result.createdId,
+      channel: result.channel,
+      purpose,
+      brand,
+      code: result.code,
+      ttlSeconds: result.ttlSeconds,
+      email: result.channel === "EMAIL" ? targetEmail : null,
+      phoneDigits: result.channel === "SMS" ? phoneDigitsOut : null,
+      phoneE164: result.channel === "WHATSAPP" ? phoneE164Out : null,
+      ip,
+      ua,
+      sendTimeoutMs: SEND_TIMEOUT_MS,
+      attempts: result.channel === "EMAIL" ? 1 : SEND_ATTEMPTS,
+    });
+    mark("sendProvider");
+
+    if (!sendRes.ok) {
+      if (sendRes.reason === "SEND_TIMEOUT") {
+        // Provider ack timed out => unknown outcome.
+        // Do NOT consume OTP; user may still receive it. Let TTL handle expiry.
+        await auditOtpEventAsync({
+          scope: "admin",
+          event: "send_pending",
+          purpose,
+          identifier: idKey,
+          channel: result.channel,
+          ip,
+          ua,
+          otpId: result.createdId,
+          reason: `PROVIDER_ACK_TIMEOUT_${SEND_TIMEOUT_MS}ms`,
         });
-      } catch (e) {
-        console.error("[admin/request-otp] invalidate failed", reason, e);
+
+        mark("done");
+        return jsonNoStore(
+          {
+            ok: true,
+            sent: true,
+            delivery: "pending",
+            pending: true,
+            providerAckTimeoutMs: SEND_TIMEOUT_MS,
+            ttlSeconds: ttlRemainingSeconds(result.expiresAt, new Date()),
+            resendAfterSeconds: ttlRemainingSeconds(result.expiresAt, new Date()),
+            channel: result.channel,
+            purpose,
+            timingsMs,
+          },
+          200
+        );
       }
-      await auditOtpEvent({
+
+      // Explicit failure/error => consume immediately; never leave active OTP.
+      await consumeOtpNow(result.createdId);
+
+      await auditOtpEventAsync({
         scope: "admin",
         event: "send_failed",
         purpose,
@@ -713,237 +1032,14 @@ export async function POST(req) {
         ip,
         ua,
         otpId: result.createdId,
-        reason,
-      });
-    }
-
-    // ✅ For sync mode: email can take longer than 2000ms because SMTP/fallback happens under sendOtpEmail().
-    // Keep it bounded, but not so low that it creates false failures.
-    const SEND_TIMEOUT_MS = Number.parseInt(
-      process.env.ADMIN_OTP_SEND_TIMEOUT_MS || "12000",
-      10
-    );
-
-    // Keep attempts for SMS/WhatsApp. For email we let sendOtpEmail handle failover internally (single call).
-    const SEND_ATTEMPTS = Number.parseInt(
-      process.env.ADMIN_OTP_SEND_ATTEMPTS || "2",
-      10
-    );
-
-    const runSend = async () => {
-      if (result.channel === "EMAIL") {
-        const targetEmail = String(user.email || parsed.email || "").toLowerCase();
-        if (!targetEmail) {
-          await invalidateCreatedOtp("EMAIL_TARGET_MISSING");
-          return { ok: false, error: "EMAIL_TARGET_MISSING", channel: "EMAIL" };
-        }
-
-        // ✅ IMPORTANT:
-        // - Do NOT wrap sendOtpEmail in the previous 2000ms safeProviderSend.
-        // - sendOtpEmail already includes SMTP multi-provider + Resend failover.
-        // - We pass meta.otpId to reduce duplicates across retries/fallback.
-        try {
-          await sendOtpEmail({
-            to: targetEmail,
-            code: result.code,
-            ttlSeconds: result.ttlSeconds,
-            purpose,
-            brand,
-            meta: { otpId: result.createdId, purpose, scope: "admin" },
-          });
-
-          await auditOtpEvent({
-            scope: "admin",
-            event: "sent",
-            purpose,
-            identifier: targetEmail,
-            channel: "EMAIL",
-            ip,
-            ua,
-            otpId: result.createdId,
-          });
-
-          return { ok: true, channel: "EMAIL" };
-        } catch (e) {
-          const msg = String(e?.message || e);
-          console.error("[admin/request-otp] email send failed:", msg);
-
-          // ✅ TIMEOUT SAFETY:
-          // If a timeout happens at the HTTP/request layer, the email may still be delivered.
-          // Never invalidate the OTP on timeout — this is the key fix for "OTP arrived but EMAIL_SEND_FAILED".
-          if (isTimeoutErrorMessage(msg)) {
-            await auditOtpEvent({
-              scope: "admin",
-              event: "send_pending",
-              purpose,
-              identifier: targetEmail,
-              channel: "EMAIL",
-              ip,
-              ua,
-              otpId: result.createdId,
-              reason: `EMAIL_SEND_PENDING:${msg}`,
-            });
-            return { ok: true, channel: "EMAIL", pending: true };
-          }
-
-          await invalidateCreatedOtp(`EMAIL_SEND_FAILED:${msg}`);
-          return { ok: false, error: "EMAIL_SEND_FAILED", channel: "EMAIL" };
-        }
-      }
-
-      if (result.channel === "SMS") {
-        const phoneDigitsOut = parsed.phone || user.phone || null;
-        if (!phoneDigitsOut) {
-          await invalidateCreatedOtp("PHONE_TARGET_MISSING");
-          return { ok: false, error: "PHONE_TARGET_MISSING", channel: "SMS" };
-        }
-
-        const sent = await safeProviderSend({
-          label: "SMS_SEND",
-          timeoutMs: SEND_TIMEOUT_MS,
-          attempts: Math.max(1, SEND_ATTEMPTS),
-          fn: () =>
-            sendOtpSms({
-              to: phoneDigitsOut,
-              code: result.code,
-              ttlSeconds: result.ttlSeconds,
-              purpose,
-              brand,
-            }),
-        });
-
-        if (!sent.ok) {
-          console.error("[admin/request-otp] sms send failed:", sent.error);
-          await invalidateCreatedOtp(`SMS_SEND_FAILED:${sent.error}`);
-          return { ok: false, error: "SMS_SEND_FAILED", channel: "SMS" };
-        }
-
-        await auditOtpEvent({
-          scope: "admin",
-          event: "sent",
-          purpose,
-          identifier: phoneDigitsOut,
-          channel: "SMS",
-          ip,
-          ua,
-          otpId: result.createdId,
-        });
-
-        return { ok: true, channel: "SMS" };
-      }
-
-      if (result.channel === "WHATSAPP") {
-        const phoneDigitsOut = parsed.phone || user.phone || null;
-        const phoneE164Out = phoneDigitsOut ? `+${phoneDigitsOut}` : null;
-        if (!phoneE164Out) {
-          await invalidateCreatedOtp("WHATSAPP_TARGET_MISSING");
-          return {
-            ok: false,
-            error: "WHATSAPP_TARGET_MISSING",
-            channel: "WHATSAPP",
-          };
-        }
-
-        const sent = await safeProviderSend({
-          label: "WHATSAPP_SEND",
-          timeoutMs: SEND_TIMEOUT_MS,
-          attempts: Math.max(1, SEND_ATTEMPTS),
-          fn: () =>
-            sendOtpWhatsApp({
-              to: phoneE164Out,
-              code: result.code,
-              ttlSeconds: result.ttlSeconds,
-              purpose,
-              brand,
-            }),
-        });
-
-        if (!sent.ok) {
-          console.error("[admin/request-otp] whatsapp send failed:", sent.error);
-          await invalidateCreatedOtp(`WHATSAPP_SEND_FAILED:${sent.error}`);
-          return { ok: false, error: "WHATSAPP_SEND_FAILED", channel: "WHATSAPP" };
-        }
-
-        await auditOtpEvent({
-          scope: "admin",
-          event: "sent",
-          purpose,
-          identifier: phoneE164Out,
-          channel: "WHATSAPP",
-          ip,
-          ua,
-          otpId: result.createdId,
-        });
-
-        return { ok: true, channel: "WHATSAPP" };
-      }
-
-      await invalidateCreatedOtp("CHANNEL_UNSUPPORTED");
-      return { ok: false, error: "CHANNEL_UNSUPPORTED", channel: "UNKNOWN" };
-    };
-
-    if (ASYNC_SEND) {
-      const enqueue = (fn) => {
-        try {
-          if (typeof setImmediate === "function") setImmediate(fn);
-          else setTimeout(fn, 0);
-        } catch {
-          setTimeout(fn, 0);
-        }
-      };
-
-      await auditOtpEvent({
-        scope: "admin",
-        event: "send_queued",
-        purpose,
-        identifier: idKey,
-        channel: result.channel,
-        ip,
-        ua,
-        otpId: result.createdId,
+        reason: String(sendRes.reason || "SEND_FAILED"),
       });
 
-      mark("sendQueued");
       mark("done");
-
-      enqueue(() => {
-        void (async () => {
-          try {
-            await runSend();
-          } catch (e) {
-            const msg = String(e?.message || e);
-            console.error("[admin/request-otp] async send crash", msg);
-            // async crash should invalidate because nothing was sent by this code path
-            try {
-              await invalidateCreatedOtp("ASYNC_SEND_CRASH");
-            } catch {}
-          }
-        })();
-      });
-
-      // ✅ Always respond success instantly (admin UI should open OTP modal immediately)
       return jsonNoStore(
-        {
-          ok: true,
-          sent: true,
-          delivery: "async",
-          ttlSeconds: result.ttlSeconds,
-          resendAfterSeconds: result.resendAfterSeconds,
-          channel: result.channel,
-          purpose,
-          timingsMs,
-        },
-        200
+        { error: "OTP_DELIVERY_FAILED", reason: sendRes.reason, timingsMs },
+        502
       );
-    }
-
-    // Sync path (only if ADMIN_OTP_ASYNC_SEND explicitly disabled)
-    const sendRes = await withTimeout(runSend(), SEND_TIMEOUT_MS, "ADMIN_SEND");
-    mark("sendProvider");
-
-    if (!sendRes.ok) {
-      mark("done");
-      return jsonNoStore({ error: sendRes.error || "SEND_FAILED", timingsMs }, 502);
     }
 
     mark("done");
@@ -951,10 +1047,10 @@ export async function POST(req) {
       {
         ok: true,
         sent: true,
-        delivery: sendRes.pending ? "pending" : "sync",
-        ttlSeconds: result.ttlSeconds,
-        resendAfterSeconds: result.resendAfterSeconds,
-        channel: sendRes.channel,
+        delivery: "sent",
+        ttlSeconds: ttlRemainingSeconds(result.expiresAt, new Date()),
+        resendAfterSeconds: ttlRemainingSeconds(result.expiresAt, new Date()),
+        channel: result.channel,
         purpose,
         timingsMs,
       },
