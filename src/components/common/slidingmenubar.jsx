@@ -35,6 +35,9 @@ const Z_OVERLAY = 99998;
 const Z_PANEL = 99999;
 const Z_CLICK_SHIELD = 100000;
 
+const PANEL_ID = "tdls-slidingmenubar-panel";
+const LEGACY_PANEL_ID = "tdlc-slidingmenubar-panel";
+
 const TIERS = [
   { name: "Limited Edition", slug: "limited-edition" },
   { name: "Premium Collection", slug: "premium-collection" },
@@ -386,6 +389,7 @@ function Pill({ children, tone = "neutral", size = "md" }) {
 }
 
 function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
+  const fs = isMobile ? "clamp(10px, 2.7vw, 11px)" : 12;
   return (
     <div
       style={{
@@ -411,7 +415,7 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
             style={{
               flex: "0 0 auto",
               borderRadius: 999,
-              padding: isMobile ? "8px 10px" : "9px 12px",
+              padding: isMobile ? "7px 10px" : "9px 12px",
               border: active ? "1px solid rgba(12,35,64,0.55)" : "1px solid rgba(0,0,0,0.10)",
               background: active
                 ? "linear-gradient(135deg, #0c2340 10%, #163060 100%)"
@@ -423,7 +427,7 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
               boxShadow: active ? "0 14px 26px rgba(12,35,64,0.18)" : "0 10px 18px rgba(0,0,0,0.05)",
               cursor: "pointer",
               whiteSpace: "nowrap",
-              fontSize: isMobile ? 11 : 12,
+              fontSize: fs,
             }}
             aria-pressed={active}
           >
@@ -460,7 +464,15 @@ function Shell({ title, right, children }) {
           background: "linear-gradient(135deg, rgba(255,255,255,0.92) 55%, rgba(247,243,231,0.92) 100%)",
         }}
       >
-        <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
+        <div
+          style={{
+            fontWeight: 900,
+            letterSpacing: ".12em",
+            textTransform: "uppercase",
+            fontSize: 12,
+            color: "#0c2340",
+          }}
+        >
           {title}
         </div>
         {right || null}
@@ -488,6 +500,7 @@ function ScrollBody({ children, compact = false }) {
 }
 
 function Select({ value, onChange, options, placeholder, isMobile }) {
+  const fs = isMobile ? "clamp(9px, 2.6vw, 10px)" : 11;
   return (
     <select
       value={value}
@@ -502,7 +515,7 @@ function Select({ value, onChange, options, placeholder, isMobile }) {
         fontWeight: 900,
         letterSpacing: ".06em",
         textTransform: "uppercase",
-        fontSize: isMobile ? 10 : 11,
+        fontSize: fs,
         color: "#0c2340",
         outline: "none",
         maxWidth: isMobile ? "100%" : "min(220px, 100%)",
@@ -747,6 +760,10 @@ function CompactRowButton({
   onMouseLeave,
   onFocus,
 }) {
+  const titleFs = dense ? "clamp(9px, 2.6vw, 10px)" : 11;
+  const subFs = dense ? "clamp(8px, 2.4vw, 9px)" : 10;
+  const badgeFs = dense ? "clamp(8px, 2.4vw, 9px)" : 10;
+
   const baseStyle = {
     display: "flex",
     alignItems: "center",
@@ -784,7 +801,7 @@ function CompactRowButton({
               fontWeight: 900,
               letterSpacing: ".07em",
               textTransform: "uppercase",
-              fontSize: dense ? 10 : 11,
+              fontSize: titleFs,
               lineHeight: 1.2,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -798,7 +815,7 @@ function CompactRowButton({
             <div
               style={{
                 fontWeight: 800,
-                fontSize: dense ? 9 : 10,
+                fontSize: subFs,
                 color: "rgba(12,35,64,0.62)",
                 whiteSpace: "nowrap",
                 overflow: "hidden",
@@ -820,7 +837,7 @@ function CompactRowButton({
               border: "1px solid rgba(12,35,64,0.14)",
               background: "rgba(12,35,64,0.06)",
               fontWeight: 900,
-              fontSize: dense ? 9 : 10,
+              fontSize: badgeFs,
               letterSpacing: ".10em",
               textTransform: "uppercase",
             }}
@@ -848,7 +865,7 @@ function CompactRowButton({
             fontWeight: 900,
             letterSpacing: ".07em",
             textTransform: "uppercase",
-            fontSize: dense ? 10 : 11,
+            fontSize: titleFs,
             lineHeight: 1.2,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -862,7 +879,7 @@ function CompactRowButton({
           <div
             style={{
               fontWeight: 800,
-              fontSize: dense ? 9 : 10,
+              fontSize: subFs,
               color: "rgba(12,35,64,0.62)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -884,7 +901,7 @@ function CompactRowButton({
             border: "1px solid rgba(12,35,64,0.14)",
             background: "rgba(12,35,64,0.06)",
             fontWeight: 900,
-            fontSize: dense ? 9 : 10,
+            fontSize: badgeFs,
             letterSpacing: ".10em",
             textTransform: "uppercase",
           }}
@@ -897,6 +914,7 @@ function CompactRowButton({
 }
 
 function Segmented({ value, onChange, items }) {
+  const btnFs = "clamp(9px, 2.5vw, 10px)";
   return (
     <div
       style={{
@@ -918,14 +936,14 @@ function Segmented({ value, onChange, items }) {
             onClick={() => onChange(it.value)}
             style={{
               flex: 1,
-              height: 34,
+              height: 32,
               border: "none",
               background: active ? "linear-gradient(135deg, #0c2340 10%, #163060 100%)" : "transparent",
               color: active ? "#fffdf8" : "#0c2340",
               fontWeight: 900,
               letterSpacing: ".12em",
               textTransform: "uppercase",
-              fontSize: 10,
+              fontSize: btnFs,
               cursor: "pointer",
               whiteSpace: "nowrap",
             }}
@@ -937,6 +955,20 @@ function Segmented({ value, onChange, items }) {
       })}
     </div>
   );
+}
+
+function readCssVarPx(vars, fallbackPx) {
+  try {
+    const root = document.documentElement;
+    for (const v of vars) {
+      const raw = getComputedStyle(root).getPropertyValue(v);
+      const n = parseInt((raw || "").toString().replace("px", "").trim(), 10);
+      if (Number.isFinite(n) && n > 40 && n < 240) return n;
+    }
+  } catch {
+    // ignore
+  }
+  return fallbackPx;
 }
 
 export default function Slidingmenubar({ open, onClose }) {
@@ -1078,14 +1110,11 @@ export default function Slidingmenubar({ open, onClose }) {
 
   useEffect(() => {
     if (!open) return;
-    try {
-      const v = getComputedStyle(document.documentElement).getPropertyValue("--tdlc-bottom-floating-bar-height");
-      const n = parseInt((v || "").toString().replace("px", "").trim(), 10);
-      if (Number.isFinite(n) && n > 40 && n < 240) setBottomBarHeight(n);
-      else setBottomBarHeight(DEFAULT_BOTTOM_FLOATING_BAR_HEIGHT);
-    } catch {
-      setBottomBarHeight(DEFAULT_BOTTOM_FLOATING_BAR_HEIGHT);
-    }
+    const n = readCssVarPx(
+      ["--tdls-bottom-floating-bar-height", "--tdlc-bottom-floating-bar-height", "--bottom-floating-bar-height"],
+      DEFAULT_BOTTOM_FLOATING_BAR_HEIGHT
+    );
+    setBottomBarHeight(n);
   }, [open]);
 
   useEffect(() => {
@@ -1181,7 +1210,7 @@ export default function Slidingmenubar({ open, onClose }) {
 
   /**
    * ✅ Mobile hypersensitivity fix:
-   * - Close ONLY on true OUTSIDE "tap" (pointer up) that started outside the panel.
+   * - Close ONLY on true OUTSIDE "tap" (pointer up) that started outside AND ended outside.
    * - Ignore drags/swipes (movement threshold) so scrolling near edges won't close.
    * - Use composedPath so taps on panel edges/children never count as outside.
    */
@@ -1189,10 +1218,13 @@ export default function Slidingmenubar({ open, onClose }) {
     if (!open) return;
 
     let active = null;
-    const MOVE_PX = 10;
 
     const isInsidePanel = (evt) => {
-      const panelEl = panelRef.current || document.getElementById("tdlc-slidingmenubar-panel");
+      const panelEl =
+        panelRef.current ||
+        document.getElementById(PANEL_ID) ||
+        document.getElementById(LEGACY_PANEL_ID);
+
       if (!panelEl) return false;
       const t = evt?.target;
       if (panelEl === t) return true;
@@ -1204,25 +1236,37 @@ export default function Slidingmenubar({ open, onClose }) {
 
     const onPointerDownCapture = (e) => {
       if (!e?.isPrimary) return;
-      if (isInsidePanel(e)) return; // started inside -> never close
+
+      const startedInside = isInsidePanel(e);
       active = {
         id: e.pointerId,
         x: e.clientX,
         y: e.clientY,
         moved: false,
+        startedInside,
+        pointerType: e.pointerType || "mouse",
       };
     };
 
     const onPointerMoveCapture = (e) => {
       if (!active || e.pointerId !== active.id) return;
+
       const dx = (e.clientX ?? 0) - active.x;
       const dy = (e.clientY ?? 0) - active.y;
-      if (dx * dx + dy * dy >= MOVE_PX * MOVE_PX) active.moved = true;
+
+      const movePx = active.pointerType === "touch" ? 16 : 10;
+      if (dx * dx + dy * dy >= movePx * movePx) active.moved = true;
     };
 
     const onPointerUpCapture = (e) => {
       if (!active || e.pointerId !== active.id) return;
-      const shouldClose = !active.moved; // "tap" only
+
+      const endedInside = isInsidePanel(e);
+      const shouldClose =
+        !active.startedInside &&
+        !endedInside &&
+        !active.moved; // true outside tap only
+
       active = null;
       if (shouldClose) handleClose();
     };
@@ -1480,8 +1524,6 @@ export default function Slidingmenubar({ open, onClose }) {
     ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${panelTop + panelBottom}px)` }
     : null;
 
-  const dense = headerIsMobile;
-
   const goViewAllHref =
     flyAudienceSlug
       ? buildCollectionsHref({
@@ -1533,7 +1575,8 @@ export default function Slidingmenubar({ open, onClose }) {
       />
 
       <div
-        id="tdlc-slidingmenubar-panel"
+        id={PANEL_ID}
+        data-legacy-id={LEGACY_PANEL_ID}
         ref={panelRef}
         style={{
           position: "fixed",
@@ -1577,7 +1620,15 @@ export default function Slidingmenubar({ open, onClose }) {
           {headerIsMobile ? (
             /* ---------------- Mobile header: NO search bar; more space for products ---------------- */
             <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, minWidth: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  minWidth: 0,
+                }}
+              >
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <Pill tone="gold" size="sm">
@@ -1591,14 +1642,14 @@ export default function Slidingmenubar({ open, onClose }) {
                   </div>
                 </div>
 
-                {/* ✅ Mobile Close: reduced horizontal width (no full-width bar) */}
+                {/* ✅ Mobile Close: reduced sizing; auto-scales down */}
                 <button
                   type="button"
                   onClick={handleClose}
                   style={{
                     borderRadius: 999,
-                    height: 36,
-                    minWidth: 86,
+                    height: 34,
+                    minWidth: 82,
                     padding: "0 12px",
                     border: "1px solid rgba(0,0,0,0.10)",
                     background: "rgba(255,255,255,0.92)",
@@ -1609,8 +1660,8 @@ export default function Slidingmenubar({ open, onClose }) {
                     textTransform: "uppercase",
                     cursor: "pointer",
                     whiteSpace: "nowrap",
-                    fontSize: 10,
-                    lineHeight: "36px",
+                    fontSize: "clamp(9px, 2.6vw, 10px)",
+                    lineHeight: "34px",
                     flexShrink: 0,
                     alignSelf: "flex-start",
                   }}
@@ -1663,10 +1714,7 @@ export default function Slidingmenubar({ open, onClose }) {
                     <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile={headerIsMobile} />
                   </div>
 
-                  <div
-                    ref={searchWrapRef}
-                    style={{ position: "relative", flexShrink: 0, width: headerIsMobile ? "100%" : "auto" }}
-                  >
+                  <div ref={searchWrapRef} style={{ position: "relative", flexShrink: 0, width: headerIsMobile ? "100%" : "auto" }}>
                     <input
                       value={q}
                       onChange={(e) => {
@@ -2276,7 +2324,7 @@ export default function Slidingmenubar({ open, onClose }) {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            fontSize: 9,
+                            fontSize: "clamp(8px, 2.4vw, 9px)",
                             whiteSpace: "nowrap",
                           }}
                           aria-label="See all products in this audience"
@@ -2298,7 +2346,7 @@ export default function Slidingmenubar({ open, onClose }) {
                           fontWeight: 900,
                           letterSpacing: ".12em",
                           textTransform: "uppercase",
-                          fontSize: 9,
+                          fontSize: "clamp(8px, 2.4vw, 9px)",
                           color: "#0c2340",
                           cursor: "pointer",
                           whiteSpace: "nowrap",
@@ -2388,7 +2436,7 @@ export default function Slidingmenubar({ open, onClose }) {
                               display: "inline-flex",
                               alignItems: "center",
                               justifyContent: "center",
-                              fontSize: 9,
+                              fontSize: "clamp(8px, 2.4vw, 9px)",
                               whiteSpace: "nowrap",
                             }}
                             aria-label="See all products in this category"
@@ -2410,7 +2458,7 @@ export default function Slidingmenubar({ open, onClose }) {
                             fontWeight: 900,
                             letterSpacing: ".12em",
                             textTransform: "uppercase",
-                            fontSize: 9,
+                            fontSize: "clamp(8px, 2.4vw, 9px)",
                             color: "#0c2340",
                             cursor: "pointer",
                             whiteSpace: "nowrap",
@@ -2472,7 +2520,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 fontWeight: 900,
                                 letterSpacing: ".10em",
                                 textTransform: "uppercase",
-                                fontSize: 10,
+                                fontSize: "clamp(9px, 2.6vw, 10px)",
                                 cursor: "pointer",
                                 color: "#0c2340",
                               }}
@@ -2500,7 +2548,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 display: "inline-flex",
                                 alignItems: "center",
                                 justifyContent: "center",
-                                fontSize: 10,
+                                fontSize: "clamp(9px, 2.6vw, 10px)",
                                 whiteSpace: "nowrap",
                               }}
                             >
@@ -2529,7 +2577,7 @@ export default function Slidingmenubar({ open, onClose }) {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            fontSize: 10,
+                            fontSize: "clamp(9px, 2.6vw, 10px)",
                             whiteSpace: "nowrap",
                           }}
                         >
@@ -2553,7 +2601,7 @@ export default function Slidingmenubar({ open, onClose }) {
                       minWidth: 0,
                     }}
                   >
-                    {/* ✅ Mobile list: add breathing space above + below (inside scroll), keep everything else intact */}
+                    {/* ✅ Mobile list: breathing space above + below (inside scroll), keep everything else intact */}
                     <div
                       style={{
                         flex: 1,
@@ -2618,7 +2666,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                         fontWeight: 900,
                                         letterSpacing: ".04em",
                                         textTransform: "uppercase",
-                                        fontSize: 11,
+                                        fontSize: "clamp(10px, 2.9vw, 11px)",
                                         lineHeight: 1.25,
                                         display: "-webkit-box",
                                         WebkitBoxOrient: "vertical",
@@ -2630,7 +2678,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                     </div>
                                     <div
                                       style={{
-                                        fontSize: 9,
+                                        fontSize: "clamp(8px, 2.3vw, 9px)",
                                         fontWeight: 800,
                                         color: "rgba(12,35,64,0.60)",
                                         whiteSpace: "nowrap",
@@ -2650,7 +2698,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                       border: "1px solid rgba(12,35,64,0.14)",
                                       background: "rgba(12,35,64,0.06)",
                                       fontWeight: 900,
-                                      fontSize: 9,
+                                      fontSize: "clamp(8px, 2.3vw, 9px)",
                                       letterSpacing: ".10em",
                                       textTransform: "uppercase",
                                       marginTop: 1,

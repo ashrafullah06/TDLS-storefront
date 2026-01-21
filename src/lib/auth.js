@@ -159,6 +159,47 @@ const FACEBOOK_SECRET =
   } catch {}
 })();
 
+/* ───────────────── cookie domain hardening (safe + optional) ───────────────── */
+
+function computeCookieDomain() {
+  // Explicit override wins
+  const explicit =
+    process.env.AUTH_COOKIE_DOMAIN ||
+    process.env.NEXT_PUBLIC_COOKIE_DOMAIN ||
+    process.env.COOKIE_DOMAIN;
+
+  if (explicit && String(explicit).trim()) return String(explicit).trim();
+
+  // Only attempt auto-domain in production
+  if (!IS_PROD) return undefined;
+
+  const site =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.AUTH_URL ||
+    process.env.NEXTAUTH_URL;
+
+  if (!site) return undefined;
+
+  try {
+    const u = new URL(site.startsWith("http") ? site : `https://${site}`);
+    const host = String(u.hostname || "").trim().toLowerCase();
+    if (!host || host === "localhost") return undefined;
+
+    // Only auto-derive when explicitly using www.* (safe)
+    if (host.startsWith("www.") && host.split(".").length >= 3) {
+      return `.${host.slice(4)}`;
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const COOKIE_DOMAIN = computeCookieDomain();
+const COOKIE_DOMAIN_OPT = COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {};
+
 /* ───────────────── helpers ───────────────── */
 const isEmail = (v) => /\S+@\S+\.\S+/.test(String(v || "").trim());
 
@@ -233,6 +274,21 @@ function inferAuthType(creds, defaultType) {
   if (creds?.password) return "password";
   if (creds?.code) return "otp";
   return String(defaultType || "otp").toLowerCase();
+}
+
+/* ───────────────── token/session id bridge (critical for dashboard panels) ───────────────── */
+
+function ensureTokenUid(token) {
+  // Backfill uid from sub for existing/older sessions (no behavior change, only compatibility)
+  if (token && !token.uid && token.sub) token.uid = token.sub;
+  return token;
+}
+
+function getTokenUserId(token) {
+  const v = token?.uid || token?.userId || token?.sub || null;
+  if (!v) return null;
+  const s = String(v).trim();
+  return s || null;
 }
 
 /* ───────────── ADMIN ROLE STABILITY (admin plane only) ───────────── */
@@ -315,7 +371,14 @@ async function verifyCustomerOtpViaApi({ req, identifier, purpose, code }) {
   const base = getBaseUrlFromRequest(req);
   const channel = String(identifier || "").includes("@") ? "email" : "sms";
 
-  const payload = { identifier, purpose, code, to: identifier, via: channel, channel };
+  const payload = {
+    identifier,
+    purpose,
+    code,
+    to: identifier,
+    via: channel,
+    channel,
+  };
 
   // CUSTOMER MUST NEVER call admin OTP endpoints.
   // Also: do NOT fall back to deprecated legacy endpoints (prevents plane coupling).
@@ -349,7 +412,14 @@ async function verifyAdminOtpViaApi({ req, identifier, purpose, code }) {
   const base = getBaseUrlFromRequest(req);
   const channel = String(identifier || "").includes("@") ? "email" : "sms";
 
-  const payload = { identifier, purpose, code, to: identifier, via: channel, channel };
+  const payload = {
+    identifier,
+    purpose,
+    code,
+    to: identifier,
+    via: channel,
+    channel,
+  };
 
   // ADMIN MUST NEVER call customer OTP endpoints
   const endpoints = ["/api/admin/auth/verify-otp"];
@@ -474,12 +544,17 @@ export async function hashPassword(rawPassword) {
   }
 
   const iter = Math.min(
-    Math.max(parseInt(process.env.AUTH_PBKDF2_ITER || "210000", 10) || 210000, 10000),
+    Math.max(
+      parseInt(process.env.AUTH_PBKDF2_ITER || "210000", 10) || 210000,
+      10000
+    ),
     1000000
   );
   const salt = crypto.randomBytes(16);
   const derived = crypto.pbkdf2Sync(pwd, salt, iter, 32, "sha256");
-  return `pbkdf2$${iter}$${salt.toString("base64")}$${derived.toString("base64")}`;
+  return `pbkdf2$${iter}$${salt.toString("base64")}$${derived.toString(
+    "base64"
+  )}`;
 }
 
 export async function resolveUsersByIdentifier(identifierRaw) {
@@ -627,7 +702,8 @@ export async function ensureCustomerCode(userId) {
               WHERE "customerCode" IS NOT NULL
                 AND "customerCode" ~ '^CUST-[0-9]+$'
             `;
-            const maxv = Array.isArray(res) && res[0] ? Number(res[0].max) : NaN;
+            const maxv =
+              Array.isArray(res) && res[0] ? Number(res[0].max) : NaN;
             if (Number.isFinite(maxv) && maxv > 0) nextNum = maxv + 1;
           } catch {
             // Fallback: best-effort string scan
@@ -641,7 +717,8 @@ export async function ensureCustomerCode(userId) {
               const m = last.customerCode.match(/CUST-(\d+)/);
               if (m) {
                 const current = parseInt(m[1], 10);
-                if (Number.isFinite(current) && current > 0) nextNum = current + 1;
+                if (Number.isFinite(current) && current > 0)
+                  nextNum = current + 1;
               }
             }
           }
@@ -673,7 +750,9 @@ export async function ensureCustomerCode(userId) {
       const isRetryable =
         code === "P2002" || // unique constraint
         code === "P2034" || // transaction conflict (serializable retry)
-        /could not serialize|serialization|deadlock/i.test(String(err?.message || ""));
+        /could not serialize|serialization|deadlock/i.test(
+          String(err?.message || "")
+        );
 
       if (!isRetryable) {
         console.error("[auth] ensureCustomerCode failed", err);
@@ -820,6 +899,7 @@ function cookieProfileCustomer() {
         sameSite: "lax",
         path: "/",
         secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
       },
     },
     csrfToken: {
@@ -829,23 +909,42 @@ function cookieProfileCustomer() {
         sameSite: "lax",
         path: "/",
         secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
       },
     },
     callbackUrl: {
       name: "tdlc_c_callback",
-      options: { sameSite: "lax", path: "/", secure: IS_PROD },
+      options: { sameSite: "lax", path: "/", secure: IS_PROD, ...COOKIE_DOMAIN_OPT },
     },
     pkceCodeVerifier: {
       name: "tdlc_c_pkce",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: IS_PROD },
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
     state: {
       name: "tdlc_c_state",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: IS_PROD },
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
     nonce: {
       name: "tdlc_c_nonce",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: IS_PROD },
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
   };
 }
@@ -859,6 +958,7 @@ function cookieProfileAdmin() {
         sameSite: "lax",
         path: "/", // required for /admin/* + /api/admin/*
         secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
       },
     },
     csrfToken: {
@@ -868,23 +968,42 @@ function cookieProfileAdmin() {
         sameSite: "lax",
         path: "/",
         secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
       },
     },
     callbackUrl: {
       name: "tdlc_a_callback",
-      options: { sameSite: "lax", path: "/", secure: IS_PROD },
+      options: { sameSite: "lax", path: "/", secure: IS_PROD, ...COOKIE_DOMAIN_OPT },
     },
     pkceCodeVerifier: {
       name: "tdlc_a_pkce",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: IS_PROD },
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
     state: {
       name: "tdlc_a_state",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: IS_PROD },
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
     nonce: {
       name: "tdlc_a_nonce",
-      options: { httpOnly: true, sameSite: "lax", path: "/", secure: IS_PROD },
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
   };
 }
@@ -927,7 +1046,9 @@ const customerOptions = {
         if (String(purposeEffective).startsWith("rbac_")) return null;
 
         const whereUser =
-          parsed.type === "email" ? { email: parsed.value } : { phone: parsed.value };
+          parsed.type === "email"
+            ? { email: parsed.value }
+            : { phone: parsed.value };
 
         if (type === "password") {
           if (!creds?.password) return null;
@@ -940,7 +1061,10 @@ const customerOptions = {
 
           try {
             const now = new Date();
-            await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: now } });
+            await prisma.user.update({
+              where: { id: user.id },
+              data: { lastLoginAt: now },
+            });
           } catch {}
 
           try {
@@ -976,7 +1100,10 @@ const customerOptions = {
 
         try {
           const now = new Date();
-          await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: now } });
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { lastLoginAt: now },
+          });
         } catch {}
 
         try {
@@ -1003,15 +1130,18 @@ const customerOptions = {
   callbacks: {
     async jwt({ token, user, account, profile }) {
       token.scope = "customer";
+      ensureTokenUid(token);
 
-      if (account?.provider) token.authProvider = String(account.provider || "").toLowerCase();
+      if (account?.provider)
+        token.authProvider = String(account.provider || "").toLowerCase();
 
       const provider = String(account?.provider || "").toLowerCase();
       const isOAuth = provider === "google" || provider === "facebook";
 
       if (isOAuth && account) {
         const email = (user?.email || token?.email || profile?.email || "").toString();
-        const name = user?.name || token?.name || profile?.name || profile?.given_name || null;
+        const name =
+          user?.name || token?.name || profile?.name || profile?.given_name || null;
         const image = user?.image || token?.picture || profile?.picture || null;
 
         try {
@@ -1032,11 +1162,12 @@ const customerOptions = {
           console.error("[customer-auth] oauth mapping failed", e);
         }
 
+        ensureTokenUid(token);
         return token;
       }
 
       if (user?.id) {
-        token.uid = user.id;
+        token.uid = String(user.id);
         if ("name" in user) token.name = user.name ?? null;
         if ("email" in user) token.email = user.email ?? null;
         if ("phone" in user) token.phone = user.phone ?? null;
@@ -1052,14 +1183,20 @@ const customerOptions = {
         }
       }
 
+      ensureTokenUid(token);
       return token;
     },
 
     async session({ session, token }) {
+      ensureTokenUid(token);
+
       session.scope = "customer";
       if (!session.user) session.user = {};
 
-      if (token?.uid) session.user.id = token.uid;
+      // CRITICAL: always populate session.user.id (uid OR sub) for dashboards/panels
+      const uid = getTokenUserId(token);
+      if (uid) session.user.id = uid;
+
       if (token?.name !== undefined) session.user.name = token.name;
       if (token?.email !== undefined) session.user.email = token.email;
       if (token?.phone !== undefined) session.user.phone = token.phone;
@@ -1069,13 +1206,13 @@ const customerOptions = {
       }
 
       // customer session enrichment (unchanged intent, scoped to customer plane)
-      if (!token?.uid) return session;
+      if (!uid) return session;
 
       try {
-        await ensureCustomerCode(token.uid);
+        await ensureCustomerCode(uid);
 
         const u = await prisma.user.findUnique({
-          where: { id: token.uid },
+          where: { id: uid },
           select: {
             name: true,
             email: true,
@@ -1291,6 +1428,7 @@ const adminOptions = {
     async jwt({ token, user }) {
       // Ensure admin tokens are always tagged correctly
       token.scope = "admin";
+      ensureTokenUid(token);
 
       if (user?.id) {
         token.uid = String(user.id);
@@ -1314,21 +1452,28 @@ const adminOptions = {
         }
       }
 
+      ensureTokenUid(token);
       return token;
     },
 
     async session({ session, token }) {
+      ensureTokenUid(token);
+
       session.scope = "admin";
       session.user = session.user || {};
 
-      session.user.id = token?.uid ? String(token.uid) : undefined;
+      const uid = getTokenUserId(token);
+      if (uid) session.user.id = uid;
+
       session.user.email = token?.email || session.user.email;
       session.user.name = token?.name || session.user.name;
       session.user.phone = token?.phone || undefined;
 
       // ADMIN: stable roles + primaryRole always highest privilege
       const roles = sortAdminRoles(Array.isArray(token?.roles) ? token.roles : []);
-      const perms = normalizePerms(Array.isArray(token?.permissions) ? token.permissions : []);
+      const perms = normalizePerms(
+        Array.isArray(token?.permissions) ? token.permissions : []
+      );
 
       session.user.roles = roles;
       session.user.permissions = perms;
@@ -1378,14 +1523,16 @@ export const signOut = customerSignOut;
  */
 export async function requireAuth(_req, { optional = false } = {}) {
   const session = await customerAuth();
-  const userId = session?.user?.id || session?.user?.sub || null;
+  const userId =
+    session?.user?.id || session?.user?.sub || session?.user?.uid || null;
+
   if (!userId) {
     if (optional) return { userId: null, session: null };
     const err = new Error("unauthorized");
     err.status = 401;
     throw err;
   }
-  return { userId, session };
+  return { userId: String(userId), session };
 }
 
 /* ───────────── request-like builder (fixes admin no_admin_session in server layouts) ───────────── */
@@ -1483,6 +1630,7 @@ async function readAdminToken(req) {
         if (scope !== "admin") continue;
       }
 
+      ensureTokenUid(tok);
       return tok;
     }
   }
@@ -1501,7 +1649,7 @@ export async function requireAdmin(
   const tok = await readAdminToken(req);
 
   const scope = String(tok?.scope || "").toLowerCase();
-  const userId = String(tok?.uid || tok?.userId || tok?.sub || "").trim();
+  const userId = getTokenUserId(tok);
 
   if (!userId || (scope && scope !== "admin")) {
     if (optional) {

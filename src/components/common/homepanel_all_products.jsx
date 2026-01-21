@@ -1,4 +1,3 @@
-// PATH: src/components/common/homepanel_all_products.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -17,28 +16,21 @@ const SYS_FONT =
   "Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif";
 const LUX_FONT = "'Playfair Display','Georgia',serif";
 
-/* ===================== FETCH (PRODUCTION-SAFE) ===================== */
-/**
- * Key changes vs your current code:
- * - cache: "no-store" (avoid sticky cached 401/500/empty payloads in prod)
- * - bust param &_=Date.now() (extra guard against edge/browser caching)
- * - supports AbortController signal (your timeout now works)
- */
+/* ===================== NETWORK + PRELOAD LIMITS ===================== */
+const FETCH_TIMEOUT_MS = 30 * 1000; // allow Railway/Strapi cold-start, but never hang forever
+
+/* ===================== CLIENT-SAFE FALLBACK FETCHERS (VIA PROXY) ===================== */
 async function fetchFromStrapi(path, signal) {
   try {
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const q = encodeURIComponent(normalizedPath);
 
-    const url = `/api/strapi?path=${q}&_=${Date.now()}`;
-
-    const res = await fetch(url, {
+    const res = await fetch(`/api/strapi?path=${q}`, {
       method: "GET",
       headers: { Accept: "application/json" },
-      cache: "no-store",
-      credentials: "same-origin",
+      cache: "no-store", // reliability > browser cache; we already cache in localStorage
       signal,
     });
-
     if (!res.ok) return null;
 
     const raw = await res.json().catch(() => null);
@@ -52,16 +44,15 @@ async function fetchFromStrapi(path, signal) {
   }
 }
 
-/* ===================== CLIENT FETCHERS (WITH PAGE SIZE) ===================== */
-const PAGE_PRODUCTS = 500;
-const PAGE_TAXONOMY = 500;
-
 async function fetchProductsClient(signal) {
-  // Ensure we fetch enough for full taxonomy build (Strapi default pageSize is often 25)
-  const payload = await fetchFromStrapi(
-    `/products?populate=*&pagination[pageSize]=${PAGE_PRODUCTS}`,
-    signal
-  );
+  const payload =
+    (await fetchFromStrapi(
+      "/products?populate=*&pagination[pageSize]=500",
+      signal
+    )) ||
+    (await fetchFromStrapi("/products?populate=*", signal)) ||
+    (await fetchFromStrapi("/products", signal));
+
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
   return data.map((n) =>
@@ -70,10 +61,14 @@ async function fetchProductsClient(signal) {
 }
 
 async function fetchAgeGroupsClient(signal) {
-  const payload = await fetchFromStrapi(
-    `/age-groups?populate=*&pagination[pageSize]=${PAGE_TAXONOMY}`,
-    signal
-  );
+  const payload =
+    (await fetchFromStrapi(
+      "/age-groups?populate=*&pagination[pageSize]=500",
+      signal
+    )) ||
+    (await fetchFromStrapi("/age-groups?populate=*", signal)) ||
+    (await fetchFromStrapi("/age-groups", signal));
+
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
   return data
@@ -90,10 +85,14 @@ async function fetchAgeGroupsClient(signal) {
 }
 
 async function fetchCategoriesClient(signal) {
-  const payload = await fetchFromStrapi(
-    `/categories?populate=*&pagination[pageSize]=${PAGE_TAXONOMY}`,
-    signal
-  );
+  const payload =
+    (await fetchFromStrapi(
+      "/categories?populate=*&pagination[pageSize]=500",
+      signal
+    )) ||
+    (await fetchFromStrapi("/categories?populate=*", signal)) ||
+    (await fetchFromStrapi("/categories", signal));
+
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
   return data
@@ -112,7 +111,7 @@ async function fetchCategoriesClient(signal) {
 async function fetchAudienceCategoriesClient(signal) {
   const payload =
     (await fetchFromStrapi(
-      `/audience-categories?populate=*&pagination[pageSize]=${PAGE_TAXONOMY}`,
+      "/audience-categories?populate=*&pagination[pageSize]=500",
       signal
     )) ||
     (await fetchFromStrapi("/audience-categories?populate=*", signal)) ||
@@ -267,13 +266,7 @@ function sortByOrderThenAlpha(items, audience, labelsList) {
   });
 }
 
-const SEASON_BADGE_SLUGS = [
-  "winter",
-  "on-sale",
-  "new-arrival",
-  "monsoon",
-  "summer",
-];
+const SEASON_BADGE_SLUGS = ["winter", "on-sale", "new-arrival", "monsoon", "summer"];
 const BADGE_LABEL = {
   winter: "Winter",
   "on-sale": "Sale",
@@ -293,12 +286,7 @@ function badgesFromAudiences(product) {
 }
 
 /* ===================== MENU BUILDERS (copied from BFBar, unchanged) ===================== */
-function buildMWHD(
-  products,
-  audSlug,
-  labels,
-  prefix = `/collections/${normSlug(audSlug)}`
-) {
+function buildMWHD(products, audSlug, labels, prefix = `/collections/${normSlug(audSlug)}`) {
   const buckets = new Map(); // cat => sub => node
   products
     .filter((p) => hasAudience(p, audSlug))
@@ -446,12 +434,7 @@ function buildAccessories(products, labels, prefix = "/collections/accessories")
   return options.sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function buildKidsYoung(
-  products,
-  audSlug,
-  labels,
-  prefix = `/collections/${normSlug(audSlug)}`
-) {
+function buildKidsYoung(products, audSlug, labels, prefix = `/collections/${normSlug(audSlug)}`) {
   const tree = new Map(); // gender -> age -> cat -> sub
   products
     .filter((p) => hasAudience(p, audSlug))
@@ -619,7 +602,12 @@ function buildSeasonal(products, seasonSlug, labels) {
     sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
-  const men = buildMWHD(seasonal.filter((p) => hasAudience(p, "men")), "men", labels, menPrefix);
+  const men = buildMWHD(
+    seasonal.filter((p) => hasAudience(p, "men")),
+    "men",
+    labels,
+    menPrefix
+  );
   if (men.length) sections.push({ label: "Men", href: menPrefix, children: men });
 
   const womenPrefix = `/collections/${seasonalKey}/women`;
@@ -649,10 +637,10 @@ const LS_DATA_TS = "tdls:homepanel:allproducts:ts:v1";
 const TTL_MS = 6 * 60 * 60 * 1000; // 6h
 const LS_LAST_KEY = "tdls:homepanel:allproducts:last_audience:v1";
 
-/* ---- preload coordination ---- */
+/* ---- preload coordination (so flyout never “loads later”) ---- */
 const LS_READY_EVENT = "tdls:homepanel:allproductsReady";
 const LS_LOCK_KEY = "tdls:homepanel:allproducts:lock:v1";
-const LOCK_TTL_MS = 25 * 1000; // 25s
+const LOCK_TTL_MS = 45 * 1000; // prevent stampede; must cover cold-start windows
 
 function readJson(key) {
   try {
@@ -713,11 +701,8 @@ function releaseLock() {
   } catch {}
 }
 
-/**
- * FIX: Do NOT require categories to be present to consider dataset usable.
- * Products alone are enough to build options (labels fall back to titleize).
- */
 function hasUsableCachedDataset(cached) {
+  // Products are the core requirement for menu build.
   const p = Array.isArray(cached?.products) ? cached.products : [];
   return p.length > 0;
 }
@@ -735,7 +720,7 @@ function toLiteProduct(p) {
   };
 }
 
-/* ===================== PRELOADER ===================== */
+/* ===================== PRELOADER (mount in app/layout.js for zero-wait flyout) ===================== */
 export function HomePanelAllProductsPreloader() {
   const startedRef = useRef(false);
 
@@ -748,11 +733,16 @@ export function HomePanelAllProductsPreloader() {
     const cached = readJson(LS_DATA_KEY);
     const ts = readTs(LS_DATA_TS);
 
-    if (cached && isFresh(ts) && hasUsableCachedDataset(cached)) {
+    // If cached products exist, announce readiness immediately (even if stale),
+    // so the flyout never feels "empty" while refresh happens.
+    if (cached && hasUsableCachedDataset(cached)) {
       dispatchReady();
-      return;
     }
 
+    // If cache is fresh and usable, do nothing else.
+    if (cached && isFresh(ts) && hasUsableCachedDataset(cached)) return;
+
+    // Avoid stampede across tabs / double mounts.
     if (!acquireLock()) return;
 
     let cancelled = false;
@@ -761,7 +751,7 @@ export function HomePanelAllProductsPreloader() {
       try {
         ac.abort();
       } catch {}
-    }, 6500);
+    }, FETCH_TIMEOUT_MS);
 
     (async () => {
       try {
@@ -782,7 +772,7 @@ export function HomePanelAllProductsPreloader() {
         const nextCats = cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
         const nextAud = auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
 
-        // FIX: write + ready if Products exist (categories may fail but menus can still render)
+        // Cache as long as we have products (categories/audience are optional).
         if (nextProducts.length) {
           writeJson(LS_DATA_KEY, {
             products: nextProducts,
@@ -794,7 +784,7 @@ export function HomePanelAllProductsPreloader() {
           dispatchReady();
         }
       } catch {
-        // silent
+        // Silent by design (flyout will still use any existing cache)
       } finally {
         window.clearTimeout(timeoutId);
         releaseLock();
@@ -829,12 +819,17 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   const [fetchError, setFetchError] = useState(false);
 
   const optionsCacheRef = useRef(new Map());
-  const [isMobile, setIsMobile] = useState(false);
 
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(window.matchMedia?.("(max-width: 768px)")?.matches);
+  });
+
+  // Mobile UX: show audience list first, then a dedicated "options" pane
   const [mobilePane, setMobilePane] = useState("audience"); // "audience" | "options"
   const rightPaneRef = useRef(null);
 
-  /* ------------------- Touch scroll guard ------------------- */
+  /* ------------------- Touch scroll guard (prevents accidental taps) ------------------- */
   const ignoreClickUntilRef = useRef(0);
   const gestureRef = useRef({ active: false, x: 0, y: 0, moved: false });
 
@@ -859,6 +854,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       (typeof e.clientY === "number" ? e.clientY : 0) - gestureRef.current.y
     );
 
+    // Small threshold: treat as scroll intent, then ignore the synthetic click
     if (dx > 8 || dy > 8) gestureRef.current.moved = true;
   };
 
@@ -866,6 +862,8 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     if (!e || e.pointerType !== "touch") return;
     const moved = Boolean(gestureRef.current.moved);
     gestureRef.current.active = false;
+
+    // If user was scrolling, ignore click events that follow immediately (mobile browsers)
     if (moved) ignoreClickUntilRef.current = Date.now() + 320;
   };
 
@@ -879,7 +877,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     return () => mq.removeEventListener?.("change", apply);
   }, []);
 
-  // hydrate from cache instantly + background refresh (with 1 retry if empty)
+  // hydrate from cache instantly + background refresh (never hang)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -891,6 +889,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const bootCats = Array.isArray(cached?.categories) ? cached.categories : [];
     const bootAud = Array.isArray(cached?.audienceCategories) ? cached.audienceCategories : [];
 
+    // Instant hydration if cache exists (no waiting UI)
     if (bootProducts.length) setProducts(bootProducts);
     if (bootAge.length) setAgeGroups(bootAge);
     if (bootCats.length) setCategoriesList(bootCats);
@@ -900,11 +899,12 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const usable = cached && hasUsableCachedDataset(cached);
 
     let cancelled = false;
-    let attempts = 0;
 
     // If cache is fresh and usable, do not fetch here.
+    // (Preloader owns warm-load; this component stays instant.)
     if (!stale && usable) return;
 
+    // Avoid overwrite with empty arrays when partial fetch fails.
     const fallback = {
       products: bootProducts,
       ageGroups: bootAge,
@@ -912,19 +912,17 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       audienceCategories: bootAud,
     };
 
-    const doFetch = async () => {
-      attempts += 1;
+    // If preloader is already fetching, don't stampede.
+    if (!acquireLock()) return;
 
-      // If preloader is already fetching, rely on the ready event
-      if (!acquireLock()) return;
+    const ac = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      try {
+        ac.abort();
+      } catch {}
+    }, FETCH_TIMEOUT_MS);
 
-      const ac = new AbortController();
-      const timeoutId = window.setTimeout(() => {
-        try {
-          ac.abort();
-        } catch {}
-      }, 6500);
-
+    (async () => {
       try {
         setFetchError(false);
 
@@ -948,50 +946,46 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         const finalCats = nextCats.length ? nextCats : fallback.categories;
         const finalAud = nextAud.length ? nextAud : fallback.audienceCategories;
 
-        // FIX: error only if we truly have NO products to build menus
-        if (!finalProducts.length) {
-          if (!fallback.products.length) setFetchError(true);
+        // Only mark error if we truly have nothing to build menus.
+        if (!finalProducts.length && !fallback.products.length) setFetchError(true);
 
-          // 1 controlled retry (cold-start / transient)
-          if (attempts < 2 && !cancelled) {
-            window.setTimeout(() => {
-              if (!cancelled) doFetch().catch(() => {});
-            }, 1400);
-          }
-          return;
-        }
-
-        setProducts(finalProducts);
+        if (finalProducts.length) setProducts(finalProducts);
         if (finalAge.length) setAgeGroups(finalAge);
         if (finalCats.length) setCategoriesList(finalCats);
         if (finalAud.length) setAudienceCategories(finalAud);
 
-        writeJson(LS_DATA_KEY, {
-          products: finalProducts,
-          ageGroups: finalAge,
-          categories: finalCats,
-          audienceCategories: finalAud,
-        });
-        writeTs(LS_DATA_TS);
-        dispatchReady();
+        // Cache as long as we have products.
+        if (finalProducts.length) {
+          writeJson(LS_DATA_KEY, {
+            products: finalProducts,
+            ageGroups: finalAge,
+            categories: finalCats,
+            audienceCategories: finalAud,
+          });
+          writeTs(LS_DATA_TS);
+          dispatchReady();
+        }
       } catch {
+        // Only show error state if there's no cache to rely on.
         if (!cancelled) {
           const stillCached = readJson(LS_DATA_KEY);
           if (!stillCached || !hasUsableCachedDataset(stillCached)) setFetchError(true);
         }
       } finally {
         window.clearTimeout(timeoutId);
-        releaseLock();
         try {
           ac.abort();
         } catch {}
+        releaseLock();
       }
-    };
-
-    doFetch().catch(() => {});
+    })();
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
+      try {
+        ac.abort();
+      } catch {}
       releaseLock();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1008,12 +1002,12 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       const p = Array.isArray(cached.products) ? cached.products : [];
       const ag = Array.isArray(cached.ageGroups) ? cached.ageGroups : [];
       const c = Array.isArray(cached.categories) ? cached.categories : [];
-      const ac = Array.isArray(cached.audienceCategories) ? cached.audienceCategories : [];
+      const acats = Array.isArray(cached.audienceCategories) ? cached.audienceCategories : [];
 
       if (p.length) setProducts(p);
       if (ag.length) setAgeGroups(ag);
       if (c.length) setCategoriesList(c);
-      if (ac.length) setAudienceCategories(ac);
+      if (acats.length) setAudienceCategories(acats);
 
       if (p.length) setFetchError(false);
     };
@@ -1121,6 +1115,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       }
     })();
 
+    // Restore last selection if possible
     if (!active && last) {
       const found = barItems.find((x) => normSlug(x.key) === normSlug(last));
       if (found) {
@@ -1130,9 +1125,25 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       }
     }
 
-    if (active) setSubOptions(computeOptions(active.key));
+    // Desktop: if no last selection and we have products, auto-select first item
+    // so the right pane is never "empty" on open. Mobile still starts at audience list.
+    if (!active && !isMobile && (products?.length || 0) > 0 && (barItems?.length || 0) > 0) {
+      const first = barItems[0];
+      if (first?.key) {
+        setActive(first);
+        setSubOptions(computeOptions(first.key));
+        try {
+          window.localStorage.setItem(LS_LAST_KEY, String(first.key));
+        } catch {}
+        return;
+      }
+    }
+
+    if (active) {
+      setSubOptions(computeOptions(active.key));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, ageGroups, categoriesList, audienceCategories, barItems]);
+  }, [products, ageGroups, categoriesList, audienceCategories, barItems, isMobile]);
 
   // keep mobile pane consistent when switching breakpoint
   useEffect(() => {
@@ -1171,7 +1182,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     }
   };
 
-  /* ===================== Desktop hover-intent ===================== */
+  /* ===================== Desktop hover-intent (previews options without hypersensitivity) ===================== */
   const hoverTimerRef = useRef(null);
   const hoverKeyRef = useRef("");
   const ignoreHoverUntilRef = useRef(0);
@@ -1204,12 +1215,13 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
   const schedulePreview = (item) => {
     if (!item?.key) return;
-    if (isMobile) return;
+    if (isMobile) return; // mobile uses click/tap only
     if (Date.now() < (ignoreHoverUntilRef.current || 0)) return;
 
     cancelHoverIntent();
     hoverKeyRef.current = String(item.key);
 
+    // Hover-intent delay prevents accidental selection when passing over items.
     hoverTimerRef.current = window.setTimeout(() => {
       if (hoverKeyRef.current !== String(item.key)) return;
       previewAudience(item);
@@ -1217,6 +1229,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   };
 
   const onLeftWheel = () => {
+    // When scrolling the left list, do NOT switch selection from incidental hover.
     ignoreHoverUntilRef.current = Date.now() + 240;
     cancelHoverIntent();
   };
@@ -1531,6 +1544,14 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           .hpFly-mobileShell{ display: none; }
         }
 
+        /* extra-small screens: reduce chip + button density (no overflow) */
+        @media (max-width: 390px){
+          .hpFly-chip{ padding: 9px 10px; font-size: 10.5px; }
+          .hpFly-backBtn{ padding: 8px 10px; font-size: 10.5px; }
+          .hpFly-mobileTitle{ font-size: .92rem; }
+          .hpFly-audBtn{ padding: 9px 9px; border-radius: 13px; }
+        }
+
         @media (prefers-reduced-motion: reduce){
           .hpFly-audBtn{ transition: none; }
         }
@@ -1569,7 +1590,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
             window.setTimeout(() => onAfterNavigate?.(), 0);
           }}
         >
-          {/* MOBILE */}
+          {/* =============== MOBILE: 2-step navigation =============== */}
           <div className="hpFly-mobileShell" aria-label="Collections flyout (mobile)">
             {mobilePane === "audience" ? (
               <>
@@ -1697,7 +1718,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
             )}
           </div>
 
-          {/* DESKTOP */}
+          {/* =============== DESKTOP/TABLET: split layout preserved =============== */}
           <div className="hpFly-grid" aria-label="Collections flyout (desktop)">
             <div className="hpFly-left" onWheel={onLeftWheel}>
               <div className="hpFly-kicker">Choose</div>

@@ -1,3 +1,4 @@
+//app/customer/dashboard/page.jsx
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -20,6 +21,74 @@ import ReturnExchangeRefundPanel from '../returnexchangerefundpanel';
 
 const NAVY = '#0C2340';
 const SLATE_BG = '#F7F8FA';
+
+/* -------------------- small hardening helpers (no UI change) -------------------- */
+
+function pickUserIdFromSessionUser(u) {
+  // Production NextAuth can store identifier in sub or other keys depending on callbacks/jwt.
+  const cands = [u?.id, u?.userId, u?.uid, u?.sub, u?.customerId];
+  for (const v of cands) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  // sometimes numeric
+  for (const v of cands) {
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return '';
+}
+
+function pickPhoneFromSessionUser(u) {
+  const cands = [u?.phone, u?.mobile, u?.phoneNumber, u?.tel];
+  for (const v of cands) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+async function fetchJsonWithTimeout(url, { timeoutMs = 12000, signal, ...init } = {}) {
+  const controller = new AbortController();
+  const tt = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Bridge external abort into our controller if provided
+  let abortBridge;
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else {
+      abortBridge = () => controller.abort();
+      signal.addEventListener('abort', abortBridge, { once: true });
+    }
+  }
+
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      cache: 'no-store',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        ...(init.headers || {}),
+      },
+    });
+
+    const text = await res.text().catch(() => '');
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+
+    return { res, json, text };
+  } finally {
+    clearTimeout(tt);
+    if (signal && abortBridge) {
+      try {
+        signal.removeEventListener('abort', abortBridge);
+      } catch {}
+    }
+  }
+}
 
 function getBotReply(msg) {
   const m = msg.toLowerCase();
@@ -61,7 +130,15 @@ function useSessionShell() {
   const { data: session, status } = useSession();
   const base = useMemo(() => {
     const u = session?.user;
-    return u ? { id: u.id || '', name: u.name || '', email: u.email || '', phone: u.phone || '' } : null;
+    if (!u) return null;
+
+    const id = pickUserIdFromSessionUser(u);
+    return {
+      id,
+      name: u.name || '',
+      email: u.email || '',
+      phone: pickPhoneFromSessionUser(u),
+    };
   }, [session]);
   return { base, status };
 }
@@ -229,18 +306,13 @@ function Banner({ children }) {
   );
 }
 
-/** NEW: status derivation kept consistent with your order-history cards (no logic changes elsewhere). */
+/** status derivation kept consistent with your order-history cards */
 function deriveOrderStatus(o) {
   const s = o?.status || o?.orderStatus || o?.state || o?.fulfillmentStatus || o?.paymentStatus || '';
   return String(s || '').trim();
 }
 
-// ────────────────────────────────────────────────────────────────
-// Customer-safe panel guard:
-// Prevents raw runtime errors (e.g., "Failed to fetch") from surfacing to customers
-// while keeping the dashboard structure and logic intact.
-// Primarily protects LiveInventoryPanel (Order History / Tracking).
-// ────────────────────────────────────────────────────────────────
+// Customer-safe panel guard
 class TDLCPanelErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -249,10 +321,7 @@ class TDLCPanelErrorBoundary extends React.Component {
   static getDerivedStateFromError() {
     return { hasError: true };
   }
-  componentDidCatch() {
-    // Intentionally silent in UI (avoid exposing internal errors to customers).
-    // Optional: add logging here later.
-  }
+  componentDidCatch() {}
   render() {
     if (this.state.hasError) return this.props.fallback || null;
     return this.props.children;
@@ -325,7 +394,6 @@ function SafePanel({ title, children }) {
     setBlocked(true);
   }, []);
 
-  // Catch unhandled promise rejections (dev overlay) coming from panel fetches.
   useEffect(() => {
     if (blocked) return;
     if (typeof window === 'undefined') return;
@@ -377,7 +445,14 @@ export default function Dashboard() {
   const search = useSearchParams();
   const { base, status } = useSessionShell();
 
-  // Auth watchdog: prevents "infinite loading" and handles cross-tab/session invalidation fast.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Auth watchdog
   const statusRef = useRef(status);
   useEffect(() => {
     statusRef.current = status;
@@ -403,11 +478,6 @@ export default function Dashboard() {
       setAuthLost(true);
       setAuthLostReason(finalReason);
 
-      /**
-       * IMPORTANT:
-       * Use NextAuth signOut redirect (callbackUrl) so cookies clear BEFORE we land on /login.
-       * This prevents "login page flicker" (login -> loading -> stable) caused by a transient authenticated session.
-       */
       try {
         if (statusRef.current === 'unauthenticated') {
           if (typeof window !== 'undefined') window.location.assign(loginUrl);
@@ -418,7 +488,6 @@ export default function Dashboard() {
         void signOut({ callbackUrl: loginUrl });
         return;
       } catch {
-        // Fallback: client-side redirect.
         try {
           if (typeof window !== 'undefined') window.location.assign(loginUrl);
           else router.replace(loginUrl);
@@ -430,10 +499,7 @@ export default function Dashboard() {
     [router, buildLoginUrl],
   );
 
-  // NEW: prevent “panic sign out” while status is loading:
-  // - Never sign out on fetch errors/timeouts.
-  // - If session endpoint returns null, confirm once more before signing out.
-  // - Optionally attempt one router.refresh() if NextAuth is stuck in loading too long.
+  // Prevent “panic sign out” while status is loading
   const sessionNullConfirmRef = useRef(false);
   const refreshedOnceRef = useRef(false);
 
@@ -450,7 +516,7 @@ export default function Dashboard() {
 
     const SESSION_SOFT_TIMEOUT_MS = 2500;
     const SESSION_CONFIRM_DELAY_MS = 900;
-    const SESSION_FETCH_TIMEOUT_MS = 5000;
+    const SESSION_FETCH_TIMEOUT_MS = 7000;
     const SESSION_STUCK_REFRESH_MS = 7000;
 
     let softTimer = null;
@@ -459,18 +525,9 @@ export default function Dashboard() {
 
     const probeSession = async () => {
       try {
-        const controller = new AbortController();
-        const tt = setTimeout(() => controller.abort(), SESSION_FETCH_TIMEOUT_MS);
-
-        const r = await fetch('/api/auth/session', { cache: 'no-store', signal: controller.signal });
-        clearTimeout(tt);
-
-        // IMPORTANT: never sign out on non-OK / timeout / network errors.
-        if (!r.ok) return { kind: 'unknown' };
-
-        const j = await r.json().catch(() => null);
-        // NextAuth-compatible route returns Session object OR null
-        if (!j || !j.user) return { kind: 'null' };
+        const { res, json } = await fetchJsonWithTimeout('/api/auth/session', { timeoutMs: SESSION_FETCH_TIMEOUT_MS });
+        if (!res?.ok) return { kind: 'unknown' };
+        if (!json || !json.user) return { kind: 'null' };
         return { kind: 'ok' };
       } catch {
         return { kind: 'unknown' };
@@ -489,10 +546,7 @@ export default function Dashboard() {
       }
 
       if (first.kind === 'null') {
-        // Don’t panic-signout on first null; confirm once.
-        if (sessionNullConfirmRef.current) {
-          return;
-        }
+        if (sessionNullConfirmRef.current) return;
         sessionNullConfirmRef.current = true;
 
         confirmTimer = setTimeout(async () => {
@@ -504,13 +558,10 @@ export default function Dashboard() {
           if (second.kind === 'null') {
             handleAuthLost('logged_out');
           } else {
-            // recovered or unknown; do not sign out
             sessionNullConfirmRef.current = false;
           }
         }, SESSION_CONFIRM_DELAY_MS);
       }
-
-      // unknown => do nothing
     }, SESSION_SOFT_TIMEOUT_MS);
 
     refreshTimer = setTimeout(() => {
@@ -521,9 +572,7 @@ export default function Dashboard() {
       refreshedOnceRef.current = true;
       try {
         router.refresh();
-      } catch {
-        // silent
-      }
+      } catch {}
     }, SESSION_STUCK_REFRESH_MS);
 
     return () => {
@@ -544,8 +593,7 @@ export default function Dashboard() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileLoadedOnce, setProfileLoadedOnce] = useState(false);
 
-  // Fast path: render immediately from session base to avoid slow dashboard boot.
-  // /api/customers/me still loads in the background and will enrich tier/points/etc.
+  // Fast path from session base
   useEffect(() => {
     if (!userId) return;
     if (!base) return;
@@ -592,10 +640,13 @@ export default function Dashboard() {
   const ordersInFlightRef = useRef(false);
   const notifsInFlightRef = useRef(false);
 
-  // Hard timeouts to prevent hung fetches from trapping the UI in a loading state.
-  const FETCH_PROFILE_TIMEOUT_MS = 5500;
-  const FETCH_ORDERS_TIMEOUT_MS = 6500;
-  const FETCH_NOTIFS_TIMEOUT_MS = 6500;
+  const profileReqSeqRef = useRef(0);
+  const ordersReqSeqRef = useRef(0);
+  const notifsReqSeqRef = useRef(0);
+
+  const FETCH_PROFILE_TIMEOUT_MS = 12000;
+  const FETCH_ORDERS_TIMEOUT_MS = 15000;
+  const FETCH_NOTIFS_TIMEOUT_MS = 12000;
 
   useEffect(() => {
     const welcome = search.get('welcome') === '1' && search.get('new') === '1';
@@ -619,7 +670,6 @@ export default function Dashboard() {
   const loadProfile = useCallback(
     async ({ force = false } = {}) => {
       if (!userId) return;
-
       if (!force && profileLoadedForIdRef.current === userId) return;
       if (profileInFlightRef.current) return;
 
@@ -627,37 +677,35 @@ export default function Dashboard() {
 
       if (!profileLoadedOnce || force) setProfileLoading(true);
 
-      let active = true;
+      const reqId = ++profileReqSeqRef.current;
+
       try {
-        const controller = new AbortController();
-        const tt = setTimeout(() => controller.abort(), FETCH_PROFILE_TIMEOUT_MS);
-        const res = await fetch('/api/customers/me', { cache: 'no-store', signal: controller.signal });
-        clearTimeout(tt);
+        const { res, json } = await fetchJsonWithTimeout('/api/customers/me', { timeoutMs: FETCH_PROFILE_TIMEOUT_MS });
+
+        if (!mountedRef.current || profileReqSeqRef.current !== reqId) return;
 
         if (res.status === 401 || res.status === 403) {
           handleAuthLost('logged_out');
           return;
         }
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error || 'failed to load profile');
-        if (!active) return;
+        if (!res.ok) throw new Error(json?.error || 'failed to load profile');
 
         const b = baseRef.current;
 
         setProfile({
-          id: data.id || b?.id || userId,
-          name: data.name ?? b?.name ?? '',
-          email: data.email ?? b?.email ?? '',
-          phone: data.phone ?? b?.phone ?? '',
-          tier: data.tier ?? '',
-          points: typeof data.points === 'number' ? data.points : 0,
-          referral_code: data.referral_code ?? '',
-          referral_id: data.referral_id ?? '',
+          id: json?.id || b?.id || userId,
+          name: json?.name ?? b?.name ?? '',
+          email: json?.email ?? b?.email ?? '',
+          phone: json?.phone ?? b?.phone ?? '',
+          tier: json?.tier ?? '',
+          points: typeof json?.points === 'number' ? json.points : 0,
+          referral_code: json?.referral_code ?? '',
+          referral_id: json?.referral_id ?? '',
         });
 
         profileLoadedForIdRef.current = userId;
       } catch {
-        if (!active) return;
+        if (!mountedRef.current || profileReqSeqRef.current !== reqId) return;
 
         const b = baseRef.current;
 
@@ -672,18 +720,14 @@ export default function Dashboard() {
           referral_id: '',
         });
 
-        profileLoadedForIdRef.current = userId;
+        // NOTE: do NOT mark loaded-for-id on failure; allows later retry (no UI change, just resilience).
       } finally {
-        if (active) {
+        if (mountedRef.current && profileReqSeqRef.current === reqId) {
           setProfileLoading(false);
           setProfileLoadedOnce(true);
         }
         profileInFlightRef.current = false;
       }
-
-      return () => {
-        active = false;
-      };
     },
     [userId, profileLoadedOnce, handleAuthLost],
   );
@@ -696,7 +740,6 @@ export default function Dashboard() {
   const loadOrders = useCallback(
     async ({ force = false } = {}) => {
       if (!userId) return;
-
       if (!force && ordersLoadedForIdRef.current === userId) return;
       if (ordersInFlightRef.current) return;
 
@@ -704,36 +747,43 @@ export default function Dashboard() {
 
       if (!ordersLoadedForIdRef.current || force) setOrdersLoading(true);
 
-      let active = true;
-      try {
-        const controller = new AbortController();
-        const tt = setTimeout(() => controller.abort(), FETCH_ORDERS_TIMEOUT_MS);
-        const r = await fetch('/api/customers/orders?limit=200', { cache: 'no-store', signal: controller.signal });
-        clearTimeout(tt);
+      const reqId = ++ordersReqSeqRef.current;
 
-        if (r.status === 401 || r.status === 403) {
+      try {
+        const { res, json } = await fetchJsonWithTimeout('/api/customers/orders?limit=200', {
+          timeoutMs: FETCH_ORDERS_TIMEOUT_MS,
+        });
+
+        if (!mountedRef.current || ordersReqSeqRef.current !== reqId) return;
+
+        if (res.status === 401 || res.status === 403) {
           handleAuthLost('logged_out');
           return;
         }
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || 'failed to load orders');
-        if (!active) return;
+        if (!res.ok) throw new Error(json?.error || 'failed to load orders');
 
-        const items = Array.isArray(j?.items) ? j.items : [];
+        // Accept multiple production shapes:
+        // - { items: [...] }
+        // - { orders: [...] }
+        // - { data: [...] }
+        // - [...] (plain array)
+        let items = [];
+        if (Array.isArray(json)) items = json;
+        else if (Array.isArray(json?.items)) items = json.items;
+        else if (Array.isArray(json?.orders)) items = json.orders;
+        else if (Array.isArray(json?.data)) items = json.data;
+        else items = [];
+
         setOrders(items);
         ordersLoadedForIdRef.current = userId;
       } catch {
-        if (!active) return;
+        if (!mountedRef.current || ordersReqSeqRef.current !== reqId) return;
         setOrders([]);
-        ordersLoadedForIdRef.current = userId;
+        // NOTE: do NOT mark loaded-for-id on failure; allows later retry.
       } finally {
-        if (active) setOrdersLoading(false);
+        if (mountedRef.current && ordersReqSeqRef.current === reqId) setOrdersLoading(false);
         ordersInFlightRef.current = false;
       }
-
-      return () => {
-        active = false;
-      };
     },
     [userId, handleAuthLost],
   );
@@ -753,31 +803,36 @@ export default function Dashboard() {
       notifsInFlightRef.current = true;
       setNotifLoading(true);
 
+      const reqId = ++notifsReqSeqRef.current;
+
       try {
         setNotifErr('');
-        const controller = new AbortController();
-        const tt = setTimeout(() => controller.abort(), FETCH_NOTIFS_TIMEOUT_MS);
-        const r = await fetch(`/api/customers/notifications?page=${page}&pageSize=50`, {
-          cache: 'no-store',
-          signal: controller.signal,
+        const { res, json } = await fetchJsonWithTimeout(`/api/customers/notifications?page=${page}&pageSize=50`, {
+          timeoutMs: FETCH_NOTIFS_TIMEOUT_MS,
         });
-        clearTimeout(tt);
 
-        if (r.status === 401 || r.status === 403) {
+        if (!mountedRef.current || notifsReqSeqRef.current !== reqId) return;
+
+        if (res.status === 401 || res.status === 403) {
           handleAuthLost('logged_out');
           return;
         }
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error || 'failed to load notifications');
+        if (!res.ok) throw new Error(json?.error || 'failed to load notifications');
 
-        setNotifications(j.items || []);
-        setUnreadCount(j.unreadCount || 0);
+        let items = [];
+        if (Array.isArray(json)) items = json;
+        else if (Array.isArray(json?.items)) items = json.items;
+        else if (Array.isArray(json?.data)) items = json.data;
+
+        setNotifications(items);
+        setUnreadCount(typeof json?.unreadCount === 'number' ? json.unreadCount : 0);
         notifsLoadedForIdRef.current = userId;
       } catch (e) {
-        setNotifErr(String(e.message || e));
-        notifsLoadedForIdRef.current = userId;
+        if (!mountedRef.current || notifsReqSeqRef.current !== reqId) return;
+        setNotifErr(String(e?.message || e));
+        // NOTE: do not mark loaded-for-id on failure.
       } finally {
-        setNotifLoading(false);
+        if (mountedRef.current && notifsReqSeqRef.current === reqId) setNotifLoading(false);
         notifsInFlightRef.current = false;
       }
     },
@@ -791,13 +846,14 @@ export default function Dashboard() {
 
   async function markAllRead() {
     try {
-      const r = await fetch('/api/customers/notifications/mark-read', {
+      const { res, json } = await fetchJsonWithTimeout('/api/customers/notifications/mark-read', {
+        timeoutMs: 12000,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ all: true }),
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'failed to mark read');
+
+      if (!res.ok) throw new Error(json?.error || 'failed to mark read');
 
       setNotifications((list) =>
         list.map((n) => ({
@@ -867,13 +923,11 @@ export default function Dashboard() {
     return best || null;
   }, [orders]);
 
-  /** NEW: use the same status precedence as the order cards (ensures we treat "DELIVERED" as the truth). */
   const recentOrderStatus = useMemo(() => {
     if (!recentOrder) return '';
     return deriveOrderStatus(recentOrder);
   }, [recentOrder]);
 
-  // now safe to conditionally return
   if (authLost) {
     return (
       <div
@@ -1725,7 +1779,6 @@ export default function Dashboard() {
             <div style={{ borderTop: '1px solid rgba(148,163,184,0.35)', margin: '10px 0 8px' }} />
 
             <div style={{ marginTop: 2 }}>
-              {/* IMPORTANT CHANGE: remove double signOut (SignoutButton already signs out) */}
               <SignoutButton label="Logout" redirectTo="/" />
             </div>
           </div>
@@ -1846,13 +1899,11 @@ export default function Dashboard() {
       >
         {recentOrder ? (
           <PaymentMethodsBar
-            /** NEW: forces PaymentMethodsBar to remount when the latest order status changes */
             key={`pmb:${String(recentOrder.orderNumber || '')}:${String(recentOrder.id || '')}:${String(recentOrderStatus)}:${String(
               recentOrder.updatedAt || recentOrder.createdAt || recentOrder.placedAt || '',
             )}`}
             orderId={String(recentOrder.orderNumber || recentOrder.id)}
             locale="en"
-            /** Optional non-breaking hints (ignored if component doesn't use them) */
             status={recentOrderStatus}
             orderInternalId={String(recentOrder.id || '')}
             orderNumber={String(recentOrder.orderNumber || '')}
@@ -1863,10 +1914,6 @@ export default function Dashboard() {
 
       <WhatsAppFloatingButton />
 
-      {/**
-       * NEW: also give Bottomfloatingbar a stable key that changes with the latest order status.
-       * This prevents stale "Pending" if it internally caches the last order state.
-       */}
       <Bottomfloatingbar
         key={`bfb:${String(recentOrder?.orderNumber || '')}:${String(recentOrder?.id || '')}:${String(recentOrderStatus)}:${String(
           recentOrder?.updatedAt || recentOrder?.createdAt || recentOrder?.placedAt || '',

@@ -22,6 +22,9 @@ import HomePanelPreloader from "@/components/common/homepanel.preloader";
 // ✅ NEW: Preload BottomFloatingBar data (no click loading)
 import BottomFloatingBarPreloader from "@/components/common/bottomfloatingbar.preloader";
 
+// ✅ NEW: Preload Collections / All Products dataset (no click loading)
+import { HomePanelAllProductsPreloader } from "@/components/common/homepanel_all_products";
+
 /* ------------------------- URL + asset normalization ------------------------- */
 const SITE_URL = (() => {
   const raw =
@@ -190,6 +193,7 @@ export default function RootLayout({ children }) {
               {/* ✅ Preloaders run as early as possible on site load (no UI) */}
               <SlidingMenuBarPreloader />
               <HomePanelPreloader />
+              <HomePanelAllProductsPreloader />
               <BottomFloatingBarPreloader />
 
               <Providers>
