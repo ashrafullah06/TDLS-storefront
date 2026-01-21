@@ -1349,7 +1349,6 @@ export default function HomePanel({ open, onClose }) {
         ac.abort();
       } catch {}
     };
-    // intentionally not depending on loadedOnce to avoid "load later" behavior
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -1377,6 +1376,9 @@ export default function HomePanel({ open, onClose }) {
     return { top, bottom, maxH, panelW, showPreview };
   }, [navH, bottomH, isMobile, isCompactHeight, vw]);
 
+  // ✅ Mobile: when Collections is open, make it the only visible view (drawer hidden).
+  const mobileCollectionsFullscreen = isMobile && collectionsOpen;
+
   // If desktop preview is not eligible (responsive), never keep highlights flyout "open" in state.
   useEffect(() => {
     if (!layout.showPreview && openFlyoutRef.current === "highlights") {
@@ -1386,15 +1388,35 @@ export default function HomePanel({ open, onClose }) {
 
   const computeCollectionsGeom = useCallback(() => {
     if (typeof window === "undefined") return null;
-    const btn = collectionsBtnRef.current;
-    if (!btn) return null;
 
-    const rect = btn.getBoundingClientRect();
     const vwNow = window.innerWidth || 0;
     const vhNow = window.innerHeight || 0;
 
     const safe = 10;
     const gap = 14;
+
+    // ✅ Mobile: collections becomes a full-height view (drawer hidden), so geometry does not
+    // depend on the trigger button position.
+    if (isMobile) {
+      const topLimit = Math.max(safe + 2, navH + 10);
+      const bottomLimit = Math.max(topLimit + 260, vhNow - (bottomH + 24));
+      const width = Math.max(0, vwNow - safe * 2);
+      const maxHeight = clampInt(bottomLimit - topLimit, 360, 1200);
+
+      return {
+        top: topLimit,
+        left: safe,
+        width,
+        height: null,
+        maxHeight,
+        side: "left",
+      };
+    }
+
+    const btn = collectionsBtnRef.current;
+    if (!btn) return null;
+
+    const rect = btn.getBoundingClientRect();
 
     const drawerRect = panelRef.current?.getBoundingClientRect?.() || null;
 
@@ -1528,7 +1550,7 @@ export default function HomePanel({ open, onClose }) {
     const vv = window.visualViewport;
     if (vv?.addEventListener) {
       vv.addEventListener("resize", tick, { passive: true });
-      vv.addEventListener("scroll", tick, { passive: true }); // ✅ fixed typo
+      vv.addEventListener("scroll", tick, { passive: true });
     }
 
     return () => {
@@ -1602,13 +1624,16 @@ export default function HomePanel({ open, onClose }) {
     // If collections is open, keep it as the only overlay.
     if (collectionsOpen) return;
 
-    // ✅ single controller: open highlights
-    setOpenFlyout("highlights");
+    // ✅ FIX: dispatch first (close others), then open highlights (prevents race that can close it immediately)
     try {
       window.dispatchEvent(
         new CustomEvent("tdls:homepanel:closeFlyouts", { detail: { except: "highlights" } })
       );
     } catch {}
+
+    // ensure collections layout flags cannot linger
+    setCollectionsReady(false);
+    setOpenFlyout("highlights");
   }, [isMobile, layout.showPreview, collectionsOpen]);
 
   const scheduleOpenHighlightsPreview = useCallback(() => {
@@ -1937,6 +1962,21 @@ export default function HomePanel({ open, onClose }) {
           text-overflow: ellipsis;
         }
 
+        .tdls-collections-flyback{
+          height: 40px;
+          width: 44px;
+          border-radius: 14px;
+          border: 1px solid rgba(15,33,71,.14);
+          background: rgba(255,255,255,.92);
+          color: ${NAVY};
+          cursor: pointer;
+          box-shadow: 0 12px 26px rgba(6,10,24,.12);
+          transition: transform .10s ease, background .12s ease;
+          flex: 0 0 auto;
+        }
+        .tdls-collections-flyback:hover{ transform: translateY(-1px); background: rgba(246,247,251,.95); }
+        .tdls-collections-flyback:active{ transform: translateY(0); }
+
         .tdls-collections-flyclose{
           height: 40px;
           width: 40px;
@@ -2157,335 +2197,337 @@ export default function HomePanel({ open, onClose }) {
           </div>
         ) : null}
 
-        <aside
-          ref={panelRef}
-          className="tdls-homepanel-drawer"
-          role="dialog"
-          aria-modal="true"
-          tabIndex={-1}
-          aria-label="Home panel"
-        >
-          <div className="tdls-homepanel-head">
-            <div className="tdls-homepanel-title">
-              <h3>Home</h3>
-              <p title={displayName}>{isAuthed ? displayName : "Guest mode"}</p>
-            </div>
-
-            <button
-              type="button"
-              className="tdls-homepanel-close"
-              aria-label="Close home panel"
-              onClick={() => {
-                closeAllFlyouts();
-                onClose?.();
-              }}
-            >
-              <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
-                ×
-              </span>
-            </button>
-          </div>
-
-          <div ref={bodyRef} className="tdls-homepanel-body">
-            <div className="tdls-homepanel-section">
-              <div className="tdls-homepanel-section-title">Quick actions</div>
-              <div className="tdls-homepanel-grid">
-                {isAuthed ? (
-                  <PillButton
-                    title="My Account"
-                    subtitle="Dashboard & profile"
-                    icon={<Icon name="user" />}
-                    onClick={() => handleNavigate(routes.customerDashboard)}
-                    variant="dark"
-                  />
-                ) : (
-                  <PillButton
-                    title="Customer Sign In"
-                    subtitle="Login with OTP"
-                    icon={<Icon name="user" />}
-                    onClick={() => handleNavigate(routes.customerLogin)}
-                    variant="dark"
-                  />
-                )}
-
-                <PillButton
-                  title="Collections"
-                  subtitle={collectionsOpen ? "Browse categories (open)" : "Browse categories"}
-                  icon={<Icon name="spark" />}
-                  onClick={toggleCollectionsClick}
-                  variant="glass"
-                  buttonRef={collectionsBtnRef}
-                  onMouseEnter={scheduleOpenCollections}
-                  onMouseLeave={scheduleCloseCollections}
-                  onFocus={() => scheduleOpenCollections()}
-                  onBlur={(e) => scheduleCloseCollections(e)}
-                  ariaHaspopup="dialog"
-                  ariaExpanded={collectionsOpen}
-                  ariaControls="tdls-collections-flyout"
-                />
-
-                <PillButton
-                  title="Cart"
-                  subtitle="Review & checkout"
-                  icon={<Icon name="cart" />}
-                  onClick={() => handleNavigate(routes.cart)}
-                  variant="gold"
-                />
-
-                <PillButton
-                  title="Admin"
-                  subtitle="Only for TDLS admin"
-                  icon={<Icon name="bag" />}
-                  onClick={() => handleNavigate(routes.adminLogin)}
-                  variant="glass"
-                />
-
-                {isAuthed ? (
-                  <PillButton
-                    title="Sign Out"
-                    subtitle="Logout from customer"
-                    icon={<Icon name="user" />}
-                    onClick={handleSignOut}
-                    variant="glass"
-                  />
-                ) : null}
+        {!mobileCollectionsFullscreen ? (
+          <aside
+            ref={panelRef}
+            className="tdls-homepanel-drawer"
+            role="dialog"
+            aria-modal="true"
+            tabIndex={-1}
+            aria-label="Home panel"
+          >
+            <div className="tdls-homepanel-head">
+              <div className="tdls-homepanel-title">
+                <h3>Home</h3>
+                <p title={displayName}>{isAuthed ? displayName : "Guest mode"}</p>
               </div>
-            </div>
 
-            <div
-              ref={highlightsSectionRef}
-              className="tdls-homepanel-section"
-              // ✅ Desktop: preview opens only when user intentionally hovers/focuses this section
-              onMouseEnter={() => {
-                cancelCloseHighlightsPreview();
-                scheduleOpenHighlightsPreview();
-              }}
-              onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
-              onFocusCapture={() => {
-                cancelCloseHighlightsPreview();
-                scheduleOpenHighlightsPreview();
-              }}
-              onBlurCapture={(e) => scheduleCloseHighlightsPreview(e)}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 10,
+              <button
+                type="button"
+                className="tdls-homepanel-close"
+                aria-label="Close home panel"
+                onClick={() => {
+                  closeAllFlyouts();
+                  onClose?.();
                 }}
               >
-                <div className="tdls-homepanel-section-title">Highlights</div>
+                <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
+                  ×
+                </span>
+              </button>
+            </div>
 
-                <div className="tdls-homepanel-tabs" role="tablist" aria-label="Highlights tabs">
-                  <TabButton
-                    id="TRENDING"
-                    label="Trending"
-                    labelSub={trendingProducts.length ? `${trendingProducts.length}` : ""}
-                    active={activeTab === "TRENDING"}
-                    onSelect={(id) => {
-                      setActiveTab(id);
-                      // ✅ Click intent: open preview on desktop
-                      openHighlightsPreview();
-                    }}
+            <div ref={bodyRef} className="tdls-homepanel-body">
+              <div className="tdls-homepanel-section">
+                <div className="tdls-homepanel-section-title">Quick actions</div>
+                <div className="tdls-homepanel-grid">
+                  {isAuthed ? (
+                    <PillButton
+                      title="My Account"
+                      subtitle="Dashboard & profile"
+                      icon={<Icon name="user" />}
+                      onClick={() => handleNavigate(routes.customerDashboard)}
+                      variant="dark"
+                    />
+                  ) : (
+                    <PillButton
+                      title="Customer Sign In"
+                      subtitle="Login with OTP"
+                      icon={<Icon name="user" />}
+                      onClick={() => handleNavigate(routes.customerLogin)}
+                      variant="dark"
+                    />
+                  )}
+
+                  <PillButton
+                    title="Collections"
+                    subtitle={collectionsOpen ? "Browse categories (open)" : "Browse categories"}
+                    icon={<Icon name="spark" />}
+                    onClick={toggleCollectionsClick}
+                    variant="glass"
+                    buttonRef={collectionsBtnRef}
+                    onMouseEnter={scheduleOpenCollections}
+                    onMouseLeave={scheduleCloseCollections}
+                    onFocus={() => scheduleOpenCollections()}
+                    onBlur={(e) => scheduleCloseCollections(e)}
+                    ariaHaspopup="dialog"
+                    ariaExpanded={collectionsOpen}
+                    ariaControls="tdls-collections-flyout"
                   />
-                  <TabButton
-                    id="BEST"
-                    label="Best Sellers"
-                    labelSub={bestSellerProducts.length ? `${bestSellerProducts.length}` : ""}
-                    active={activeTab === "BEST"}
-                    onSelect={(id) => {
-                      setActiveTab(id);
-                      // ✅ Click intent: open preview on desktop
-                      openHighlightsPreview();
-                    }}
+
+                  <PillButton
+                    title="Cart"
+                    subtitle="Review & checkout"
+                    icon={<Icon name="cart" />}
+                    onClick={() => handleNavigate(routes.cart)}
+                    variant="gold"
                   />
+
+                  <PillButton
+                    title="Admin"
+                    subtitle="Only for TDLS admin"
+                    icon={<Icon name="bag" />}
+                    onClick={() => handleNavigate(routes.adminLogin)}
+                    variant="glass"
+                  />
+
+                  {isAuthed ? (
+                    <PillButton
+                      title="Sign Out"
+                      subtitle="Logout from customer"
+                      icon={<Icon name="user" />}
+                      onClick={handleSignOut}
+                      variant="glass"
+                    />
+                  ) : null}
                 </div>
               </div>
 
-              {loadingHighlights ? (
+              <div
+                ref={highlightsSectionRef}
+                className="tdls-homepanel-section"
+                // ✅ Desktop: preview opens only when user intentionally hovers/focuses this section
+                onMouseEnter={() => {
+                  cancelCloseHighlightsPreview();
+                  scheduleOpenHighlightsPreview();
+                }}
+                onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
+                onFocusCapture={() => {
+                  cancelCloseHighlightsPreview();
+                  scheduleOpenHighlightsPreview();
+                }}
+                onBlurCapture={(e) => scheduleCloseHighlightsPreview(e)}
+              >
                 <div
                   style={{
-                    border: `1px dashed ${BORDER}`,
-                    borderRadius: 18,
-                    padding: 16,
-                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
-                    color: NAVY_SOFT,
-                    fontFamily: SYS_FONT,
-                    fontWeight: 900,
-                    letterSpacing: ".12em",
-                    textTransform: "uppercase",
-                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
                   }}
                 >
-                  Loading highlights…
-                </div>
-              ) : highlightsError ? (
-                <div
-                  style={{
-                    border: `1px dashed ${BORDER}`,
-                    borderRadius: 18,
-                    padding: 16,
-                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
-                    color: NAVY_SOFT,
-                    fontFamily: SYS_FONT,
-                    fontWeight: 800,
-                    fontSize: 13,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {highlightsError}
-                </div>
-              ) : activeList.length > 0 ? (
-                <div
-                  className="tdls-homepanel-rail"
-                  role="list"
-                  onMouseEnter={() => {
-                    cancelCloseHighlightsPreview();
-                    scheduleOpenHighlightsPreview();
-                  }}
-                  onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
-                >
-                  {activeList.map((it, idx) => (
-                    <div key={it.slug || it.id || idx} role="listitem">
-                      <RailItem
-                        item={it}
-                        index={idx}
-                        isActive={idx === safeIndex}
-                        onHover={setHoverIndex}
-                        onHoverIntent={scheduleRailHoverIndex}
-                        onHoverCancel={cancelRailHoverIndex}
-                        onOpen={handleNavigate}
-                        fallbackHref={routes.allProducts}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    border: `1px dashed ${BORDER}`,
-                    borderRadius: 18,
-                    padding: 16,
-                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
-                    color: NAVY_SOFT,
-                    fontFamily: SYS_FONT,
-                    fontWeight: 800,
-                    fontSize: 13,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  No highlights yet.
-                </div>
-              )}
+                  <div className="tdls-homepanel-section-title">Highlights</div>
 
-              {!layout.showPreview && previewItem ? (
-                <div
-                  style={{
-                    marginTop: 10,
-                    borderRadius: 18,
-                    border: `1px solid ${BORDER}`,
-                    background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
-                    overflow: "hidden",
-                    boxShadow: "0 16px 40px rgba(6,10,24,.10)",
-                  }}
-                >
-                  <div style={{ display: "flex", gap: 12, padding: 12, alignItems: "center", minWidth: 0 }}>
-                    <div
-                      style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 14,
-                        background: "rgba(15,33,71,.08)",
-                        border: "1px solid rgba(15,33,71,.10)",
-                        overflow: "hidden",
-                        flex: "0 0 auto",
-                        position: "relative",
+                  <div className="tdls-homepanel-tabs" role="tablist" aria-label="Highlights tabs">
+                    <TabButton
+                      id="TRENDING"
+                      label="Trending"
+                      labelSub={trendingProducts.length ? `${trendingProducts.length}` : ""}
+                      active={activeTab === "TRENDING"}
+                      onSelect={(id) => {
+                        setActiveTab(id);
+                        // ✅ Click intent: open preview on desktop
+                        openHighlightsPreview();
                       }}
-                    >
-                      {previewItem.coverImageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={absUrl(previewItem.coverImageUrl)}
-                          alt={previewItem.coverImageAlt || previewItem.title || "Preview"}
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                          loading="lazy"
-                        />
-                      ) : null}
-                    </div>
-
-                    <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                      <div
-                        style={{
-                          fontFamily: LUX_FONT,
-                          fontWeight: 900,
-                          color: NAVY,
-                          fontSize: 14.5,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {previewItem.title}
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 3,
-                          fontFamily: SYS_FONT,
-                          fontWeight: 800,
-                          fontSize: 12,
-                          color: NAVY_SOFT,
-                          opacity: 0.85,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        Tap to open
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleNavigate(previewItem.href || routes.allProducts)}
-                      style={{
-                        flex: "0 0 auto",
-                        borderRadius: 999,
-                        border: `1px solid rgba(15,33,71,.14)`,
-                        background: `linear-gradient(180deg, #ffffff 0%, #f4f6fe 100%)`,
-                        color: NAVY,
-                        fontFamily: SYS_FONT,
-                        fontWeight: 900,
-                        letterSpacing: ".14em",
-                        textTransform: "uppercase",
-                        fontSize: 11,
-                        padding: "10px 12px",
-                        cursor: "pointer",
-                        touchAction: "manipulation",
+                    />
+                    <TabButton
+                      id="BEST"
+                      label="Best Sellers"
+                      labelSub={bestSellerProducts.length ? `${bestSellerProducts.length}` : ""}
+                      active={activeTab === "BEST"}
+                      onSelect={(id) => {
+                        setActiveTab(id);
+                        // ✅ Click intent: open preview on desktop
+                        openHighlightsPreview();
                       }}
-                    >
-                      Open
-                    </button>
+                    />
                   </div>
                 </div>
-              ) : null}
-            </div>
 
-            <div
-              style={{
-                marginTop: 14,
-                textAlign: "center",
-                color: NAVY_SOFT,
-                opacity: 0.7,
-                fontFamily: SYS_FONT,
-                fontWeight: 800,
-                fontSize: 12,
-              }}
-            >
-              Swipe left to close. Tap outside to dismiss.
+                {loadingHighlights ? (
+                  <div
+                    style={{
+                      border: `1px dashed ${BORDER}`,
+                      borderRadius: 18,
+                      padding: 16,
+                      background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                      color: NAVY_SOFT,
+                      fontFamily: SYS_FONT,
+                      fontWeight: 900,
+                      letterSpacing: ".12em",
+                      textTransform: "uppercase",
+                      fontSize: 11,
+                    }}
+                  >
+                    Loading highlights…
+                  </div>
+                ) : highlightsError ? (
+                  <div
+                    style={{
+                      border: `1px dashed ${BORDER}`,
+                      borderRadius: 18,
+                      padding: 16,
+                      background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                      color: NAVY_SOFT,
+                      fontFamily: SYS_FONT,
+                      fontWeight: 800,
+                      fontSize: 13,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {highlightsError}
+                  </div>
+                ) : activeList.length > 0 ? (
+                  <div
+                    className="tdls-homepanel-rail"
+                    role="list"
+                    onMouseEnter={() => {
+                      cancelCloseHighlightsPreview();
+                      scheduleOpenHighlightsPreview();
+                    }}
+                    onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
+                  >
+                    {activeList.map((it, idx) => (
+                      <div key={it.slug || it.id || idx} role="listitem">
+                        <RailItem
+                          item={it}
+                          index={idx}
+                          isActive={idx === safeIndex}
+                          onHover={setHoverIndex}
+                          onHoverIntent={scheduleRailHoverIndex}
+                          onHoverCancel={cancelRailHoverIndex}
+                          onOpen={handleNavigate}
+                          fallbackHref={routes.allProducts}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      border: `1px dashed ${BORDER}`,
+                      borderRadius: 18,
+                      padding: 16,
+                      background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                      color: NAVY_SOFT,
+                      fontFamily: SYS_FONT,
+                      fontWeight: 800,
+                      fontSize: 13,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    No highlights yet.
+                  </div>
+                )}
+
+                {!layout.showPreview && previewItem ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      borderRadius: 18,
+                      border: `1px solid ${BORDER}`,
+                      background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
+                      overflow: "hidden",
+                      boxShadow: "0 16px 40px rgba(6,10,24,.10)",
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 12, padding: 12, alignItems: "center", minWidth: 0 }}>
+                      <div
+                        style={{
+                          width: 56,
+                          height: 56,
+                          borderRadius: 14,
+                          background: "rgba(15,33,71,.08)",
+                          border: "1px solid rgba(15,33,71,.10)",
+                          overflow: "hidden",
+                          flex: "0 0 auto",
+                          position: "relative",
+                        }}
+                      >
+                        {previewItem.coverImageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={absUrl(previewItem.coverImageUrl)}
+                            alt={previewItem.coverImageAlt || previewItem.title || "Preview"}
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            loading="lazy"
+                          />
+                        ) : null}
+                      </div>
+
+                      <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                        <div
+                          style={{
+                            fontFamily: LUX_FONT,
+                            fontWeight: 900,
+                            color: NAVY,
+                            fontSize: 14.5,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {previewItem.title}
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 3,
+                            fontFamily: SYS_FONT,
+                            fontWeight: 800,
+                            fontSize: 12,
+                            color: NAVY_SOFT,
+                            opacity: 0.85,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          Tap to open
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleNavigate(previewItem.href || routes.allProducts)}
+                        style={{
+                          flex: "0 0 auto",
+                          borderRadius: 999,
+                          border: `1px solid rgba(15,33,71,.14)`,
+                          background: `linear-gradient(180deg, #ffffff 0%, #f4f6fe 100%)`,
+                          color: NAVY,
+                          fontFamily: SYS_FONT,
+                          fontWeight: 900,
+                          letterSpacing: ".14em",
+                          textTransform: "uppercase",
+                          fontSize: 11,
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          touchAction: "manipulation",
+                        }}
+                      >
+                        Open
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div
+                style={{
+                  marginTop: 14,
+                  textAlign: "center",
+                  color: NAVY_SOFT,
+                  opacity: 0.7,
+                  fontFamily: SYS_FONT,
+                  fontWeight: 800,
+                  fontSize: 12,
+                }}
+              >
+                Swipe left to close. Tap outside to dismiss.
+              </div>
             </div>
-          </div>
-        </aside>
+          </aside>
+        ) : null}
 
         {collectionsOpen && collectionsReady ? (
           <div
@@ -2494,14 +2536,27 @@ export default function HomePanel({ open, onClose }) {
             className="tdls-collections-flyout"
             role="dialog"
             aria-label="Collections flyout"
-            style={{
-              top: collectionsGeom.top,
-              left: collectionsGeom.left,
-              width: collectionsGeom.width,
-              ["--fly-h"]: collectionsGeom.height ? `${collectionsGeom.height}px` : undefined,
-              ["--fly-max-h"]: `${collectionsGeom.maxHeight}px`,
-              ["--fly-origin"]: collectionsGeom.side === "right" ? "left top" : "right top",
-            }}
+            style={
+              mobileCollectionsFullscreen
+                ? {
+                    top: layout.top,
+                    bottom: layout.bottom,
+                    left: "max(10px, env(safe-area-inset-left))",
+                    right: "max(10px, env(safe-area-inset-right))",
+                    width: "auto",
+                    ["--fly-h"]: undefined,
+                    ["--fly-max-h"]: "none",
+                    ["--fly-origin"]: "center top",
+                  }
+                : {
+                    top: collectionsGeom.top,
+                    left: collectionsGeom.left,
+                    width: collectionsGeom.width,
+                    ["--fly-h"]: collectionsGeom.height ? `${collectionsGeom.height}px` : undefined,
+                    ["--fly-max-h"]: `${collectionsGeom.maxHeight}px`,
+                    ["--fly-origin"]: collectionsGeom.side === "right" ? "left top" : "right top",
+                  }
+            }
             onMouseEnter={() => cancelCloseCollections()}
             onMouseLeave={(e) => scheduleCloseCollections(e)}
             onPointerDownCapture={onFlyPointerDownCapture}
@@ -2510,13 +2565,35 @@ export default function HomePanel({ open, onClose }) {
             onClickCapture={onFlyClickCapture}
           >
             <div className="tdls-collections-flyhead">
-              <div className="tdls-collections-flytitle">Collections</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                {mobileCollectionsFullscreen ? (
+                  <button
+                    type="button"
+                    className="tdls-collections-flyback"
+                    aria-label="Back to Home panel"
+                    onClick={() => closeCollections()}
+                  >
+                    <span aria-hidden="true" style={{ fontSize: 16, fontWeight: 900 }}>
+                      ←
+                    </span>
+                  </button>
+                ) : null}
+
+                <div className="tdls-collections-flytitle">Collections</div>
+              </div>
 
               <button
                 type="button"
                 className="tdls-collections-flyclose"
-                aria-label="Close collections flyout"
-                onClick={() => closeCollections()}
+                aria-label={mobileCollectionsFullscreen ? "Close collections" : "Close collections flyout"}
+                onClick={() => {
+                  if (mobileCollectionsFullscreen) {
+                    closeAllFlyouts();
+                    onClose?.();
+                  } else {
+                    closeCollections();
+                  }
+                }}
               >
                 <span aria-hidden="true" style={{ fontSize: 18, fontWeight: 900 }}>
                   ×
@@ -2533,13 +2610,14 @@ export default function HomePanel({ open, onClose }) {
                   // respect modified clicks / already-handled clicks
                   if (
                     e.defaultPrevented ||
-                    e.button !== 0 ||
+                    (typeof e.button === "number" && e.button !== 0) ||
                     e.metaKey ||
                     e.ctrlKey ||
                     e.shiftKey ||
                     e.altKey
-                  )
+                  ) {
                     return;
+                  }
 
                   const a = e.target?.closest?.("a[href]");
                   if (!a) return;
