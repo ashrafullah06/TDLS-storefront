@@ -17,17 +17,28 @@ const SYS_FONT =
   "Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif";
 const LUX_FONT = "'Playfair Display','Georgia',serif";
 
-/* ===================== CLIENT-SAFE FALLBACK FETCHERS (VIA PROXY) ===================== */
-async function fetchFromStrapi(path) {
+/* ===================== FETCH (PRODUCTION-SAFE) ===================== */
+/**
+ * Key changes vs your current code:
+ * - cache: "no-store" (avoid sticky cached 401/500/empty payloads in prod)
+ * - bust param &_=Date.now() (extra guard against edge/browser caching)
+ * - supports AbortController signal (your timeout now works)
+ */
+async function fetchFromStrapi(path, signal) {
   try {
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const q = encodeURIComponent(normalizedPath);
 
-    const res = await fetch(`/api/strapi?path=${q}`, {
+    const url = `/api/strapi?path=${q}&_=${Date.now()}`;
+
+    const res = await fetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
-      cache: "force-cache",
+      cache: "no-store",
+      credentials: "same-origin",
+      signal,
     });
+
     if (!res.ok) return null;
 
     const raw = await res.json().catch(() => null);
@@ -41,8 +52,16 @@ async function fetchFromStrapi(path) {
   }
 }
 
-async function fetchProductsClient() {
-  const payload = await fetchFromStrapi("/products?populate=*");
+/* ===================== CLIENT FETCHERS (WITH PAGE SIZE) ===================== */
+const PAGE_PRODUCTS = 500;
+const PAGE_TAXONOMY = 500;
+
+async function fetchProductsClient(signal) {
+  // Ensure we fetch enough for full taxonomy build (Strapi default pageSize is often 25)
+  const payload = await fetchFromStrapi(
+    `/products?populate=*&pagination[pageSize]=${PAGE_PRODUCTS}`,
+    signal
+  );
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
   return data.map((n) =>
@@ -50,8 +69,11 @@ async function fetchProductsClient() {
   );
 }
 
-async function fetchAgeGroupsClient() {
-  const payload = await fetchFromStrapi("/age-groups?populate=*");
+async function fetchAgeGroupsClient(signal) {
+  const payload = await fetchFromStrapi(
+    `/age-groups?populate=*&pagination[pageSize]=${PAGE_TAXONOMY}`,
+    signal
+  );
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
   return data
@@ -67,8 +89,11 @@ async function fetchAgeGroupsClient() {
     .filter((x) => x.slug && x.name);
 }
 
-async function fetchCategoriesClient() {
-  const payload = await fetchFromStrapi("/categories?populate=*");
+async function fetchCategoriesClient(signal) {
+  const payload = await fetchFromStrapi(
+    `/categories?populate=*&pagination[pageSize]=${PAGE_TAXONOMY}`,
+    signal
+  );
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
   return data
@@ -84,13 +109,14 @@ async function fetchCategoriesClient() {
     .filter((x) => x.slug && x.name);
 }
 
-async function fetchAudienceCategoriesClient() {
+async function fetchAudienceCategoriesClient(signal) {
   const payload =
     (await fetchFromStrapi(
-      "/audience-categories?populate=*&pagination[pageSize]=500"
+      `/audience-categories?populate=*&pagination[pageSize]=${PAGE_TAXONOMY}`,
+      signal
     )) ||
-    (await fetchFromStrapi("/audience-categories?populate=*")) ||
-    (await fetchFromStrapi("/audience-categories"));
+    (await fetchFromStrapi("/audience-categories?populate=*", signal)) ||
+    (await fetchFromStrapi("/audience-categories", signal));
 
   if (!payload) return [];
   const data = Array.isArray(payload.data) ? payload.data : [];
@@ -593,12 +619,7 @@ function buildSeasonal(products, seasonSlug, labels) {
     sections.push({ label: "Accessories", href: accessoriesPrefix, children: accessories });
 
   const menPrefix = `/collections/${seasonalKey}/men`;
-  const men = buildMWHD(
-    seasonal.filter((p) => hasAudience(p, "men")),
-    "men",
-    labels,
-    menPrefix
-  );
+  const men = buildMWHD(seasonal.filter((p) => hasAudience(p, "men")), "men", labels, menPrefix);
   if (men.length) sections.push({ label: "Men", href: menPrefix, children: men });
 
   const womenPrefix = `/collections/${seasonalKey}/women`;
@@ -628,7 +649,7 @@ const LS_DATA_TS = "tdls:homepanel:allproducts:ts:v1";
 const TTL_MS = 6 * 60 * 60 * 1000; // 6h
 const LS_LAST_KEY = "tdls:homepanel:allproducts:last_audience:v1";
 
-/* ---- preload coordination (so flyout never “loads later”) ---- */
+/* ---- preload coordination ---- */
 const LS_READY_EVENT = "tdls:homepanel:allproductsReady";
 const LS_LOCK_KEY = "tdls:homepanel:allproducts:lock:v1";
 const LOCK_TTL_MS = 25 * 1000; // 25s
@@ -692,11 +713,13 @@ function releaseLock() {
   } catch {}
 }
 
+/**
+ * FIX: Do NOT require categories to be present to consider dataset usable.
+ * Products alone are enough to build options (labels fall back to titleize).
+ */
 function hasUsableCachedDataset(cached) {
   const p = Array.isArray(cached?.products) ? cached.products : [];
-  const c = Array.isArray(cached?.categories) ? cached.categories : [];
-  // Products are the core; categories help labels; audienceCategories help extras.
-  return p.length > 0 && c.length > 0;
+  return p.length > 0;
 }
 
 function toLiteProduct(p) {
@@ -712,7 +735,7 @@ function toLiteProduct(p) {
   };
 }
 
-/* ===================== PRELOADER (mount in app/layout.js for zero-wait flyout) ===================== */
+/* ===================== PRELOADER ===================== */
 export function HomePanelAllProductsPreloader() {
   const startedRef = useRef(false);
 
@@ -725,13 +748,11 @@ export function HomePanelAllProductsPreloader() {
     const cached = readJson(LS_DATA_KEY);
     const ts = readTs(LS_DATA_TS);
 
-    // If cache is fresh and usable, announce readiness and do nothing else.
     if (cached && isFresh(ts) && hasUsableCachedDataset(cached)) {
       dispatchReady();
       return;
     }
 
-    // Avoid stampede across tabs / double mounts.
     if (!acquireLock()) return;
 
     let cancelled = false;
@@ -745,10 +766,10 @@ export function HomePanelAllProductsPreloader() {
     (async () => {
       try {
         const [ps, ags, cats, auds] = await Promise.allSettled([
-          fetchProductsClient(),
-          fetchAgeGroupsClient(),
-          fetchCategoriesClient(),
-          fetchAudienceCategoriesClient(),
+          fetchProductsClient(ac.signal),
+          fetchAgeGroupsClient(ac.signal),
+          fetchCategoriesClient(ac.signal),
+          fetchAudienceCategoriesClient(ac.signal),
         ]);
 
         if (cancelled) return;
@@ -761,7 +782,8 @@ export function HomePanelAllProductsPreloader() {
         const nextCats = cats.status === "fulfilled" && Array.isArray(cats.value) ? cats.value : [];
         const nextAud = auds.status === "fulfilled" && Array.isArray(auds.value) ? auds.value : [];
 
-        if (nextProducts.length && nextCats.length) {
+        // FIX: write + ready if Products exist (categories may fail but menus can still render)
+        if (nextProducts.length) {
           writeJson(LS_DATA_KEY, {
             products: nextProducts,
             ageGroups: nextAge,
@@ -772,7 +794,7 @@ export function HomePanelAllProductsPreloader() {
           dispatchReady();
         }
       } catch {
-        // Silent by design (flyout will still use any existing cache)
+        // silent
       } finally {
         window.clearTimeout(timeoutId);
         releaseLock();
@@ -809,11 +831,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   const optionsCacheRef = useRef(new Map());
   const [isMobile, setIsMobile] = useState(false);
 
-  // Mobile UX: show audience list first, then a dedicated "options" pane
   const [mobilePane, setMobilePane] = useState("audience"); // "audience" | "options"
   const rightPaneRef = useRef(null);
 
-  /* ------------------- Touch scroll guard (prevents accidental taps) ------------------- */
+  /* ------------------- Touch scroll guard ------------------- */
   const ignoreClickUntilRef = useRef(0);
   const gestureRef = useRef({ active: false, x: 0, y: 0, moved: false });
 
@@ -838,7 +859,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       (typeof e.clientY === "number" ? e.clientY : 0) - gestureRef.current.y
     );
 
-    // Small threshold: treat as scroll intent, then ignore the synthetic click
     if (dx > 8 || dy > 8) gestureRef.current.moved = true;
   };
 
@@ -846,8 +866,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     if (!e || e.pointerType !== "touch") return;
     const moved = Boolean(gestureRef.current.moved);
     gestureRef.current.active = false;
-
-    // If user was scrolling, ignore click events that follow immediately (mobile browsers)
     if (moved) ignoreClickUntilRef.current = Date.now() + 320;
   };
 
@@ -861,7 +879,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     return () => mq.removeEventListener?.("change", apply);
   }, []);
 
-  // hydrate from cache instantly + background refresh
+  // hydrate from cache instantly + background refresh (with 1 retry if empty)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -873,7 +891,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const bootCats = Array.isArray(cached?.categories) ? cached.categories : [];
     const bootAud = Array.isArray(cached?.audienceCategories) ? cached.audienceCategories : [];
 
-    // Instant hydration if cache exists (no waiting UI)
     if (bootProducts.length) setProducts(bootProducts);
     if (bootAge.length) setAgeGroups(bootAge);
     if (bootCats.length) setCategoriesList(bootCats);
@@ -883,12 +900,11 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const usable = cached && hasUsableCachedDataset(cached);
 
     let cancelled = false;
+    let attempts = 0;
 
     // If cache is fresh and usable, do not fetch here.
-    // (Preloader owns warm-load; this component stays instant.)
     if (!stale && usable) return;
 
-    // Avoid overwrite with empty arrays when partial fetch fails.
     const fallback = {
       products: bootProducts,
       ageGroups: bootAge,
@@ -896,18 +912,27 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       audienceCategories: bootAud,
     };
 
-    // If preloader is already fetching, don't stampede.
-    if (!acquireLock()) return;
+    const doFetch = async () => {
+      attempts += 1;
 
-    (async () => {
+      // If preloader is already fetching, rely on the ready event
+      if (!acquireLock()) return;
+
+      const ac = new AbortController();
+      const timeoutId = window.setTimeout(() => {
+        try {
+          ac.abort();
+        } catch {}
+      }, 6500);
+
       try {
         setFetchError(false);
 
         const [ps, ags, cats, auds] = await Promise.allSettled([
-          fetchProductsClient(),
-          fetchAgeGroupsClient(),
-          fetchCategoriesClient(),
-          fetchAudienceCategoriesClient(),
+          fetchProductsClient(ac.signal),
+          fetchAgeGroupsClient(ac.signal),
+          fetchCategoriesClient(ac.signal),
+          fetchAudienceCategoriesClient(ac.signal),
         ]);
 
         if (cancelled) return;
@@ -923,12 +948,20 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         const finalCats = nextCats.length ? nextCats : fallback.categories;
         const finalAud = nextAud.length ? nextAud : fallback.audienceCategories;
 
-        // Only mark error if we truly have nothing to show.
-        if (!finalProducts.length || !finalCats.length) {
-          if (!fallback.products.length && !fallback.categories.length) setFetchError(true);
+        // FIX: error only if we truly have NO products to build menus
+        if (!finalProducts.length) {
+          if (!fallback.products.length) setFetchError(true);
+
+          // 1 controlled retry (cold-start / transient)
+          if (attempts < 2 && !cancelled) {
+            window.setTimeout(() => {
+              if (!cancelled) doFetch().catch(() => {});
+            }, 1400);
+          }
+          return;
         }
 
-        if (finalProducts.length) setProducts(finalProducts);
+        setProducts(finalProducts);
         if (finalAge.length) setAgeGroups(finalAge);
         if (finalCats.length) setCategoriesList(finalCats);
         if (finalAud.length) setAudienceCategories(finalAud);
@@ -940,19 +973,22 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           audienceCategories: finalAud,
         });
         writeTs(LS_DATA_TS);
-
-        // Notify any listener (and keep behavior consistent with preloader).
         dispatchReady();
       } catch {
-        // Only show error state if there's no cache to rely on.
         if (!cancelled) {
           const stillCached = readJson(LS_DATA_KEY);
           if (!stillCached || !hasUsableCachedDataset(stillCached)) setFetchError(true);
         }
       } finally {
+        window.clearTimeout(timeoutId);
         releaseLock();
+        try {
+          ac.abort();
+        } catch {}
       }
-    })();
+    };
+
+    doFetch().catch(() => {});
 
     return () => {
       cancelled = true;
@@ -979,7 +1015,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       if (c.length) setCategoriesList(c);
       if (ac.length) setAudienceCategories(ac);
 
-      if (p.length && c.length) setFetchError(false);
+      if (p.length) setFetchError(false);
     };
 
     window.addEventListener(LS_READY_EVENT, onReady);
@@ -1063,9 +1099,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       options = buildAccessories(products, labels);
     } else if (["kids", "young"].includes(key)) {
       options = buildKidsYoung(products, key, labels);
-    } else if (
-      ["new-arrival", "on-sale", "monsoon", "summer", "winter"].includes(key)
-    ) {
+    } else if (["new-arrival", "on-sale", "monsoon", "summer", "winter"].includes(key)) {
       options = buildSeasonal(products, key, labels);
     } else {
       options = buildMWHD(products, key, labels);
@@ -1096,9 +1130,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       }
     }
 
-    if (active) {
-      setSubOptions(computeOptions(active.key));
-    }
+    if (active) setSubOptions(computeOptions(active.key));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, ageGroups, categoriesList, audienceCategories, barItems]);
 
@@ -1139,7 +1171,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     }
   };
 
-  /* ===================== Desktop hover-intent (previews options without hypersensitivity) ===================== */
+  /* ===================== Desktop hover-intent ===================== */
   const hoverTimerRef = useRef(null);
   const hoverKeyRef = useRef("");
   const ignoreHoverUntilRef = useRef(0);
@@ -1172,13 +1204,12 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
   const schedulePreview = (item) => {
     if (!item?.key) return;
-    if (isMobile) return; // mobile uses click/tap only
+    if (isMobile) return;
     if (Date.now() < (ignoreHoverUntilRef.current || 0)) return;
 
     cancelHoverIntent();
     hoverKeyRef.current = String(item.key);
 
-    // Hover-intent delay prevents accidental selection when passing over items.
     hoverTimerRef.current = window.setTimeout(() => {
       if (hoverKeyRef.current !== String(item.key)) return;
       previewAudience(item);
@@ -1186,7 +1217,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   };
 
   const onLeftWheel = () => {
-    // When scrolling the left list, do NOT switch selection from incidental hover.
     ignoreHoverUntilRef.current = Date.now() + 240;
     cancelHoverIntent();
   };
@@ -1199,10 +1229,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         :root{
           --hpFly-radius: 18px;
           --hpFly-shadow: 0 18px 44px rgba(6,10,24,.12);
-          --hpFly-maxw: 1240px;           /* bigger flyout */
-          --hpFly-leftw: 280px;           /* more room for labels */
-          --hpFly-minh: 480px;            /* bigger canvas */
-          --hpFly-maxh: min(80vh, 820px); /* no overflow */
+          --hpFly-maxw: 1240px;
+          --hpFly-leftw: 280px;
+          --hpFly-minh: 480px;
+          --hpFly-maxh: min(80vh, 820px);
         }
 
         .hpFly-root{
@@ -1277,7 +1307,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           overflow: hidden;
         }
 
-        /* Bigger, more usable canvas */
         .hpFly-grid{
           display: grid;
           grid-template-columns: var(--hpFly-leftw) 1fr;
@@ -1299,20 +1328,17 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         .hpFly-right{
           padding: 12px;
           overflow-y: auto;
-          overflow-x: hidden; /* prevent edge cutting / horizontal scroll */
+          overflow-x: hidden;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
           touch-action: pan-y;
           background: rgba(255,255,255,.80);
-          min-width: 0; /* critical for long labels */
-
-          /* Ensure text never flips into vertical writing modes */
+          min-width: 0;
           writing-mode: horizontal-tb;
           text-orientation: mixed;
         }
         .hpFly-right::-webkit-scrollbar{ width: 0px; height: 0px; }
 
-        /* Keep labels readable without affecting layout containers */
         .hpFly-right a,
         .hpFly-right button{
           white-space: normal;
@@ -1352,8 +1378,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           transition: background .16s ease, border-color .16s ease, transform .10s ease, color .16s ease;
           min-height: var(--tap-target-min, 44px);
           touch-action: manipulation;
-
-          /* Link-safe (desktop audience items are Links) */
           display: block;
           text-decoration: none;
         }
@@ -1387,7 +1411,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           background: rgba(255,255,255,.92);
         }
 
-        /* ---------- Mobile: 2-step navigation (Audience -> Options) ---------- */
         .hpFly-mobileShell{
           display: flex;
           flex-direction: column;
@@ -1532,7 +1555,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           onPointerUpCapture={onPointerUpCapture}
           onPointerCancelCapture={onPointerUpCapture}
           onClickCapture={(e) => {
-            // If the user is scrolling on touch, ignore the synthetic click.
             if (shouldIgnoreClick()) {
               e.preventDefault?.();
               e.stopPropagation?.();
@@ -1547,7 +1569,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
             window.setTimeout(() => onAfterNavigate?.(), 0);
           }}
         >
-          {/* =============== MOBILE: 2-step navigation (prevents hidden options) =============== */}
+          {/* MOBILE */}
           <div className="hpFly-mobileShell" aria-label="Collections flyout (mobile)">
             {mobilePane === "audience" ? (
               <>
@@ -1653,13 +1675,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                 </div>
 
                 <div className="hpFly-mobileBody hpFly-right" ref={rightPaneRef}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      padding: "2px 2px 10px",
-                    }}
-                  >
+                  <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 2px 10px" }}>
                     <Link className="hpFly-link" href={activeHref} prefetch>
                       See all ↗
                     </Link>
@@ -1681,7 +1697,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
             )}
           </div>
 
-          {/* =============== DESKTOP/TABLET: split layout preserved =============== */}
+          {/* DESKTOP */}
           <div className="hpFly-grid" aria-label="Collections flyout (desktop)">
             <div className="hpFly-left" onWheel={onLeftWheel}>
               <div className="hpFly-kicker">Choose</div>
@@ -1699,7 +1715,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                       className="hpFly-audBtn"
                       data-active={isActive ? "true" : "false"}
                       aria-current={isActive ? "page" : undefined}
-                      // Hover/focus previews the right panel (with intent delay; not hypersensitive)
                       onMouseEnter={() => schedulePreview(item)}
                       onMouseLeave={() => cancelHoverIntent()}
                       onFocus={() => previewAudience(item)}
