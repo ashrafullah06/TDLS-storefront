@@ -16,20 +16,59 @@ function textResponse(body, status = 200) {
   });
 }
 
-// GET /api/orders/[id]/barcode.png
-export async function GET(_req, ctx) {
+// bwip-js is callback-first; wrap to guarantee Promise behavior across environments.
+function bwipToPngBuffer(opts) {
+  return new Promise((resolve, reject) => {
+    try {
+      bwipjs.toBuffer(opts, (err, png) => {
+        if (err) reject(err);
+        else resolve(png);
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function normalizeBarcodeText(v) {
+  // Keep it robust: trim + strip whitespace.
+  // Order numbers are typically safe for CODE128.
+  let s = String(v || "").trim();
+  if (!s) return "";
+
+  s = s.replace(/\s+/g, "");
+
+  // Hard safety cap to avoid pathological inputs breaking bwip-js
+  if (s.length > 128) s = s.slice(0, 128);
+
+  return s;
+}
+
+// GET /api/orders/[id]/barcode.png?orderNumber=TDLS-....
+export async function GET(req, ctx) {
   try {
     // Next.js 15: params may be async; awaiting works for both Promise + plain object
     const params = await ctx?.params;
     const id = String(params?.id || "").trim();
-
     if (!id) return textResponse("ID_REQUIRED", 400);
 
-    // Use order id as the barcode payload (always available)
-    const text = id.replace(/\s+/g, "");
+    // Prefer orderNumber from querystring (shorter), fallback to id (always available).
+    let orderNumber = "";
+    try {
+      const url = new URL(req.url);
+      orderNumber = url.searchParams.get("orderNumber") || "";
+    } catch (_) {
+      // ignore URL parse issues; fallback below
+      orderNumber = "";
+    }
+
+    const preferred = normalizeBarcodeText(orderNumber);
+    const fallback = normalizeBarcodeText(id);
+
+    const text = preferred || fallback;
     if (!text) return textResponse("NO_BARCODE", 404);
 
-    const png = await bwipjs.toBuffer({
+    const png = await bwipToPngBuffer({
       bcid: "code128",
       text,
       scale: 3,

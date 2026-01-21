@@ -1,4 +1,3 @@
-// FILE: src/components/checkout/address-form.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -880,33 +879,38 @@ export default function AddressForm({
 
       <style jsx>{`
         /* ---------------------------------------------------------
-         * Key goal: never sit underneath Navbar + BottomFloatingBar
+         * Goal update:
+         * - Reduce the form's own vertical height (denser)
+         * - Keep SAFE EMPTY SPACE from Navbar (top) + BFBar (bottom)
+         *   using OUTER MARGINS (not internal padding), so the form
+         *   does not become tall just because bars exist.
          * --------------------------------------------------------- */
         .ca-form {
           width: min(1320px, 100%);
-          margin: 0 auto;
-          display: grid;
-          gap: 8px;
+          margin-left: auto;
+          margin-right: auto;
 
-          /* Always reserve space for fixed bars (desktop + mobile) */
-          padding-left: 12px;
-          padding-right: 12px;
-          padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
-          padding-bottom: calc(
+          /* SAFE EMPTY SPACE from fixed bars (outside the form content) */
+          margin-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+          margin-bottom: calc(
             10px + env(safe-area-inset-bottom) +
               max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
           );
+
+          display: grid;
+          gap: 6px; /* was 8px */
+
+          /* compact internal padding (keeps content short) */
+          padding: 10px 12px;
 
           align-content: start;
           box-sizing: border-box;
           max-width: 100%;
           overflow-x: clip;
 
-          /* Makes long forms usable without being hidden under bars */
-          scroll-padding-top: calc(env(safe-area-inset-top) + var(--navbar-h, 96px) + 12px);
-          scroll-padding-bottom: calc(
-            env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) + 16px
-          );
+          /* keep scroll helpers modest (form itself isn't intended to be a scroller) */
+          scroll-padding-top: 16px;
+          scroll-padding-bottom: 18px;
         }
 
         .ca-title {
@@ -937,7 +941,7 @@ export default function AddressForm({
         /* Dense, wide grids (reduces vertical height by using horizontal space) */
         .ca-grid {
           display: grid;
-          gap: 8px;
+          gap: 6px; /* was 8px */
           align-items: start;
           min-width: 0;
         }
@@ -954,7 +958,7 @@ export default function AddressForm({
 
         .ca-field {
           display: grid;
-          gap: 5px;
+          gap: 4px; /* was 5px */
           min-width: 0;
         }
         .ca-field label {
@@ -987,7 +991,7 @@ export default function AddressForm({
         /* Inputs: slightly shorter to compress vertical height */
         .ca-field input,
         .ca-field select {
-          height: 42px;
+          height: 40px; /* was 42px */
           border: 1px solid rgba(223, 227, 236, 0.95);
           border-radius: 14px;
           padding: 0 14px;
@@ -1032,7 +1036,7 @@ export default function AddressForm({
           border: 1px solid rgba(223, 227, 236, 0.95);
           background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
           border-radius: 14px;
-          padding: 10px 12px;
+          padding: 9px 12px; /* was 10px 12px */
           color: ${NAVY};
           font-weight: 900;
           font-size: 12.5px;
@@ -1055,7 +1059,7 @@ export default function AddressForm({
 
         .ca-optional {
           display: grid;
-          gap: 8px;
+          gap: 6px; /* was 8px */
           padding-top: 2px;
         }
 
@@ -1071,13 +1075,13 @@ export default function AddressForm({
 
         .ca-actions {
           display: flex;
-          gap: 10px;
+          gap: 8px; /* was 10px */
           justify-content: flex-end;
-          padding-top: 4px;
+          padding-top: 2px; /* was 4px */
           flex-wrap: wrap;
         }
         .ca-btn {
-          height: 42px;
+          height: 40px; /* was 42px */
           border-radius: 9999px;
           font-weight: 900;
           padding: 0 18px;
@@ -1113,10 +1117,11 @@ export default function AddressForm({
         @media (max-width: 1024px) {
           .ca-form {
             width: min(980px, 100%);
-            padding-left: 12px;
-            padding-right: 12px;
-            padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
-            padding-bottom: calc(
+            padding: 10px 12px;
+
+            /* keep safe empty space */
+            margin-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            margin-bottom: calc(
               10px + env(safe-area-inset-bottom) +
                 max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
             );
@@ -1133,10 +1138,11 @@ export default function AddressForm({
 
         @media (max-width: 640px) {
           .ca-form {
-            padding-left: 10px;
-            padding-right: 10px;
-            padding-top: calc(6px + env(safe-area-inset-top) + var(--navbar-h, 84px));
-            padding-bottom: calc(
+            padding: 10px 10px;
+
+            /* keep safe empty space (mobile navbar is often smaller) */
+            margin-top: calc(6px + env(safe-area-inset-top) + var(--navbar-h, 84px));
+            margin-bottom: calc(
               10px + env(safe-area-inset-bottom) +
                 max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
             );
@@ -1160,14 +1166,14 @@ export default function AddressForm({
 
           .ca-field input,
           .ca-field select {
-            height: 38px;
+            height: 36px; /* was 38px */
             border-radius: 13px;
             padding: 0 12px;
             font-size: 12.5px;
           }
 
           .ca-morebtn {
-            padding: 9px 11px;
+            padding: 8px 11px; /* slightly tighter */
             font-size: 12.25px;
           }
 
@@ -1180,7 +1186,7 @@ export default function AddressForm({
             justify-content: stretch;
           }
           .ca-btn {
-            height: 40px;
+            height: 38px; /* was 40px */
             font-size: 12.5px;
             padding: 0 14px;
             flex: 1 1 160px; /* wraps in landscape; never overflows */

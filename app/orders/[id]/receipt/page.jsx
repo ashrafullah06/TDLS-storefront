@@ -1,4 +1,4 @@
-// my-project/app/orders/[id]/receipt/page.jsx
+//app/orders/[id]/receipt/page.jsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -8,12 +8,9 @@ import Link from "next/link";
 import Script from "next/script";
 
 import CartClearOnReceipt from "@/components/checkout/cart-clear-on-receipt";
-// import ReceiptDownloadButton from "@/components/checkout/receipt-download-button"; // replaced with direct <a> for production-safe download
 import ReceiptPrintButton from "@/components/checkout/receipt-print-button";
 import Navbar from "@/components/common/navbar";
 import BottomFloatingBar from "@/components/common/bottomfloatingbar";
-
-import { auth } from "@/lib/auth";
 
 /* ───────── helpers ───────── */
 
@@ -416,9 +413,17 @@ function dhakaParts(dateLike) {
   }
 }
 
-// Note: "dd/mm/yy" cannot be used in filenames because "/" is invalid on Windows.
-// We use dd-mm-yy (same meaning) and keep everything deterministic and safe.
-function buildReceiptFilename({ placedAt, customerName, orderNumber }) {
+function buildReceiptPngFilename({ placedAt, customerName, orderNumber }) {
+  const { dd, mm, yy, HH, MI, SS } = dhakaParts(placedAt || Date.now());
+  const who = safeFilenamePart(customerName, "Customer").replace(/\s+/g, "_");
+  const ord = safeFilenamePart(orderNumber || "", "").replace(/\s+/g, "_");
+  const base = ord
+    ? `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}-${ord}`
+    : `TDLS-${dd}-${mm}-${yy}_${HH}-${MI}-${SS}-${who}`;
+  return `${base}.png`;
+}
+
+function buildReceiptPdfFilename({ placedAt, customerName, orderNumber }) {
   const { dd, mm, yy, HH, MI, SS } = dhakaParts(placedAt || Date.now());
   const who = safeFilenamePart(customerName, "Customer").replace(/\s+/g, "_");
   const ord = safeFilenamePart(orderNumber || "", "").replace(/\s+/g, "_");
@@ -434,9 +439,6 @@ export default async function ReceiptPage({ params }) {
   const p = await params;
   const id = String(p?.id || "");
   if (!id) return notFound();
-
-  const session = await auth().catch(() => null);
-  const isLoggedIn = Boolean(session?.user?.id);
 
   const order = await prisma.order.findUnique({
     where: { id },
@@ -502,20 +504,27 @@ export default async function ReceiptPage({ params }) {
   const displayPhone = rawPhone;
   const displayEmail = rawEmail;
 
-  const downloadParams = new URLSearchParams();
-  downloadParams.set("orderNumber", String(order.orderNumber || order.id));
-  if (rawEmail) downloadParams.set("email", String(rawEmail));
-  else if (rawPhone) downloadParams.set("phone", String(rawPhone));
-
-  const downloadName = buildReceiptFilename({
+  // Build filenames
+  const pngName = buildReceiptPngFilename({
     placedAt: order.placedAt || order.createdAt,
     customerName: displayName || "Customer",
     orderNumber: String(order.orderNumber || ""),
   });
 
-  downloadParams.set("filename", downloadName);
+  const pdfName = buildReceiptPdfFilename({
+    placedAt: order.placedAt || order.createdAt,
+    customerName: displayName || "Customer",
+    orderNumber: String(order.orderNumber || ""),
+  });
 
-  const invoiceHref = `/api/orders/${encodeURIComponent(order.id)}/invoice?${downloadParams.toString()}`;
+  // PDF fallback endpoint MUST match the actual route path: /api/orders/:id/invoice.pdf
+  const downloadParams = new URLSearchParams();
+  downloadParams.set("orderNumber", String(order.orderNumber || order.id));
+  if (rawEmail) downloadParams.set("email", String(rawEmail));
+  else if (rawPhone) downloadParams.set("phone", String(rawPhone));
+  downloadParams.set("filename", pdfName);
+
+  const invoicePdfHref = `/api/orders/${encodeURIComponent(order.id)}/invoice.pdf?${downloadParams.toString()}`;
 
   return (
     <>
@@ -535,6 +544,7 @@ export default async function ReceiptPage({ params }) {
                 </div>
               </div>
               <div className="right">
+                {/* barcode endpoint exists at /api/orders/:id/barcode.png */}
                 <img
                   src={`/api/orders/${encodeURIComponent(order.id)}/barcode.png`}
                   alt="Order barcode"
@@ -799,23 +809,24 @@ export default async function ReceiptPage({ params }) {
               </div>
 
               <div className="actions no-print">
+                {/* href points to PDF fallback (matches real API route); click handler generates PNG first */}
                 <a
                   id="tdls-receipt-download"
-                  href={invoiceHref}
+                  href={invoicePdfHref}
                   className="btn"
-                  download={downloadName}
-                  data-filename={downloadName}
+                  download={pngName}
+                  data-filename={pngName}
+                  data-pdf-href={invoicePdfHref}
+                  data-pdf-filename={pdfName}
                 >
-                  Download Receipt
+                  Download Receipt (PNG)
                 </a>
 
                 <ReceiptPrintButton className="btn" />
 
-                {isLoggedIn ? (
-                  <Link href="/customer/dashboard" className="btn alt">
-                    My Orders
-                  </Link>
-                ) : null}
+                <Link href="/customer/dashboard" className="btn alt">
+                  My Orders
+                </Link>
 
                 <Link href="/product" className="btn">
                   Continue Shopping
@@ -827,6 +838,12 @@ export default async function ReceiptPage({ params }) {
 
         <div aria-hidden="true" className="h-24" />
 
+        {/* html2canvas via CDN for production-safe PNG generation */}
+        <Script
+          src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"
+          strategy="afterInteractive"
+        />
+
         <Script
           id="tdls-receipt-download-script"
           strategy="afterInteractive"
@@ -834,7 +851,8 @@ export default async function ReceiptPage({ params }) {
             __html: `
 (function(){
   var a = document.getElementById("tdls-receipt-download");
-  if (!a) return;
+  var target = document.getElementById("tdls-receipt-print");
+  if (!a || !target) return;
 
   var busy = false;
 
@@ -843,18 +861,65 @@ export default async function ReceiptPage({ params }) {
     return /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
   }
 
+  function waitForImages(root){
+    try{
+      var imgs = root.querySelectorAll("img");
+      if (!imgs || !imgs.length) return Promise.resolve();
+      var ps = [];
+      for (var i=0;i<imgs.length;i++){
+        (function(img){
+          if (img.complete && img.naturalWidth > 0) return;
+          ps.push(new Promise(function(resolve){
+            var done = false;
+            function fin(){ if (done) return; done = true; resolve(); }
+            img.addEventListener("load", fin, { once: true });
+            img.addEventListener("error", fin, { once: true });
+            setTimeout(fin, 1500); // hard cap; do not block download
+          }));
+        })(imgs[i]);
+      }
+      return Promise.all(ps).then(function(){});
+    }catch(_){
+      return Promise.resolve();
+    }
+  }
+
+  function waitForFonts(){
+    try{
+      if (document && document.fonts && document.fonts.ready) return document.fonts.ready;
+    }catch(_){}
+    return Promise.resolve();
+  }
+
+  function downloadBlob(blob, filename){
+    var url = URL.createObjectURL(blob);
+    if (isIOS()){
+      try { window.open(url, "_blank", "noopener,noreferrer"); } catch(_) { window.location.href = url; }
+      setTimeout(function(){ try{ URL.revokeObjectURL(url); }catch(_){ } }, 12000);
+      return;
+    }
+    var tmp = document.createElement("a");
+    tmp.href = url;
+    tmp.download = filename;
+    tmp.style.display = "none";
+    document.body.appendChild(tmp);
+    tmp.click();
+    setTimeout(function(){
+      try{ URL.revokeObjectURL(url); }catch(_){}
+      try{ tmp.remove(); }catch(_){}
+    }, 6000);
+  }
+
+  function toSafePngName(name){
+    var fn = String(name || "TDLS-receipt.png");
+    if (!/\\.png$/i.test(fn)) fn = fn.replace(/\\.[a-z0-9]+$/i,"") + ".png";
+    return fn;
+  }
+
   a.addEventListener("click", function(e){
     if (busy) { e.preventDefault(); return; }
 
-    var href = a.getAttribute("href") || "";
-    if (!href) return;
-
-    // iOS Safari: blob-download is unreliable/restricted.
-    // Let the browser handle it (API must set Content-Disposition: attachment).
-    if (isIOS()) return;
-
-    var filename = a.getAttribute("download") || (a.dataset && a.dataset.filename) || "TDLS-receipt.pdf";
-
+    // allow modifier-open behavior
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) return;
 
     e.preventDefault();
@@ -862,46 +927,63 @@ export default async function ReceiptPage({ params }) {
 
     try { a.setAttribute("aria-busy","true"); } catch(_){}
 
+    var pngName = toSafePngName(a.getAttribute("download") || (a.dataset && a.dataset.filename) || "TDLS-receipt.png");
+    var pdfHref = (a.dataset && a.dataset.pdfHref) ? String(a.dataset.pdfHref) : (a.getAttribute("href") || "");
+    var pdfName = (a.dataset && a.dataset.pdfFilename) ? String(a.dataset.pdfFilename) : "TDLS-receipt.pdf";
+
     (async function(){
       try{
-        var res = await fetch(href, {
-          method: "GET",
-          credentials: "include",
-          cache: "no-store",
-          headers: { "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8" }
-        });
+        await waitForFonts();
+        await waitForImages(target);
 
-        if (!res || !res.ok) throw new Error("HTTP_" + (res ? res.status : "0"));
+        var h2c = window.html2canvas;
+        if (!h2c) throw new Error("NO_HTML2CANVAS");
 
-        var ct = String(res.headers.get("content-type") || "").toLowerCase();
-        var blob = await res.blob();
-
-        // Hard validation: never download HTML/text errors as a file.
-        // Check both content-type and actual PDF signature.
-        var looksPdf = ct.indexOf("pdf") !== -1 || (blob && String(blob.type || "").toLowerCase().indexOf("pdf") !== -1);
-        if (!looksPdf) {
-          var head = await blob.slice(0, 4).text().catch(function(){ return ""; });
-          if (head !== "%PDF") throw new Error("NON_PDF");
+        // Remove/skip cross-origin images during capture to prevent canvas taint
+        function onClone(doc){
+          try{
+            var imgs = doc.querySelectorAll("#tdls-receipt-print img");
+            var origin = window.location && window.location.origin ? window.location.origin : "";
+            for (var i=0;i<imgs.length;i++){
+              var img = imgs[i];
+              var src = img.getAttribute("src") || "";
+              if (!src) continue;
+              if (/^https?:\\/\\//i.test(src)) {
+                try{
+                  var u = new URL(src);
+                  if (origin && u.origin !== origin) {
+                    // Keep layout but remove image pixels
+                    img.style.display = "none";
+                  }
+                }catch(_){}
+              }
+            }
+          }catch(_){}
         }
 
-        var url = URL.createObjectURL(blob);
-        var tmp = document.createElement("a");
-        tmp.href = url;
-        tmp.download = filename;
-        tmp.style.display = "none";
-        document.body.appendChild(tmp);
+        var canvas = await h2c(target, {
+          backgroundColor: "#ffffff",
+          scale: Math.min(3, (window.devicePixelRatio || 1) * 2),
+          useCORS: true,
+          allowTaint: false,
+          logging: false,
+          scrollX: 0,
+          scrollY: -window.scrollY,
+          onclone: onClone
+        });
 
-        tmp.click();
+        if (!canvas) throw new Error("NO_CANVAS");
 
-        // Delay revoke: prevents Chrome download history "site not available".
-        setTimeout(function(){
-          try{ URL.revokeObjectURL(url); }catch(_){}
-          try{ tmp.remove(); }catch(_){}
-        }, 6000);
+        canvas.toBlob(function(blob){
+          if (!blob) throw new Error("NO_BLOB");
+          downloadBlob(blob, pngName);
+        }, "image/png", 1.0);
 
       }catch(err){
-        // Fallback: navigate directly (still same-origin); relies on server headers.
-        try{ window.location.assign(href); }catch(_){}
+        // Fallback: navigate to PDF endpoint (server-controlled headers)
+        try{
+          if (pdfHref) window.location.assign(pdfHref);
+        }catch(_){}
       }finally{
         busy = false;
         try { a.removeAttribute("aria-busy"); } catch(_){}

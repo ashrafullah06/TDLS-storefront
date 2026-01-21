@@ -1,4 +1,3 @@
-// PATH: src/components/common/homepanel.jsx
 "use client";
 
 import React, {
@@ -79,6 +78,53 @@ function readCssPxVar(name, fallbackPx) {
     return Number.isFinite(px) && px > 0 ? px : fallbackPx;
   } catch {
     return fallbackPx;
+  }
+}
+
+/* ---------- robust no-store JSON fetch with timeout (separate controller) ---------- */
+async function fetchJsonNoStore(url, timeoutMs, externalSignal) {
+  const ac = new AbortController();
+
+  let abortedByOuter = false;
+  const onAbortOuter = () => {
+    abortedByOuter = true;
+    try {
+      ac.abort();
+    } catch {}
+  };
+
+  if (externalSignal) {
+    if (externalSignal.aborted) onAbortOuter();
+    else externalSignal.addEventListener("abort", onAbortOuter, { once: true });
+  }
+
+  const t = window.setTimeout(() => {
+    try {
+      ac.abort();
+    } catch {}
+  }, Math.max(800, Number(timeoutMs) || 0));
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: ac.signal,
+    });
+    if (!res.ok) return null;
+    return await res.json().catch(() => null);
+  } catch {
+    // swallow (timeout/network/abort)
+    return null;
+  } finally {
+    window.clearTimeout(t);
+    if (externalSignal) {
+      try {
+        externalSignal.removeEventListener("abort", onAbortOuter);
+      } catch {}
+    }
+    // if aborted by outer, no extra action required
+    void abortedByOuter;
   }
 }
 
@@ -855,19 +901,18 @@ export default function HomePanel({ open, onClose }) {
     return () => window.removeEventListener("tdls:homepanel:highlightsReady", onReady);
   }, []);
 
-  // ✅ Extra safety: if HomePanel stays mounted even when closed, warm cache silently here too.
-  // (No UI loading state; this only prevents "loaded later" perception.)
+  // ✅ Extra safety: warm cache silently here too.
+  // FIXED: do NOT reuse an aborted signal for fallback (separate attempts).
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     let cancelled = false;
+
     const cache = readHighlightsCache();
     const hasData = hasHighlightsCacheData(cache);
     const fresh = isFreshHighlightsCache(cache);
 
-    // If we already have fresh data, nothing to do.
     if (hasData && fresh) {
-      // ensure state is hydrated (in case of older state)
       if (!loadedOnceRef.current) {
         const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
         const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
@@ -878,26 +923,12 @@ export default function HomePanel({ open, onClose }) {
       return;
     }
 
-    const ac = new AbortController();
-    const timeoutId = window.setTimeout(() => {
-      try {
-        ac.abort();
-      } catch {}
-    }, 5200);
+    const outer = new AbortController();
 
     (async () => {
       try {
-        let data = null;
-
-        try {
-          const res = await fetch("/api/home/highlights", {
-            method: "GET",
-            headers: { Accept: "application/json" },
-            cache: "no-store",
-            signal: ac.signal,
-          });
-          if (res.ok) data = await res.json().catch(() => null);
-        } catch {}
+        // Attempt 1: API (short budget)
+        const data = await fetchJsonNoStore("/api/home/highlights", 5200, outer.signal);
 
         if (!cancelled && data?.ok) {
           const trending = Array.isArray(data.trendingProducts) ? data.trendingProducts : [];
@@ -906,7 +937,6 @@ export default function HomePanel({ open, onClose }) {
           writeHighlightsCache({ trendingProducts: trending, bestSellerProducts: best });
           dispatchHighlightsReady();
 
-          // If component is mounted, keep state warm too (no visual change unless panel is open).
           setTrendingProducts(trending.map(normalizeHighlightItem));
           setBestSellerProducts(best.map(normalizeHighlightItem));
           setLoadedOnce(true);
@@ -915,8 +945,17 @@ export default function HomePanel({ open, onClose }) {
           return;
         }
 
-        // Fallback to Strapi only if API endpoint not available
-        const json = await fetchFromStrapi("/products?populate=*", ac.signal);
+        // Attempt 2: Strapi fallback (fresh signal, separate budget)
+        const ac2 = new AbortController();
+        const kill2 = window.setTimeout(() => {
+          try {
+            ac2.abort();
+          } catch {}
+        }, 6500);
+
+        const json = await fetchFromStrapi("/products?populate=*", ac2.signal);
+        window.clearTimeout(kill2);
+
         const payload = unwrapStrapiProxy(json);
         const products = toProductArrayFromStrapiPayload(payload);
 
@@ -938,24 +977,17 @@ export default function HomePanel({ open, onClose }) {
           (built.trendingProducts?.length || 0) === 0 &&
           (built.bestSellerProducts?.length || 0) === 0
         ) {
-          // Keep existing UI logic: error only when truly empty
           setHighlightsError("Live highlights are temporarily unavailable.");
         }
       } catch {
-        // Silent by design; UI must not show "loading later" indicator.
-      } finally {
-        window.clearTimeout(timeoutId);
-        try {
-          ac.abort();
-        } catch {}
+        // Silent by design
       }
     })();
 
     return () => {
       cancelled = true;
-      window.clearTimeout(timeoutId);
       try {
-        ac.abort();
+        outer.abort();
       } catch {}
     };
   }, []);
@@ -1003,7 +1035,6 @@ export default function HomePanel({ open, onClose }) {
 
   useEffect(() => {
     if (!open) {
-      // reset flyouts hard when panel closes (component may stay mounted)
       setOpenFlyout(null);
       setCollectionsReady(false);
     }
@@ -1087,7 +1118,6 @@ export default function HomePanel({ open, onClose }) {
     const onEsc = (e) => {
       if (e.key !== "Escape") return;
 
-      // single flyout controller: close flyout first, then panel
       if (openFlyoutRef.current === "collections") {
         setOpenFlyout(null);
         setCollectionsReady(false);
@@ -1224,21 +1254,16 @@ export default function HomePanel({ open, onClose }) {
   }, [open]);
 
   // ✅ Open-time behavior: hydrate instantly from cache; refresh silently only if stale.
+  // FIXED: fallback must not reuse an aborted signal.
   useEffect(() => {
     if (!open) return;
 
     let cancelled = false;
-    const ac = new AbortController();
-    const timeoutId = setTimeout(() => {
-      try {
-        ac.abort();
-      } catch {}
-    }, 6500);
+    const outer = new AbortController();
 
     const cache = readHighlightsCache();
     const cachedHasData = hasHighlightsCacheData(cache);
 
-    // Instant hydrate on open (no loader)
     if (cachedHasData) {
       const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
       const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
@@ -1249,38 +1274,24 @@ export default function HomePanel({ open, onClose }) {
       setHighlightsError(null);
       setHoverIndex(0);
 
-      // If fresh, do nothing else.
       if (isFreshHighlightsCache(cache)) {
         return () => {
           cancelled = true;
-          clearTimeout(timeoutId);
           try {
-            ac.abort();
+            outer.abort();
           } catch {}
         };
       }
     }
 
     async function silentRefreshIfNeeded() {
-      // If already loaded and cache is fresh enough, skip.
       if (cachedHasData && isFreshHighlightsCache(cache)) return;
 
-      // No visible loading; keep UI responsive.
       setLoadingHighlights(false);
       setHighlightsError(null);
 
       try {
-        let data = null;
-        try {
-          const res = await fetch("/api/home/highlights", {
-            method: "GET",
-            headers: { Accept: "application/json" },
-            cache: "no-store",
-            signal: ac.signal,
-          });
-
-          if (res.ok) data = await res.json().catch(() => null);
-        } catch {}
+        const data = await fetchJsonNoStore("/api/home/highlights", 6500, outer.signal);
 
         if (!cancelled && data?.ok) {
           const trending = Array.isArray(data.trendingProducts) ? data.trendingProducts : [];
@@ -1296,7 +1307,17 @@ export default function HomePanel({ open, onClose }) {
           return;
         }
 
-        const json = await fetchFromStrapi("/products?populate=*", ac.signal);
+        // Strapi fallback (new controller)
+        const ac2 = new AbortController();
+        const kill2 = window.setTimeout(() => {
+          try {
+            ac2.abort();
+          } catch {}
+        }, 8000);
+
+        const json = await fetchFromStrapi("/products?populate=*", ac2.signal);
+        window.clearTimeout(kill2);
+
         const payload = unwrapStrapiProxy(json);
         const products = toProductArrayFromStrapiPayload(payload);
 
@@ -1325,7 +1346,6 @@ export default function HomePanel({ open, onClose }) {
       } catch {
         if (cancelled) return;
 
-        // Only show error if everything is empty; otherwise keep existing cached UI.
         const stillEmpty =
           (trendingProducts?.length || 0) === 0 && (bestSellerProducts?.length || 0) === 0;
 
@@ -1339,14 +1359,12 @@ export default function HomePanel({ open, onClose }) {
       }
     }
 
-    // Only attempt refresh if we do not have fresh cache.
     silentRefreshIfNeeded().catch(() => {});
 
     return () => {
       cancelled = true;
-      clearTimeout(timeoutId);
       try {
-        ac.abort();
+        outer.abort();
       } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1379,7 +1397,6 @@ export default function HomePanel({ open, onClose }) {
   // ✅ Mobile: when Collections is open, make it the only visible view (drawer hidden).
   const mobileCollectionsFullscreen = isMobile && collectionsOpen;
 
-  // If desktop preview is not eligible (responsive), never keep highlights flyout "open" in state.
   useEffect(() => {
     if (!layout.showPreview && openFlyoutRef.current === "highlights") {
       setOpenFlyout(null);
@@ -1395,8 +1412,6 @@ export default function HomePanel({ open, onClose }) {
     const safe = 10;
     const gap = 14;
 
-    // ✅ Mobile: collections becomes a full-height view (drawer hidden), so geometry does not
-    // depend on the trigger button position.
     if (isMobile) {
       const topLimit = Math.max(safe + 2, navH + 10);
       const bottomLimit = Math.max(topLimit + 260, vhNow - (bottomH + 24));
@@ -1417,7 +1432,6 @@ export default function HomePanel({ open, onClose }) {
     if (!btn) return null;
 
     const rect = btn.getBoundingClientRect();
-
     const drawerRect = panelRef.current?.getBoundingClientRect?.() || null;
 
     if (!isMobile && drawerRect) {
@@ -1453,8 +1467,6 @@ export default function HomePanel({ open, onClose }) {
     }
 
     const topLimit = Math.max(safe + 2, navH + 10);
-
-    // ✅ Increased bottom clearance so mobile expanded lists are less likely to hide under bottom bar.
     const bottomLimit = Math.max(topLimit + 260, vhNow - (bottomH + 24));
 
     const width = Math.min(vwNow - safe * 2, 720);
@@ -1482,7 +1494,6 @@ export default function HomePanel({ open, onClose }) {
   }, [isMobile, navH, bottomH]);
 
   const openCollections = useCallback(() => {
-    // ✅ Auto-close any other flyout via single controller (highlights)
     try {
       window.dispatchEvent(
         new CustomEvent("tdls:homepanel:closeFlyouts", { detail: { except: "collections" } })
@@ -1500,7 +1511,6 @@ export default function HomePanel({ open, onClose }) {
     setOpenFlyout((cur) => (cur === "collections" ? null : cur));
   }, []);
 
-  // ✅ Global closeFlyouts listener so other UI can close ours safely
   useEffect(() => {
     if (!open) return;
     const handler = (e) => {
@@ -1582,7 +1592,6 @@ export default function HomePanel({ open, onClose }) {
     }, 120);
   };
 
-  // ✅ Safer close: do not close if moving into flyout/trigger; slightly longer delay.
   const scheduleCloseCollections = (e) => {
     if (isMobile) return;
 
@@ -1616,22 +1625,17 @@ export default function HomePanel({ open, onClose }) {
     else openCollections();
   };
 
-  // ✅ Highlights preview open/close (desktop intent, not hypersensitive)
   const openHighlightsPreview = useCallback(() => {
     if (isMobile) return;
     if (!layout.showPreview) return;
-
-    // If collections is open, keep it as the only overlay.
     if (collectionsOpen) return;
 
-    // ✅ FIX: dispatch first (close others), then open highlights (prevents race that can close it immediately)
     try {
       window.dispatchEvent(
         new CustomEvent("tdls:homepanel:closeFlyouts", { detail: { except: "highlights" } })
       );
     } catch {}
 
-    // ensure collections layout flags cannot linger
     setCollectionsReady(false);
     setOpenFlyout("highlights");
   }, [isMobile, layout.showPreview, collectionsOpen]);
@@ -1654,7 +1658,6 @@ export default function HomePanel({ open, onClose }) {
     }, 160);
   }, [isMobile, layout.showPreview, collectionsOpen, openHighlightsPreview]);
 
-  // ✅ Close on mouse-leave (but allow moving between section <-> preview without closing)
   const scheduleCloseHighlightsPreview = useCallback(
     (e) => {
       if (isMobile) return;
@@ -1686,7 +1689,6 @@ export default function HomePanel({ open, onClose }) {
     }
   }, []);
 
-  // ✅ Hover-intent for rail selection (prevents “cursor passing over items = selected”)
   const scheduleRailHoverIndex = useCallback((idx) => {
     if (typeof window === "undefined") return;
     if (railHoverTimerRef.current) window.clearTimeout(railHoverTimerRef.current);
@@ -1714,7 +1716,6 @@ export default function HomePanel({ open, onClose }) {
     } catch {}
   };
 
-  // ✅ Collections flyout gesture guard (do not block mouse clicks)
   const onFlyPointerDownCapture = (e) => {
     const g = flyGestureRef.current;
     g.active = true;
@@ -1726,10 +1727,7 @@ export default function HomePanel({ open, onClose }) {
   const onFlyPointerMoveCapture = (e) => {
     const g = flyGestureRef.current;
     if (!g.active) return;
-
-    // only treat as “drag” for touch/pen, never for mouse
     if (g.pointerType === "mouse") return;
-
     if (Math.abs(e.clientX - g.sx) > 8 || Math.abs(e.clientY - g.sy) > 8) g.moved = true;
   };
   const onFlyPointerUpCapture = () => {
@@ -1741,8 +1739,6 @@ export default function HomePanel({ open, onClose }) {
   };
   const onFlyClickCapture = (e) => {
     const g = flyGestureRef.current;
-
-    // Only suppress click if it was a touch/pen drag; never suppress mouse.
     if (g.pointerType !== "mouse" && g.moved) {
       e.preventDefault();
       e.stopPropagation();
@@ -1767,6 +1763,8 @@ export default function HomePanel({ open, onClose }) {
           inset: 0;
           pointer-events: none;
           overflow: hidden;
+          /* ✅ used for bottom-safe padding so last options never hide */
+          --tdls-bottom-h: var(--tdls-bottom-h, 86px);
         }
 
         .tdls-homepanel-preview{
@@ -1871,6 +1869,9 @@ export default function HomePanel({ open, onClose }) {
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
           max-height: ${layout.maxH};
+          /* ✅ prevents last content from hiding under bottom bar */
+          padding-bottom: calc(16px + env(safe-area-inset-bottom) + var(--tdls-bottom-h));
+          scroll-padding-bottom: calc(16px + env(safe-area-inset-bottom) + var(--tdls-bottom-h));
         }
         .tdls-homepanel-body::-webkit-scrollbar{ width: 0px; height: 0px; }
 
@@ -1999,17 +2000,12 @@ export default function HomePanel({ open, onClose }) {
           overscroll-behavior: contain;
           flex: 1 1 auto;
           min-height: 0;
+          /* ✅ KEY FIX: last options never hide, even for last audience selection */
+          padding-bottom: calc(22px + env(safe-area-inset-bottom) + var(--tdls-bottom-h));
+          scroll-padding-bottom: calc(22px + env(safe-area-inset-bottom) + var(--tdls-bottom-h));
         }
         .tdls-collections-flybody::-webkit-scrollbar{ width: 0px; height: 0px; }
 
-        /* ✅ Desktop: extra bottom padding so last clickable items are fully visible */
-        @media (min-width: 769px){
-          .tdls-collections-flybody{
-            padding-bottom: 30px;
-          }
-        }
-
-        /* ✅ Mobile: ensure bottom bar + safe-area never hides last options */
         @media (max-width: 768px){
           .tdls-homepanel-drawer{
             left: max(10px, env(safe-area-inset-left));
@@ -2019,9 +2015,6 @@ export default function HomePanel({ open, onClose }) {
           }
           .tdls-homepanel-body{
             padding: 12px 14px 14px;
-          }
-          .tdls-collections-flybody{
-            padding-bottom: calc(26px + env(safe-area-inset-bottom));
           }
         }
 
@@ -2034,8 +2027,15 @@ export default function HomePanel({ open, onClose }) {
 
       <div className="tdls-homepanel-backdrop" aria-hidden="true" />
 
-      <div className="tdls-homepanel-stage" role="presentation">
-        {/* ✅ Desktop Preview (flyout: opens on hover/click only; auto-closes via single controller) */}
+      <div
+        className="tdls-homepanel-stage"
+        role="presentation"
+        style={{
+          // ✅ feed dynamic bottom bar height into CSS so scroll padding always matches production layout
+          ["--tdls-bottom-h"]: `${Math.max(0, Number(bottomH) || 0)}px`,
+        }}
+      >
+        {/* ✅ Desktop Preview */}
         {layout.showPreview && highlightsPreviewOpen ? (
           <div
             ref={previewRef}
@@ -2296,7 +2296,6 @@ export default function HomePanel({ open, onClose }) {
               <div
                 ref={highlightsSectionRef}
                 className="tdls-homepanel-section"
-                // ✅ Desktop: preview opens only when user intentionally hovers/focuses this section
                 onMouseEnter={() => {
                   cancelCloseHighlightsPreview();
                   scheduleOpenHighlightsPreview();
@@ -2326,7 +2325,6 @@ export default function HomePanel({ open, onClose }) {
                       active={activeTab === "TRENDING"}
                       onSelect={(id) => {
                         setActiveTab(id);
-                        // ✅ Click intent: open preview on desktop
                         openHighlightsPreview();
                       }}
                     />
@@ -2337,7 +2335,6 @@ export default function HomePanel({ open, onClose }) {
                       active={activeTab === "BEST"}
                       onSelect={(id) => {
                         setActiveTab(id);
-                        // ✅ Click intent: open preview on desktop
                         openHighlightsPreview();
                       }}
                     />
@@ -2602,12 +2599,8 @@ export default function HomePanel({ open, onClose }) {
             </div>
 
             <div className="tdls-collections-flybody">
-              {/* ✅ Desktop click navigation fix:
-                  - Mouse clicks are no longer suppressed by the gesture guard.
-                  - Additionally, if any plain <a href="/..."> exists inside, we safely route it. */}
               <div
                 onClick={(e) => {
-                  // respect modified clicks / already-handled clicks
                   if (
                     e.defaultPrevented ||
                     (typeof e.button === "number" && e.button !== 0) ||
@@ -2634,7 +2627,6 @@ export default function HomePanel({ open, onClose }) {
                     closeAllFlyouts();
                     onClose?.();
                   }}
-                  /* ✅ safe hints for selection/nav behavior inside the flyout */
                   isMobile={isMobile}
                   interactionMode={isMobile ? "tap" : "hover"}
                   hoverIntentMs={160}
@@ -2642,7 +2634,6 @@ export default function HomePanel({ open, onClose }) {
                 />
               </div>
 
-              {/* ✅ Bottom spacer: ensures the last clickable options are visible comfortably */}
               <div aria-hidden="true" style={{ height: isMobile ? 18 : 14 }} />
             </div>
           </div>

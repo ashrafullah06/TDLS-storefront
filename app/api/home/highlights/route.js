@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
 /**
- * TDLC Home Highlights API – LIVE DATA
+ * TDLS Home Highlights API – LIVE DATA
  *
  * - TRENDING PRODUCTS:
  *      last 3 months, aggregated by PRODUCT (via variants),
@@ -20,12 +20,22 @@ import prisma from "@/lib/prisma";
  *
  * Notes:
  * - OrderItem typically references productVariant via variantId.
- * - Trending should be filtered by Order.createdAt (not OrderItem.createdAt),
- *   because many schemas do not store createdAt on OrderItem.
+ * - Trending is filtered by Order.createdAt (not OrderItem.createdAt).
+ *
+ * Production fix:
+ * - Add short in-memory cache to reduce DB pressure and prevent P2024 pool timeouts.
+ * - Run both groupBy queries inside a single transaction to minimize connection churn.
  */
 
 const MAX_ITEMS = 12;
 const SOLD_STATUSES = ["PLACED", "CONFIRMED", "COMPLETED"];
+
+/**
+ * IMPORTANT:
+ * We group by variantId then bucket by productId (because OrderItem stores variantId).
+ * To avoid losing multi-variant totals due to variant-level limiting, we sample more variants.
+ */
+const VARIANT_SAMPLE = Math.min(600, Math.max(120, MAX_ITEMS * 50)); // 12 -> 600 max
 
 /* ───────────────── response helper ───────────────── */
 
@@ -37,6 +47,36 @@ function json(body, status = 200) {
       "cache-control": "no-store",
     },
   });
+}
+
+/* ───────────────── tiny in-memory cache (server-side) ─────────────────
+   - Per server instance (Vercel/Node runtime instance).
+   - Prevents stampede that triggers P2024 when connection_limit is low.
+----------------------------------------------------------------------- */
+
+const MEM_CACHE_KEY = "__TDLS_HOME_HIGHLIGHTS_CACHE_V1__";
+const MEM_TTL_MS = 60 * 1000; // 60s (short TTL; safe for "live" feel; huge DB relief)
+
+function readMemCache() {
+  try {
+    const c = globalThis[MEM_CACHE_KEY];
+    if (!c || typeof c !== "object") return null;
+    const ts = Number(c.ts || 0);
+    if (!Number.isFinite(ts) || ts <= 0) return null;
+    if (Date.now() - ts > MEM_TTL_MS) return null;
+    if (!c.data || typeof c.data !== "object") return null;
+    return c.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeMemCache(data) {
+  try {
+    globalThis[MEM_CACHE_KEY] = { ts: Date.now(), data };
+  } catch {
+    // ignore
+  }
 }
 
 /* ───────────────── price & image helpers ───────────────── */
@@ -81,7 +121,7 @@ function extractCoverImage(product) {
     if (first?.media?.url) return first.media.url;
   }
 
-  // Optional fallbacks
+  // Optional fallbacks (only if your schema has these fields)
   const direct =
     product.coverImageUrl ||
     product.coverImage ||
@@ -108,19 +148,19 @@ function mapHighlightRowFromProduct(product, totalSold) {
   const { priceFrom, priceTo } = extractPriceRange(product);
   const coverImageUrl = extractCoverImage(product);
 
-  const slug = product.slug || product.strapiSlug || product.productCode;
+  const slug = product.slug || product.strapiSlug || product.productCode || null;
   const title =
     product.title ||
     product.name ||
     product.displayName ||
     product.productCode ||
-    "TDLC Piece";
+    "TDLS piece";
 
-  const href = slug ? `/product/${slug}` : "/all-products";
+  const href = slug ? `/product/${slug}` : "/product";
 
   return {
     id: product.id,
-    slug: slug || null,
+    slug,
     title,
     href,
     priceFrom,
@@ -161,43 +201,53 @@ function buildProductBuckets(groupRows, variantMap) {
 /* ───────────────── GET handler ───────────────── */
 
 export async function GET() {
+  // Fast path: serve hot cache to avoid DB stampede (prevents P2024 in production)
+  const cached = readMemCache();
+  if (cached) return json(cached);
+
   try {
     const now = new Date();
     const threeMonthsAgo = new Date(now);
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
     /**
-     * TRENDING:
-     * Filter by Order.createdAt (safe) + sold statuses.
+     * Run both aggregates inside a single transaction.
+     * This reduces connection churn per request and behaves better under low pool limits.
      */
-    const trendingGroup = await prisma.orderItem.groupBy({
-      by: ["variantId"],
-      where: {
-        variantId: { not: null },
-        order: {
-          status: { in: SOLD_STATUSES },
-          createdAt: { gte: threeMonthsAgo },
-        },
-      },
-      _sum: { quantity: true },
-    });
+    const [trendingGroup, bestGroup] = await prisma.$transaction(
+      [
+        prisma.orderItem.groupBy({
+          by: ["variantId"],
+          where: {
+            variantId: { not: null },
+            order: {
+              status: { in: SOLD_STATUSES },
+              createdAt: { gte: threeMonthsAgo },
+            },
+          },
+          _sum: { quantity: true },
+          orderBy: { _sum: { quantity: "desc" } },
+          take: VARIANT_SAMPLE,
+        }),
 
-    /**
-     * BEST SELLERS:
-     * All-time sold statuses.
-     */
-    const bestGroup = await prisma.orderItem.groupBy({
-      by: ["variantId"],
-      where: {
-        variantId: { not: null },
-        order: {
-          status: { in: SOLD_STATUSES },
-        },
-      },
-      _sum: { quantity: true },
-    });
+        prisma.orderItem.groupBy({
+          by: ["variantId"],
+          where: {
+            variantId: { not: null },
+            order: {
+              status: { in: SOLD_STATUSES },
+            },
+          },
+          _sum: { quantity: true },
+          orderBy: { _sum: { quantity: "desc" } },
+          take: VARIANT_SAMPLE,
+        }),
+      ],
+      // These options help Prisma wait a bit longer for the single connection when needed
+      // (but the in-memory cache is the main protection).
+      { maxWait: 8000, timeout: 20000 }
+    );
 
-    // ✅ FIX: Correct Set construction (no stray dot, no nested arrays)
     const variantIds = Array.from(
       new Set([
         ...(trendingGroup || []).map((r) => r.variantId).filter(Boolean),
@@ -206,12 +256,14 @@ export async function GET() {
     );
 
     if (variantIds.length === 0) {
-      return json({
+      const empty = {
         ok: true,
         mode: "LIVE",
         trendingProducts: [],
         bestSellerProducts: [],
-      });
+      };
+      writeMemCache(empty);
+      return json(empty);
     }
 
     /**
@@ -264,12 +316,17 @@ export async function GET() {
       if (mapped) bestSellerProducts.push(mapped);
     }
 
-    return json({
+    const payload = {
       ok: true,
       mode: "LIVE",
       trendingProducts,
       bestSellerProducts,
-    });
+    };
+
+    // Cache the computed payload briefly to prevent pool timeouts under load
+    writeMemCache(payload);
+
+    return json(payload);
   } catch (err) {
     console.error("[home/highlights] error:", err);
     return json(
