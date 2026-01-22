@@ -1,6 +1,7 @@
+// src/components/checkout/address-form.jsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 /** Brand palette (must match checkout-page.js / address-picker.jsx) */
 const NAVY = "#0F2147";
@@ -49,7 +50,19 @@ function isValidBDMobile(p = "") {
   return /^\+8801\d{9}$/.test(n);
 }
 
-/* ---------------- lightweight remember + suggestions (localStorage) ---------------- */
+/* ---------------- storage (guest vs account compatible) ---------------- */
+/**
+ * Checkout-page behavior:
+ * - Session key SS_CHECKOUT_MODE_KEY stores ONLY "guest" (session-only).
+ * - If absent, checkout-page treats as "no preference" (it does NOT store "account").
+ *
+ * AddressForm behavior:
+ * - If props.checkoutMode provided: trust it.
+ * - Else: if sessionStorage says "guest", use guest.
+ * - Else: default to "account" (safe for non-checkout usage).
+ */
+const SS_CHECKOUT_MODE_KEY = "tdlc_checkout_mode_session_v1";
+
 const DRAFT_KEY = "tdlc_checkout_address_draft_v1";
 const HIST_KEY = "tdlc_checkout_address_history_v1";
 
@@ -69,39 +82,69 @@ function uniqPush(arr, v, limit = 8) {
   return next.slice(0, limit);
 }
 
-function readDraft() {
+function safeGet(storage, key) {
+  try {
+    return storage?.getItem?.(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function safeSet(storage, key, val) {
+  try {
+    storage?.setItem?.(key, val);
+  } catch {}
+}
+
+function getDetectedCheckoutModeGuestOnly() {
+  // IMPORTANT: checkout-page only writes "guest" here, never "account"
   if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(DRAFT_KEY);
+  const v = safeGet(window.sessionStorage, SS_CHECKOUT_MODE_KEY);
+  const s = String(v || "").toLowerCase().trim();
+  if (s === "guest") return "guest";
+  return null;
+}
+
+function resolveMode(explicitMode) {
+  const p = String(explicitMode || "").toLowerCase().trim();
+  if (p === "guest" || p === "account") return p;
+  const detected = getDetectedCheckoutModeGuestOnly();
+  return detected || "account";
+}
+
+function pickStorage(mode) {
+  if (typeof window === "undefined") return null;
+  return mode === "guest" ? window.sessionStorage : window.localStorage;
+}
+
+function readDraftFrom(storage) {
+  const raw = safeGet(storage, DRAFT_KEY);
   return raw ? safeParse(raw, null) : null;
 }
 
-function writeDraft(obj) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(DRAFT_KEY, JSON.stringify(obj || {}));
-  } catch {}
+function writeDraftTo(storage, obj) {
+  safeSet(storage, DRAFT_KEY, JSON.stringify(obj || {}));
 }
 
-function readHistory() {
-  if (typeof window === "undefined") return {};
-  const raw = window.localStorage.getItem(HIST_KEY);
+function readHistoryFrom(storage) {
+  const raw = safeGet(storage, HIST_KEY);
   return raw ? safeParse(raw, {}) : {};
 }
 
-function writeHistory(obj) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HIST_KEY, JSON.stringify(obj || {}));
-  } catch {}
+function writeHistoryTo(storage, obj) {
+  safeSet(storage, HIST_KEY, JSON.stringify(obj || {}));
 }
 
 /* ---------------- Canonical payload (single source of truth) ---------------- */
 /**
- * Build a canonical payload aligned with Prisma model Address:
- * - line1, line2, city, state, postalCode, countryIso2, phone, label, isDefault
- * - adminLevel1/2/3 represent division/district/upazila
+ * Canonical payload aligned with TDLS address-book conventions:
+ * - DB-shaped keys: line1/line2/city/state/postalCode/countryIso2
+ * - UI-shaped keys: streetAddress/address2/upazila/district/division
+ * - Required for write (server): line1, city(upazila), countryIso2
+ * - Identity + extras placed into `granular`
  *
- * Also keeps UI keys (streetAddress/upazila/district/division) for backward-compat.
+ * Enhancements:
+ * - Supports address `type` for account mode (SHIPPING/BILLING).
  */
 function buildCanonicalAddressPayload(vals, { forceDefault }) {
   const nameRaw = String(vals?.name ?? "");
@@ -125,7 +168,10 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
   const makeDefault = forceDefault ? true : !!vals?.makeDefault;
   const isDefault = makeDefault;
 
-  // Optional details (future-proof) – stored in granular on the API side
+  // Address type (default shipping)
+  const typeRaw = String(vals?.type || "SHIPPING").toUpperCase().trim();
+  const type = typeRaw === "BILLING" ? "BILLING" : "SHIPPING";
+
   const granular = {
     name: name || null,
     phone: phone || null,
@@ -143,7 +189,7 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
     union: vals?.union != null ? String(vals.union).trim() || null : null,
     policeStation: vals?.policeStation != null ? String(vals.policeStation).trim() || null : null,
 
-    // UI aliases (stable across clients)
+    // UI aliases
     streetAddress: streetAddress || null,
     address2: address2 || null,
     upazila: upazila || null,
@@ -151,13 +197,21 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
     division: division || null,
   };
 
+  const id = vals?.id != null ? String(vals.id).trim() : "";
+  const label = vals?.label != null ? String(vals.label).trim() || null : null;
+
   return {
-    // keep existing identity fields (authoritative for UI flows)
+    id: id || "",
+
+    // address-book routing
+    type, // SHIPPING | BILLING
+
+    // identity fields (UI + flows)
     name,
     phone,
     email,
 
-    // raw + normalized (backward-compat)
+    // raw + normalized (safe for OTP / server)
     nameRaw,
     phoneRaw,
     emailRaw,
@@ -165,7 +219,7 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
     phoneNormalized: phone,
     emailNormalized: email,
 
-    // UI keys (checkout)
+    // UI keys
     streetAddress,
     address2: address2 || "",
     upazila,
@@ -174,7 +228,7 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
     postalCode,
     countryIso2,
 
-    // Model-aligned canonical keys (single source of truth)
+    // DB-shaped canonical keys
     line1: streetAddress,
     line2: address2 || null,
     city: upazila,
@@ -183,13 +237,13 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
     adminLevel2: district || null,
     adminLevel3: upazila || null,
 
-    // Model extras
-    label: vals?.label != null ? String(vals.label).trim() || null : null,
-    phoneModel: phone || null, // explicit alias; API may read `phone` anyway
+    // extras
+    label,
+    phoneModel: phone || null,
     makeDefault,
     isDefault,
 
-    // optional fields (API can store into granular)
+    // optional fields
     houseNo: vals?.houseNo ?? "",
     houseName: vals?.houseName ?? "",
     apartmentNo: vals?.apartmentNo ?? "",
@@ -199,7 +253,7 @@ function buildCanonicalAddressPayload(vals, { forceDefault }) {
     union: vals?.union ?? "",
     village: vals?.village ?? "",
 
-    // canonical JSON blob
+    // blob
     granular,
   };
 }
@@ -209,20 +263,51 @@ export default function AddressForm({
   title,
   subtitle,
   prefill,
+
+  checkoutMode,
+
   includeUserFields = true,
   requirePhone = true,
+
+  // default address control
   showMakeDefault = false,
   forceDefault = false,
+
+  // account-mode support: SHIPPING / BILLING
+  addressType = "SHIPPING",
+  showTypeSelector = false,
+
+  // layout safety (never hide under fixed bars)
+  useSafePadding = true,
+
   submitLabel = "Continue",
   onCancel,
   onSubmit,
   onDraftChange,
   validateSignal = 0,
 }) {
+  const [mode, setMode] = useState("account");
+  const [storage, setStorage] = useState(null);
+
+  const storageRef = useRef(null);
+  const modeRef = useRef("account");
+
+  // Hydration-safe init: resolve mode + storage on mount and whenever checkoutMode changes.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const resolved = resolveMode(checkoutMode);
+    const st = pickStorage(resolved) || window.localStorage;
+    modeRef.current = resolved;
+    storageRef.current = st;
+    setMode(resolved);
+    setStorage(st);
+  }, [String(checkoutMode || "")]);
+
   const [vals, setVals] = useState(() => {
-    const draft = readDraft();
-    const p = prefill && typeof prefill === "object" ? prefill : {};
+    // server-safe initial values; real merge happens when storage becomes available
     return {
+      type: String(addressType || "SHIPPING").toUpperCase() === "BILLING" ? "BILLING" : "SHIPPING",
+
       name: "",
       phone: "",
       email: "",
@@ -243,28 +328,21 @@ export default function AddressForm({
       countryIso2: "BD",
       makeDefault: false,
 
-      // optional but used in prefill merges
       label: "",
       notes: "",
       id: "",
-
-      ...(draft && typeof draft === "object" ? draft : {}),
-      ...(p && typeof p === "object" ? p : {}),
     };
   });
 
-  const [history, setHistory] = useState(() => readHistory());
-
+  const [history, setHistory] = useState({});
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
-
-  // Compact-by-default optional fields (reduces vertical height substantially)
   const [showOptional, setShowOptional] = useState(false);
 
   const lastDraftSigRef = useRef("");
   const saveTimerRef = useRef(null);
+  const lastPersistSigRef = useRef("");
 
-  // common datalist suggestions (minimal but useful, plus user’s own history)
   const divisionSuggestions = useMemo(() => {
     const base = [
       "Dhaka",
@@ -280,15 +358,61 @@ export default function AddressForm({
     return Array.from(new Set([...extra, ...base]));
   }, [history]);
 
+  // When storage becomes available, load draft/history and merge with prefill + defaults.
   useEffect(() => {
-    setHistory(readHistory());
-  }, []);
+    if (!storage) return;
 
-  useEffect(() => {
-    // Prefill can change frequently in some flows.
-    // Merge only owned fields and avoid state update loops.
+    const draft = readDraftFrom(storage);
     const p = prefill && typeof prefill === "object" ? prefill : {};
+
+    setHistory(readHistoryFrom(storage));
+
+    setVals((prev) => {
+      const typeFromProp =
+        String(addressType || "SHIPPING").toUpperCase() === "BILLING" ? "BILLING" : "SHIPPING";
+
+      const merged = {
+        ...prev,
+        ...(draft && typeof draft === "object" ? draft : {}),
+        ...(p && typeof p === "object" ? p : {}),
+
+        // hard normalize type + country
+        type:
+          String(p?.type || (draft?.type ?? typeFromProp))
+            .toUpperCase()
+            .trim() === "BILLING"
+            ? "BILLING"
+            : "SHIPPING",
+        countryIso2: String(p?.countryIso2 || draft?.countryIso2 || prev.countryIso2 || "BD")
+          .toUpperCase()
+          .trim(),
+        makeDefault: p?.makeDefault ?? p?.isDefault ?? draft?.makeDefault ?? prev.makeDefault,
+      };
+
+      return merged;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storage]);
+
+  // Keep type synced with prop when type selector is not shown.
+  useEffect(() => {
+    if (showTypeSelector) return;
+    const t =
+      String(addressType || "SHIPPING").toUpperCase().trim() === "BILLING" ? "BILLING" : "SHIPPING";
+    setVals((p) => {
+      if (String(p.type || "").toUpperCase() === t) return p;
+      return { ...p, type: t };
+    });
+  }, [String(addressType || ""), showTypeSelector]);
+
+  // Prefill can change frequently; merge without loops.
+  useEffect(() => {
+    const p = prefill && typeof prefill === "object" ? prefill : {};
+    if (!p || !Object.keys(p).length) return;
+
     const patch = {
+      type: p.type,
+
       name: p.name,
       phone: p.phone,
       email: p.email,
@@ -320,9 +444,12 @@ export default function AddressForm({
         if (patch[k] !== undefined) next[k] = patch[k];
       }
 
+      next.type =
+        String(next.type || "SHIPPING").toUpperCase().trim() === "BILLING" ? "BILLING" : "SHIPPING";
       next.countryIso2 = String(next.countryIso2 || "BD").toUpperCase();
 
       const owned = [
+        "type",
         "name",
         "phone",
         "email",
@@ -357,22 +484,34 @@ export default function AddressForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(prefill || {})]);
 
-  // persist draft smoothly (debounced)
+  // Persist draft smoothly (debounced), respecting guest/account storage.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    const st = storageRef.current;
+    if (typeof window === "undefined" || !st) return;
+
+    const persistObj = {
+      ...vals,
+      type:
+        String(vals.type || "SHIPPING").toUpperCase().trim() === "BILLING" ? "BILLING" : "SHIPPING",
+      countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
+      makeDefault: forceDefault ? true : !!vals.makeDefault,
+    };
+
+    const persistSig = JSON.stringify(persistObj);
+    if (persistSig === lastPersistSigRef.current) return;
+    lastPersistSigRef.current = persistSig;
+
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      writeDraft({
-        ...vals,
-        countryIso2: (vals.countryIso2 || "BD").toString().toUpperCase(),
-        makeDefault: forceDefault ? true : !!vals.makeDefault,
-      });
-    }, 200);
+      writeDraftTo(st, persistObj);
+    }, 220);
+
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   }, [vals, forceDefault]);
 
+  // External validation trigger (e.g., parent CTA)
   useEffect(() => {
     if (!validateSignal) return;
 
@@ -440,6 +579,7 @@ export default function AddressForm({
     return true;
   }
 
+  // Live canonical draft updates to parent, guarded to prevent loops.
   useEffect(() => {
     if (typeof onDraftChange !== "function") return;
 
@@ -462,7 +602,7 @@ export default function AddressForm({
 
     onDraftChange(canonical, complete);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vals, includeUserFields, requirePhone, forceDefault, showMakeDefault]);
+  }, [vals, includeUserFields, requirePhone, forceDefault]);
 
   function rememberField(field, value) {
     const s = String(value || "").trim();
@@ -473,8 +613,88 @@ export default function AddressForm({
       [field]: uniqPush(history?.[field] || [], s, 10),
     };
     setHistory(next);
-    writeHistory(next);
+
+    const st = storageRef.current;
+    if (st) writeHistoryTo(st, next);
   }
+
+  // Helpers: find nearest scrollable ancestor (modals/drawers), for true "never hide".
+  function findScrollParent(el) {
+    if (!el || typeof window === "undefined") return null;
+    let cur = el.parentElement;
+    while (cur && cur !== document.body) {
+      const style = window.getComputedStyle(cur);
+      const oy = style.overflowY;
+      const canScroll = (oy === "auto" || oy === "scroll") && cur.scrollHeight > cur.clientHeight + 4;
+      if (canScroll) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  // Mobile focus helper: robust “do not hide under fixed bars”
+  const ensureFieldVisible = useCallback((el) => {
+    if (!el || typeof window === "undefined") return;
+
+    const isTouch =
+      "ontouchstart" in window ||
+      navigator.maxTouchPoints > 0 ||
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");
+
+    if (!isTouch) return;
+
+    const getCssPx = (varName, fallback) => {
+      try {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(varName);
+        const n = parseFloat(String(v || "").trim());
+        return Number.isFinite(n) ? n : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+
+    window.setTimeout(() => {
+      try {
+        const sp = findScrollParent(el);
+        const rect = el.getBoundingClientRect();
+
+        if (sp) {
+          const spRect = sp.getBoundingClientRect();
+          const topIn = rect.top - spRect.top;
+          const bottomIn = rect.bottom - spRect.top;
+
+          const safeTop = 12;
+          const safeBottom = sp.clientHeight - 12;
+
+          let delta = 0;
+          if (topIn < safeTop) delta = topIn - safeTop;
+          else if (bottomIn > safeBottom) delta = bottomIn - safeBottom;
+
+          if (delta !== 0) sp.scrollBy({ top: delta, behavior: "smooth" });
+          else el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+
+          return;
+        }
+
+        // Window scrolling path
+        const vvH = window.visualViewport?.height || window.innerHeight;
+        const vvTop = window.visualViewport?.offsetTop || 0;
+
+        const navbarH = getCssPx("--navbar-h", 96) + vvTop;
+        const bottomH = Math.max(getCssPx("--bottom-floating-h", 0), getCssPx("--bottom-safe-pad", 84));
+
+        const safeTop = navbarH + 10;
+        const safeBottom = vvH - bottomH - 10;
+
+        let delta = 0;
+        if (rect.top < safeTop) delta = rect.top - safeTop;
+        else if (rect.bottom > safeBottom) delta = rect.bottom - safeBottom;
+
+        if (delta !== 0) window.scrollBy({ top: delta, behavior: "smooth" });
+        else el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      } catch {}
+    }, 70);
+  }, []);
 
   async function handleSubmit(e) {
     e?.preventDefault?.();
@@ -522,7 +742,7 @@ export default function AddressForm({
       return;
     }
 
-    // remember key fields for next checkout
+    // remember key fields for next checkout (respects guest/account storage)
     rememberField("name", canonical.nameRaw);
     rememberField("phone", canonical.phoneNormalized);
     rememberField("email", canonical.emailNormalized);
@@ -548,666 +768,769 @@ export default function AddressForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="ca-form">
-      {title ? <div className="ca-title">{title}</div> : null}
-      {subtitle ? <div className="ca-sub">{subtitle}</div> : null}
+    <div className="ca-safe-wrap" data-mode={mode} data-safe={useSafePadding ? "1" : "0"}>
+      <form onSubmit={handleSubmit} className="ca-form">
+        {title ? <div className="ca-title">{title}</div> : null}
+        {subtitle ? <div className="ca-sub">{subtitle}</div> : null}
 
-      {error ? <div className="ca-error">{error}</div> : null}
+        {error ? <div className="ca-error">{error}</div> : null}
 
-      {/* datalists for suggestions */}
-      <datalist id="dl-upazila">
-        {(history?.upazila || []).map((x) => (
-          <option key={`u-${x}`} value={x} />
-        ))}
-      </datalist>
-      <datalist id="dl-district">
-        {(history?.district || []).map((x) => (
-          <option key={`d-${x}`} value={x} />
-        ))}
-      </datalist>
-      <datalist id="dl-division">
-        {divisionSuggestions.map((x) => (
-          <option key={`dv-${x}`} value={x} />
-        ))}
-      </datalist>
-      <datalist id="dl-po">
-        {(history?.postOffice || []).map((x) => (
-          <option key={`po-${x}`} value={x} />
-        ))}
-      </datalist>
-      <datalist id="dl-ps">
-        {(history?.policeStation || []).map((x) => (
-          <option key={`ps-${x}`} value={x} />
-        ))}
-      </datalist>
-      <datalist id="dl-union">
-        {(history?.union || []).map((x) => (
-          <option key={`un-${x}`} value={x} />
-        ))}
-      </datalist>
-      <datalist id="dl-street">
-        {(history?.streetAddress || []).map((x) => (
-          <option key={`st-${x}`} value={x} />
-        ))}
-      </datalist>
+        {/* datalists for suggestions */}
+        <datalist id="dl-upazila">
+          {(history?.upazila || []).map((x) => (
+            <option key={`u-${x}`} value={x} />
+          ))}
+        </datalist>
+        <datalist id="dl-district">
+          {(history?.district || []).map((x) => (
+            <option key={`d-${x}`} value={x} />
+          ))}
+        </datalist>
+        <datalist id="dl-division">
+          {divisionSuggestions.map((x) => (
+            <option key={`dv-${x}`} value={x} />
+          ))}
+        </datalist>
+        <datalist id="dl-po">
+          {(history?.postOffice || []).map((x) => (
+            <option key={`po-${x}`} value={x} />
+          ))}
+        </datalist>
+        <datalist id="dl-ps">
+          {(history?.policeStation || []).map((x) => (
+            <option key={`ps-${x}`} value={x} />
+          ))}
+        </datalist>
+        <datalist id="dl-union">
+          {(history?.union || []).map((x) => (
+            <option key={`un-${x}`} value={x} />
+          ))}
+        </datalist>
+        <datalist id="dl-street">
+          {(history?.streetAddress || []).map((x) => (
+            <option key={`st-${x}`} value={x} />
+          ))}
+        </datalist>
 
-      {/* Primary user + required address fields (always visible) */}
-      {includeUserFields ? (
-        <div className="ca-grid cols3">
-          <div className={`ca-field${fieldErrors.name ? " invalid" : ""}`}>
+        {/* Optional address type selector (account pages). Checkout stays unchanged by default. */}
+        {showTypeSelector ? (
+          <div className="ca-type">
+            <div className="ca-type-label">Address type</div>
+            <div className="ca-type-row" role="group" aria-label="Address type">
+              <button
+                type="button"
+                className={`ca-type-btn${
+                  String(vals.type).toUpperCase() === "SHIPPING" ? " on" : ""
+                }`}
+                onClick={() => setField("type", "SHIPPING")}
+              >
+                Shipping
+              </button>
+              <button
+                type="button"
+                className={`ca-type-btn${String(vals.type).toUpperCase() === "BILLING" ? " on" : ""}`}
+                onClick={() => setField("type", "BILLING")}
+              >
+                Billing
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Primary user + required address fields (always visible) */}
+        {includeUserFields ? (
+          <div className="ca-grid cols3">
+            <div className={`ca-field${fieldErrors.name ? " invalid" : ""}`}>
+              <label>
+                Full name <span className="req">*</span>
+              </label>
+              <input
+                name="fullName"
+                autoComplete="name"
+                autoCapitalize="words"
+                spellCheck={false}
+                value={vals.name || ""}
+                onChange={(e) => setField("name", e.target.value)}
+                placeholder="Your full name"
+                onBlur={() => rememberField("name", vals.name)}
+                onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                aria-invalid={!!fieldErrors.name}
+              />
+            </div>
+
+            <div className={`ca-field${fieldErrors.phone ? " invalid" : ""}`}>
+              <label>
+                Mobile number {requirePhone ? <span className="req">*</span> : null}
+              </label>
+              <input
+                name="phone"
+                autoComplete="tel"
+                inputMode="tel"
+                spellCheck={false}
+                value={vals.phone || ""}
+                onChange={(e) => setField("phone", e.target.value)}
+                onBlur={(e) => {
+                  const n = normalizeBDPhone(e.target.value);
+                  if (n && n !== vals.phone) setField("phone", n);
+                  rememberField("phone", n || e.target.value);
+                }}
+                placeholder="017XXXXXXXX / +88017XXXXXXXX"
+                onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                aria-invalid={!!fieldErrors.phone}
+              />
+            </div>
+
+            <div className="ca-field">
+              <label>Email (optional)</label>
+              <input
+                name="email"
+                autoComplete="email"
+                inputMode="email"
+                spellCheck={false}
+                value={vals.email || ""}
+                onChange={(e) => setField("email", e.target.value)}
+                placeholder="name@email.com"
+                onBlur={() => rememberField("email", vals.email)}
+                onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <div className="ca-grid cols4">
+          <div className={`ca-field ca-span4${fieldErrors.streetAddress ? " invalid" : ""}`}>
             <label>
-              Full name <span className="req">*</span>
+              Street Address <span className="req">*</span>
             </label>
             <input
-              name="fullName"
-              autoComplete="name"
+              name="addressLine1"
+              autoComplete="address-line1"
+              list="dl-street"
               autoCapitalize="words"
-              spellCheck={false}
-              value={vals.name || ""}
-              onChange={(e) => setField("name", e.target.value)}
-              placeholder="Your full name"
-              onBlur={() => rememberField("name", vals.name)}
+              value={vals.streetAddress || vals.address1 || ""}
+              onChange={(e) => setField("streetAddress", e.target.value)}
+              placeholder="Street / Road / Area"
+              onBlur={() => rememberField("streetAddress", vals.streetAddress)}
+              onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+              aria-invalid={!!fieldErrors.streetAddress}
+            />
+          </div>
+        </div>
+
+        <div className="ca-grid cols4">
+          <div className={`ca-field${fieldErrors.upazila ? " invalid" : ""}`}>
+            <label>
+              Upazila / City <span className="req">*</span>
+            </label>
+            <input
+              name="city"
+              autoComplete="address-level2"
+              list="dl-upazila"
+              autoCapitalize="words"
+              value={vals.upazila || vals.city || ""}
+              onChange={(e) => setField("upazila", e.target.value)}
+              placeholder="Upazila / City"
+              onBlur={() => rememberField("upazila", vals.upazila)}
+              onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+              aria-invalid={!!fieldErrors.upazila}
             />
           </div>
 
-          <div className={`ca-field${fieldErrors.phone ? " invalid" : ""}`}>
+          <div className={`ca-field${fieldErrors.district ? " invalid" : ""}`}>
             <label>
-              Mobile number {requirePhone ? <span className="req">*</span> : null}
+              District <span className="req">*</span>
             </label>
             <input
-              name="phone"
-              autoComplete="tel"
-              inputMode="tel"
-              spellCheck={false}
-              value={vals.phone || ""}
-              onChange={(e) => setField("phone", e.target.value)}
-              onBlur={(e) => {
-                const n = normalizeBDPhone(e.target.value);
-                if (n && n !== vals.phone) setField("phone", n);
-                rememberField("phone", n || e.target.value);
-              }}
-              placeholder="017XXXXXXXX / +88017XXXXXXXX"
+              name="district"
+              autoComplete="address-level1"
+              list="dl-district"
+              autoCapitalize="words"
+              value={vals.district || ""}
+              onChange={(e) => setField("district", e.target.value)}
+              placeholder="District"
+              onBlur={() => rememberField("district", vals.district)}
+              onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+              aria-invalid={!!fieldErrors.district}
             />
           </div>
 
           <div className="ca-field">
-            <label>Email (optional)</label>
+            <label>Division (optional)</label>
             <input
-              name="email"
-              autoComplete="email"
-              inputMode="email"
-              spellCheck={false}
-              value={vals.email || ""}
-              onChange={(e) => setField("email", e.target.value)}
-              placeholder="name@email.com"
-              onBlur={() => rememberField("email", vals.email)}
+              name="division"
+              list="dl-division"
+              autoCapitalize="words"
+              value={vals.division || ""}
+              onChange={(e) => setField("division", e.target.value)}
+              placeholder="Division"
+              onBlur={() => rememberField("division", vals.division)}
+              onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+            />
+          </div>
+
+          <div className="ca-field">
+            <label>Postal Code (optional)</label>
+            <input
+              name="postalCode"
+              autoComplete="postal-code"
+              inputMode="numeric"
+              value={vals.postalCode || ""}
+              onChange={(e) => setField("postalCode", e.target.value)}
+              placeholder="Postal code"
+              onBlur={() => rememberField("postalCode", vals.postalCode)}
+              onFocus={(e) => ensureFieldVisible(e.currentTarget)}
             />
           </div>
         </div>
-      ) : null}
 
-      <div className="ca-grid cols4">
-        <div className={`ca-field ca-span4${fieldErrors.streetAddress ? " invalid" : ""}`}>
-          <label>
-            Street Address <span className="req">*</span>
-          </label>
-          <input
-            name="addressLine1"
-            autoComplete="address-line1"
-            list="dl-street"
-            autoCapitalize="words"
-            value={vals.streetAddress || vals.address1 || ""}
-            onChange={(e) => setField("streetAddress", e.target.value)}
-            placeholder="Street / Road / Area"
-            onBlur={() => rememberField("streetAddress", vals.streetAddress)}
-          />
-        </div>
-      </div>
-
-      <div className="ca-grid cols4">
-        <div className={`ca-field${fieldErrors.upazila ? " invalid" : ""}`}>
-          <label>
-            Upazila / City <span className="req">*</span>
-          </label>
-          <input
-            name="city"
-            autoComplete="address-level2"
-            list="dl-upazila"
-            autoCapitalize="words"
-            value={vals.upazila || vals.city || ""}
-            onChange={(e) => setField("upazila", e.target.value)}
-            placeholder="Upazila / City"
-            onBlur={() => rememberField("upazila", vals.upazila)}
-          />
-        </div>
-
-        <div className={`ca-field${fieldErrors.district ? " invalid" : ""}`}>
-          <label>
-            District <span className="req">*</span>
-          </label>
-          <input
-            name="district"
-            autoComplete="address-level1"
-            list="dl-district"
-            autoCapitalize="words"
-            value={vals.district || ""}
-            onChange={(e) => setField("district", e.target.value)}
-            placeholder="District"
-            onBlur={() => rememberField("district", vals.district)}
-          />
-        </div>
-
-        <div className="ca-field">
-          <label>Division (optional)</label>
-          <input
-            name="division"
-            list="dl-division"
-            autoCapitalize="words"
-            value={vals.division || ""}
-            onChange={(e) => setField("division", e.target.value)}
-            placeholder="Division"
-            onBlur={() => rememberField("division", vals.division)}
-          />
-        </div>
-
-        <div className="ca-field">
-          <label>Postal Code (optional)</label>
-          <input
-            name="postalCode"
-            autoComplete="postal-code"
-            inputMode="numeric"
-            value={vals.postalCode || ""}
-            onChange={(e) => setField("postalCode", e.target.value)}
-            placeholder="Postal code"
-            onBlur={() => rememberField("postalCode", vals.postalCode)}
-          />
-        </div>
-      </div>
-
-      {/* Optional fields toggle (compress vertical height) */}
-      <button
-        type="button"
-        className="ca-morebtn"
-        onClick={() => setShowOptional((v) => !v)}
-        aria-expanded={showOptional}
-        aria-controls="ca-optional"
-      >
-        <span className="t">
-          {showOptional ? "Hide optional address details" : "Add optional address details"}
-        </span>
-        <span className="i" aria-hidden="true">
-          {showOptional ? "▴" : "▾"}
-        </span>
-      </button>
-
-      {showOptional ? (
-        <div id="ca-optional" className="ca-optional">
-          <div className="ca-grid cols4">
-            <div className="ca-field">
-              <label>House No</label>
-              <input
-                name="houseNo"
-                autoComplete="address-line1"
-                value={vals.houseNo || ""}
-                onChange={(e) => setField("houseNo", e.target.value)}
-                placeholder="House No"
-                onBlur={() => rememberField("houseNo", vals.houseNo)}
-              />
-            </div>
-            <div className="ca-field">
-              <label>House Name</label>
-              <input
-                name="houseName"
-                value={vals.houseName || ""}
-                onChange={(e) => setField("houseName", e.target.value)}
-                placeholder="House Name"
-                onBlur={() => rememberField("houseName", vals.houseName)}
-              />
-            </div>
-            <div className="ca-field">
-              <label>Apartment No</label>
-              <input
-                name="apartmentNo"
-                value={vals.apartmentNo || ""}
-                onChange={(e) => setField("apartmentNo", e.target.value)}
-                placeholder="Apartment"
-                onBlur={() => rememberField("apartmentNo", vals.apartmentNo)}
-              />
-            </div>
-            <div className="ca-field">
-              <label>Floor No</label>
-              <input
-                name="floorNo"
-                value={vals.floorNo || ""}
-                onChange={(e) => setField("floorNo", e.target.value)}
-                placeholder="Floor"
-                onBlur={() => rememberField("floorNo", vals.floorNo)}
-              />
-            </div>
-          </div>
-
-          <div className="ca-grid cols4">
-            <div className="ca-field ca-span4">
-              <label>Address line 2 (optional)</label>
-              <input
-                name="addressLine2"
-                autoComplete="address-line2"
-                autoCapitalize="words"
-                value={vals.address2 || ""}
-                onChange={(e) => setField("address2", e.target.value)}
-                placeholder="Nearby landmark / extra details"
-                onBlur={() => rememberField("address2", vals.address2)}
-              />
-            </div>
-          </div>
-
-          <div className="ca-grid cols4">
-            <div className="ca-field">
-              <label>Post Office (optional)</label>
-              <input
-                name="postOffice"
-                list="dl-po"
-                autoCapitalize="words"
-                value={vals.postOffice || ""}
-                onChange={(e) => setField("postOffice", e.target.value)}
-                placeholder="Post Office"
-                onBlur={() => rememberField("postOffice", vals.postOffice)}
-              />
-            </div>
-            <div className="ca-field">
-              <label>Union (optional)</label>
-              <input
-                name="union"
-                list="dl-union"
-                autoCapitalize="words"
-                value={vals.union || ""}
-                onChange={(e) => setField("union", e.target.value)}
-                placeholder="Union"
-                onBlur={() => rememberField("union", vals.union)}
-              />
-            </div>
-            <div className="ca-field">
-              <label>Police Station / Thana (optional)</label>
-              <input
-                name="policeStation"
-                list="dl-ps"
-                autoCapitalize="words"
-                value={vals.policeStation || vals.thana || ""}
-                onChange={(e) => setField("policeStation", e.target.value)}
-                placeholder="Police Station / Thana"
-                onBlur={() => rememberField("policeStation", vals.policeStation)}
-              />
-            </div>
-            <div className="ca-field">
-              <label>Country</label>
-              <select
-                name="country"
-                autoComplete="country"
-                value={(vals.countryIso2 || "BD").toString().toUpperCase()}
-                onChange={(e) => setField("countryIso2", e.target.value)}
-              >
-                <option value="BD">Bangladesh (BD)</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showMakeDefault || forceDefault ? (
-        <label className="chk">
-          <input
-            type="checkbox"
-            checked={forceDefault ? true : !!vals.makeDefault}
-            onChange={(e) => {
-              if (forceDefault) return;
-              setField("makeDefault", e.target.checked);
-            }}
-            disabled={forceDefault}
-          />
-          <span>Make this my default address</span>
-        </label>
-      ) : null}
-
-      <div className="ca-actions">
-        <button type="button" className="ca-btn ghost" onClick={onCancel}>
-          Cancel
+        {/* Optional fields toggle (compress vertical height) */}
+        <button
+          type="button"
+          className="ca-morebtn"
+          onClick={() => setShowOptional((v) => !v)}
+          aria-expanded={showOptional}
+          aria-controls="ca-optional"
+        >
+          <span className="t">
+            {showOptional ? "Hide optional address details" : "Add optional address details"}
+          </span>
+          <span className="i" aria-hidden="true">
+            {showOptional ? "▴" : "▾"}
+          </span>
         </button>
-        <button type="submit" className="ca-btn primary">
-          {submitLabel}
-        </button>
-      </div>
 
-      <style jsx>{`
-        /* ---------------------------------------------------------
-         * Goal update:
-         * - Reduce the form's own vertical height (denser)
-         * - Keep SAFE EMPTY SPACE from Navbar (top) + BFBar (bottom)
-         *   using OUTER MARGINS (not internal padding), so the form
-         *   does not become tall just because bars exist.
-         * --------------------------------------------------------- */
-        .ca-form {
-          width: min(1320px, 100%);
-          margin-left: auto;
-          margin-right: auto;
+        {showOptional ? (
+          <div id="ca-optional" className="ca-optional">
+            <div className="ca-grid cols4">
+              <div className="ca-field">
+                <label>House No</label>
+                <input
+                  name="houseNo"
+                  autoComplete="address-line1"
+                  value={vals.houseNo || ""}
+                  onChange={(e) => setField("houseNo", e.target.value)}
+                  placeholder="House No"
+                  onBlur={() => rememberField("houseNo", vals.houseNo)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+              <div className="ca-field">
+                <label>House Name</label>
+                <input
+                  name="houseName"
+                  value={vals.houseName || ""}
+                  onChange={(e) => setField("houseName", e.target.value)}
+                  placeholder="House Name"
+                  onBlur={() => rememberField("houseName", vals.houseName)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+              <div className="ca-field">
+                <label>Apartment No</label>
+                <input
+                  name="apartmentNo"
+                  value={vals.apartmentNo || ""}
+                  onChange={(e) => setField("apartmentNo", e.target.value)}
+                  placeholder="Apartment"
+                  onBlur={() => rememberField("apartmentNo", vals.apartmentNo)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+              <div className="ca-field">
+                <label>Floor No</label>
+                <input
+                  name="floorNo"
+                  value={vals.floorNo || ""}
+                  onChange={(e) => setField("floorNo", e.target.value)}
+                  placeholder="Floor"
+                  onBlur={() => rememberField("floorNo", vals.floorNo)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+            </div>
 
-          /* SAFE EMPTY SPACE from fixed bars (outside the form content) */
-          margin-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
-          margin-bottom: calc(
-            10px + env(safe-area-inset-bottom) +
-              max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
-          );
+            <div className="ca-grid cols4">
+              <div className="ca-field ca-span4">
+                <label>Address line 2 (optional)</label>
+                <input
+                  name="addressLine2"
+                  autoComplete="address-line2"
+                  autoCapitalize="words"
+                  value={vals.address2 || ""}
+                  onChange={(e) => setField("address2", e.target.value)}
+                  placeholder="Nearby landmark / extra details"
+                  onBlur={() => rememberField("address2", vals.address2)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+            </div>
 
-          display: grid;
-          gap: 6px; /* was 8px */
+            <div className="ca-grid cols4">
+              <div className="ca-field">
+                <label>Post Office (optional)</label>
+                <input
+                  name="postOffice"
+                  list="dl-po"
+                  autoCapitalize="words"
+                  value={vals.postOffice || ""}
+                  onChange={(e) => setField("postOffice", e.target.value)}
+                  placeholder="Post Office"
+                  onBlur={() => rememberField("postOffice", vals.postOffice)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+              <div className="ca-field">
+                <label>Union (optional)</label>
+                <input
+                  name="union"
+                  list="dl-union"
+                  autoCapitalize="words"
+                  value={vals.union || ""}
+                  onChange={(e) => setField("union", e.target.value)}
+                  placeholder="Union"
+                  onBlur={() => rememberField("union", vals.union)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+              <div className="ca-field">
+                <label>Police Station / Thana (optional)</label>
+                <input
+                  name="policeStation"
+                  list="dl-ps"
+                  autoCapitalize="words"
+                  value={vals.policeStation || vals.thana || ""}
+                  onChange={(e) => setField("policeStation", e.target.value)}
+                  placeholder="Police Station / Thana"
+                  onBlur={() => rememberField("policeStation", vals.policeStation)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                />
+              </div>
+              <div className="ca-field">
+                <label>Country</label>
+                <select
+                  name="country"
+                  autoComplete="country"
+                  value={(vals.countryIso2 || "BD").toString().toUpperCase()}
+                  onChange={(e) => setField("countryIso2", e.target.value)}
+                  onFocus={(e) => ensureFieldVisible(e.currentTarget)}
+                >
+                  <option value="BD">Bangladesh (BD)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
-          /* compact internal padding (keeps content short) */
-          padding: 10px 12px;
+        {showMakeDefault || forceDefault ? (
+          <label className="chk">
+            <input
+              type="checkbox"
+              checked={forceDefault ? true : !!vals.makeDefault}
+              onChange={(e) => {
+                if (forceDefault) return;
+                setField("makeDefault", e.target.checked);
+              }}
+              disabled={forceDefault}
+            />
+            <span>Make this my default address</span>
+          </label>
+        ) : null}
 
-          align-content: start;
-          box-sizing: border-box;
-          max-width: 100%;
-          overflow-x: clip;
+        <div className="ca-actions">
+          <button type="button" className="ca-btn ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="ca-btn primary">
+            {submitLabel}
+          </button>
+        </div>
 
-          /* keep scroll helpers modest (form itself isn't intended to be a scroller) */
-          scroll-padding-top: 16px;
-          scroll-padding-bottom: 18px;
-        }
+        <style jsx>{`
+          /* ---------------------------------------------------------
+           * Never hide under Navbar / BottomFloatingBar:
+           * - Safe wrapper adds padding inside scrollable area (optional via useSafePadding).
+           * - Inputs include scroll-margin.
+           * - Focus helper adjusts scroll (window OR nearest scroller).
+           * --------------------------------------------------------- */
 
-        .ca-title {
-          font-weight: 900;
-          color: ${NAVY};
-          font-size: 15px;
-          line-height: 1.2;
-          letter-spacing: 0.02em;
-        }
-        .ca-sub {
-          color: ${MUTED};
-          font-weight: 700;
-          font-size: 12.5px;
-          line-height: 1.25;
-          margin-top: -4px;
-        }
-        .ca-error {
-          background: #fff1f2;
-          border: 1px solid #fecdd3;
-          color: #9f1239;
-          border-radius: 14px;
-          padding: 9px 11px;
-          font-weight: 800;
-          font-size: 12.5px;
-          line-height: 1.25;
-        }
+          .ca-safe-wrap {
+            width: 100%;
+            box-sizing: border-box;
+          }
 
-        /* Dense, wide grids (reduces vertical height by using horizontal space) */
-        .ca-grid {
-          display: grid;
-          gap: 6px; /* was 8px */
-          align-items: start;
-          min-width: 0;
-        }
-        .ca-grid.cols3 {
-          grid-template-columns: repeat(3, minmax(180px, 1fr));
-        }
-        .ca-grid.cols4 {
-          grid-template-columns: repeat(4, minmax(160px, 1fr));
-        }
+          .ca-safe-wrap[data-safe="1"] {
+            padding-top: calc(10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            padding-bottom: calc(
+              14px + env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+            );
 
-        .ca-span4 {
-          grid-column: span 4;
-        }
+            scroll-padding-top: calc(10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            scroll-padding-bottom: calc(
+              14px + env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+            );
+          }
 
-        .ca-field {
-          display: grid;
-          gap: 4px; /* was 5px */
-          min-width: 0;
-        }
-        .ca-field label {
-          color: ${NAVY};
-          font-weight: 900;
-          font-size: 10.5px;
-          line-height: 1.1;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          opacity: 0.92;
-        }
+          @supports (height: 100dvh) {
+            .ca-safe-wrap {
+              min-height: 100dvh;
+            }
+          }
 
-        .req {
-          color: #dc2626;
-          font-weight: 900;
-        }
-
-        /* Invalid state */
-        .ca-field.invalid label {
-          color: #dc2626;
-          opacity: 1;
-        }
-        .ca-field.invalid input,
-        .ca-field.invalid select,
-        .ca-field.invalid textarea {
-          border-color: #dc2626 !important;
-          box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14) !important;
-        }
-
-        /* Inputs: slightly shorter to compress vertical height */
-        .ca-field input,
-        .ca-field select {
-          height: 40px; /* was 42px */
-          border: 1px solid rgba(223, 227, 236, 0.95);
-          border-radius: 14px;
-          padding: 0 14px;
-          font-weight: 800;
-          font-size: 13px;
-          color: ${NAVY};
-          outline: none;
-
-          background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
-          box-shadow: inset 0 2px 8px rgba(15, 33, 71, 0.08),
-            inset 0 1px 0 rgba(255, 255, 255, 0.9),
-            0 10px 22px rgba(15, 33, 71, 0.06);
-          transition: box-shadow 150ms ease, border-color 150ms ease, transform 120ms ease;
-          box-sizing: border-box;
-          width: 100%;
-          min-width: 0;
-          max-width: 100%;
-        }
-
-        .ca-field input::placeholder {
-          color: rgba(107, 114, 128, 0.82);
-          font-weight: 700;
-          letter-spacing: 0.01em;
-        }
-
-        .ca-field input:focus,
-        .ca-field select:focus {
-          border-color: rgba(15, 33, 71, 0.38);
-          box-shadow: inset 0 2px 9px rgba(15, 33, 71, 0.1),
-            0 0 0 4px rgba(14, 165, 233, 0.14),
-            0 12px 26px rgba(15, 33, 71, 0.1);
-          transform: translateY(-0.5px);
-        }
-
-        /* Optional section toggle (compact, premium, not tall) */
-        .ca-morebtn {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          width: 100%;
-          border: 1px solid rgba(223, 227, 236, 0.95);
-          background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
-          border-radius: 14px;
-          padding: 9px 12px; /* was 10px 12px */
-          color: ${NAVY};
-          font-weight: 900;
-          font-size: 12.5px;
-          box-shadow: 0 10px 22px rgba(15, 33, 71, 0.06);
-          cursor: pointer;
-          user-select: none;
-          touch-action: manipulation;
-        }
-        .ca-morebtn .t {
-          letter-spacing: 0.01em;
-        }
-        .ca-morebtn .i {
-          opacity: 0.7;
-          font-size: 14px;
-          line-height: 1;
-        }
-        .ca-morebtn:active {
-          transform: translateY(0.5px);
-        }
-
-        .ca-optional {
-          display: grid;
-          gap: 6px; /* was 8px */
-          padding-top: 2px;
-        }
-
-        .chk {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          color: ${NAVY};
-          font-weight: 900;
-          font-size: 12.5px;
-          margin-top: 2px;
-        }
-
-        .ca-actions {
-          display: flex;
-          gap: 8px; /* was 10px */
-          justify-content: flex-end;
-          padding-top: 2px; /* was 4px */
-          flex-wrap: wrap;
-        }
-        .ca-btn {
-          height: 40px; /* was 42px */
-          border-radius: 9999px;
-          font-weight: 900;
-          padding: 0 18px;
-          border: 1px solid ${BORDER};
-          background: #fff;
-          color: ${NAVY};
-          font-size: 13px;
-          box-shadow: 0 10px 18px rgba(15, 33, 71, 0.06);
-          transition: transform 120ms ease, box-shadow 150ms ease;
-          max-width: 100%;
-          touch-action: manipulation;
-        }
-        .ca-btn:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 14px 26px rgba(15, 33, 71, 0.1);
-        }
-        .ca-btn:active {
-          transform: translateY(0px);
-          box-shadow: 0 10px 18px rgba(15, 33, 71, 0.08);
-        }
-        .ca-btn.primary {
-          border: 0;
-          background: linear-gradient(135deg, #0f2147 0%, #0ea5e9 100%);
-          color: #fff;
-          box-shadow: 0 16px 34px rgba(15, 33, 71, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.18);
-        }
-        .ca-btn.ghost {
-          background: #fff;
-          border: 1px solid ${BORDER};
-        }
-
-        @media (max-width: 1024px) {
           .ca-form {
-            width: min(980px, 100%);
+            width: min(1320px, 100%);
+            margin-left: auto;
+            margin-right: auto;
+
+            display: grid;
+            gap: 6px;
+
             padding: 10px 12px;
 
-            /* keep safe empty space */
-            margin-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 96px));
-            margin-bottom: calc(
-              10px + env(safe-area-inset-bottom) +
-                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
-            );
-          }
+            align-content: start;
+            box-sizing: border-box;
+            max-width: 100%;
+            overflow-x: clip;
 
-          .ca-grid.cols4,
-          .ca-grid.cols3 {
-            grid-template-columns: repeat(2, minmax(160px, 1fr));
-          }
-          .ca-span4 {
-            grid-column: span 2;
-          }
-        }
-
-        @media (max-width: 640px) {
-          .ca-form {
-            padding: 10px 10px;
-
-            /* keep safe empty space (mobile navbar is often smaller) */
-            margin-top: calc(6px + env(safe-area-inset-top) + var(--navbar-h, 84px));
-            margin-bottom: calc(
-              10px + env(safe-area-inset-bottom) +
-                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
-            );
+            scroll-margin-top: 16px;
+            scroll-margin-bottom: 16px;
           }
 
           .ca-title {
-            font-size: 14px;
+            font-weight: 900;
+            color: ${NAVY};
+            font-size: 15px;
+            line-height: 1.2;
+            letter-spacing: 0.02em;
           }
           .ca-sub {
-            font-size: 12px;
+            color: ${MUTED};
+            font-weight: 700;
+            font-size: 12.5px;
+            line-height: 1.25;
+            margin-top: -4px;
           }
           .ca-error {
-            font-size: 12px;
-            padding: 9px 10px;
+            background: #fff1f2;
+            border: 1px solid #fecdd3;
+            color: #9f1239;
+            border-radius: 14px;
+            padding: 9px 11px;
+            font-weight: 800;
+            font-size: 12.5px;
+            line-height: 1.25;
           }
 
+          .ca-type {
+            border: 1px solid rgba(223, 227, 236, 0.95);
+            border-radius: 14px;
+            padding: 10px 12px;
+            background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+            box-shadow: 0 10px 22px rgba(15, 33, 71, 0.06);
+          }
+          .ca-type-label {
+            color: ${NAVY};
+            font-weight: 900;
+            font-size: 10.5px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            opacity: 0.92;
+            margin-bottom: 8px;
+          }
+          .ca-type-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+          }
+          .ca-type-btn {
+            height: 36px;
+            padding: 0 16px;
+            border-radius: 9999px;
+            border: 1px solid rgba(223, 227, 236, 0.95);
+            background: #fff;
+            color: ${NAVY};
+            font-weight: 900;
+            font-size: 13px;
+            box-shadow: 0 10px 18px rgba(15, 33, 71, 0.06);
+            cursor: pointer;
+            touch-action: manipulation;
+          }
+          .ca-type-btn.on {
+            border: 0;
+            background: linear-gradient(135deg, #0f2147 0%, #0ea5e9 100%);
+            color: #fff;
+            box-shadow: 0 16px 34px rgba(15, 33, 71, 0.18),
+              inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          }
+
+          .ca-grid {
+            display: grid;
+            gap: 6px;
+            align-items: start;
+            min-width: 0;
+          }
+          .ca-grid.cols3 {
+            grid-template-columns: repeat(3, minmax(180px, 1fr));
+          }
+          .ca-grid.cols4 {
+            grid-template-columns: repeat(4, minmax(160px, 1fr));
+          }
+
+          .ca-span4 {
+            grid-column: span 4;
+          }
+
+          .ca-field {
+            display: grid;
+            gap: 4px;
+            min-width: 0;
+          }
           .ca-field label {
-            font-size: 10px;
-            letter-spacing: 0.11em;
+            color: ${NAVY};
+            font-weight: 900;
+            font-size: 10.5px;
+            line-height: 1.1;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            opacity: 0.92;
+          }
+
+          .req {
+            color: #dc2626;
+            font-weight: 900;
+          }
+
+          .ca-field.invalid label {
+            color: #dc2626;
+            opacity: 1;
+          }
+          .ca-field.invalid input,
+          .ca-field.invalid select,
+          .ca-field.invalid textarea {
+            border-color: #dc2626 !important;
+            box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14) !important;
           }
 
           .ca-field input,
           .ca-field select {
-            height: 36px; /* was 38px */
-            border-radius: 13px;
-            padding: 0 12px;
-            font-size: 12.5px;
+            height: 40px;
+            border: 1px solid rgba(223, 227, 236, 0.95);
+            border-radius: 14px;
+            padding: 0 14px;
+            font-weight: 800;
+            font-size: 13px;
+            color: ${NAVY};
+            outline: none;
+
+            background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+            box-shadow: inset 0 2px 8px rgba(15, 33, 71, 0.08),
+              inset 0 1px 0 rgba(255, 255, 255, 0.9),
+              0 10px 22px rgba(15, 33, 71, 0.06);
+            transition: box-shadow 150ms ease, border-color 150ms ease, transform 120ms ease;
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+
+            scroll-margin-top: calc(16px + var(--navbar-h, 96px) + env(safe-area-inset-top));
+            scroll-margin-bottom: calc(
+              16px + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) +
+                env(safe-area-inset-bottom)
+            );
+          }
+
+          .ca-field input::placeholder {
+            color: rgba(107, 114, 128, 0.82);
+            font-weight: 700;
+            letter-spacing: 0.01em;
+          }
+
+          .ca-field input:focus,
+          .ca-field select:focus {
+            border-color: rgba(15, 33, 71, 0.38);
+            box-shadow: inset 0 2px 9px rgba(15, 33, 71, 0.1),
+              0 0 0 4px rgba(14, 165, 233, 0.14),
+              0 12px 26px rgba(15, 33, 71, 0.1);
+            transform: translateY(-0.5px);
           }
 
           .ca-morebtn {
-            padding: 8px 11px; /* slightly tighter */
-            font-size: 12.25px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            width: 100%;
+            border: 1px solid rgba(223, 227, 236, 0.95);
+            background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+            border-radius: 14px;
+            padding: 9px 12px;
+            color: ${NAVY};
+            font-weight: 900;
+            font-size: 12.5px;
+            box-shadow: 0 10px 22px rgba(15, 33, 71, 0.06);
+            cursor: pointer;
+            user-select: none;
+            touch-action: manipulation;
+          }
+          .ca-morebtn .t {
+            letter-spacing: 0.01em;
+          }
+          .ca-morebtn .i {
+            opacity: 0.7;
+            font-size: 14px;
+            line-height: 1;
+          }
+          .ca-morebtn:active {
+            transform: translateY(0.5px);
+          }
+
+          .ca-optional {
+            display: grid;
+            gap: 6px;
+            padding-top: 2px;
           }
 
           .chk {
-            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: ${NAVY};
+            font-weight: 900;
+            font-size: 12.5px;
+            margin-top: 2px;
           }
 
           .ca-actions {
+            display: flex;
             gap: 8px;
-            justify-content: stretch;
+            justify-content: flex-end;
+            padding-top: 2px;
+            flex-wrap: wrap;
           }
           .ca-btn {
-            height: 38px; /* was 40px */
-            font-size: 12.5px;
-            padding: 0 14px;
-            flex: 1 1 160px; /* wraps in landscape; never overflows */
+            height: 40px;
+            border-radius: 9999px;
+            font-weight: 900;
+            padding: 0 18px;
+            border: 1px solid ${BORDER};
+            background: #fff;
+            color: ${NAVY};
+            font-size: 13px;
+            box-shadow: 0 10px 18px rgba(15, 33, 71, 0.06);
+            transition: transform 120ms ease, box-shadow 150ms ease;
+            max-width: 100%;
+            touch-action: manipulation;
           }
-        }
+          .ca-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 14px 26px rgba(15, 33, 71, 0.1);
+          }
+          .ca-btn:active {
+            transform: translateY(0px);
+            box-shadow: 0 10px 18px rgba(15, 33, 71, 0.08);
+          }
+          .ca-btn.primary {
+            border: 0;
+            background: linear-gradient(135deg, #0f2147 0%, #0ea5e9 100%);
+            color: #fff;
+            box-shadow: 0 16px 34px rgba(15, 33, 71, 0.18),
+              inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          }
+          .ca-btn.ghost {
+            background: #fff;
+            border: 1px solid ${BORDER};
+          }
 
-        @media (max-width: 420px) {
-          .ca-grid.cols4,
-          .ca-grid.cols3 {
-            grid-template-columns: 1fr;
-          }
-          .ca-span4 {
-            grid-column: span 1;
+          @media (max-width: 1024px) {
+            .ca-form {
+              width: min(980px, 100%);
+              padding: 10px 12px;
+            }
+
+            .ca-grid.cols4,
+            .ca-grid.cols3 {
+              grid-template-columns: repeat(2, minmax(160px, 1fr));
+            }
+            .ca-span4 {
+              grid-column: span 2;
+            }
           }
 
-          .ca-btn {
-            flex: 1 1 auto;
-            width: 100%;
+          @media (max-width: 640px) {
+            .ca-safe-wrap[data-safe="1"] {
+              padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 84px));
+              padding-bottom: calc(
+                14px + env(safe-area-inset-bottom) +
+                  max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+              );
+            }
+
+            .ca-form {
+              padding: 10px 10px;
+            }
+
+            .ca-title {
+              font-size: 14px;
+            }
+            .ca-sub {
+              font-size: 12px;
+            }
+            .ca-error {
+              font-size: 12px;
+              padding: 9px 10px;
+            }
+
+            .ca-field label {
+              font-size: 10px;
+              letter-spacing: 0.11em;
+            }
+
+            .ca-field input,
+            .ca-field select {
+              height: 36px;
+              border-radius: 13px;
+              padding: 0 12px;
+              font-size: 12.5px;
+            }
+
+            .ca-morebtn {
+              padding: 8px 11px;
+              font-size: 12.25px;
+            }
+
+            .chk {
+              font-size: 12px;
+            }
+
+            .ca-actions {
+              gap: 8px;
+              justify-content: stretch;
+            }
+            .ca-btn {
+              height: 38px;
+              font-size: 12.5px;
+              padding: 0 14px;
+              flex: 1 1 160px;
+            }
           }
-        }
-      `}</style>
-    </form>
+
+          @media (max-width: 420px) {
+            .ca-grid.cols4,
+            .ca-grid.cols3 {
+              grid-template-columns: 1fr;
+            }
+            .ca-span4 {
+              grid-column: span 1;
+            }
+
+            .ca-btn {
+              flex: 1 1 auto;
+              width: 100%;
+            }
+          }
+        `}</style>
+      </form>
+    </div>
   );
 }

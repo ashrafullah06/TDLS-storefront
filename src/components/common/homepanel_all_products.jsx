@@ -1,3 +1,4 @@
+// src/components/common/homepanel_all_products.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -828,6 +829,20 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   // Mobile UX: show audience list first, then a dedicated "options" pane
   const [mobilePane, setMobilePane] = useState("audience"); // "audience" | "options"
   const rightPaneRef = useRef(null);
+  const desktopRightPaneRef = useRef(null); // ensures options never "hide" when switching at bottom
+
+  const scrollRightToTop = (behavior = "auto") => {
+    const el = isMobile ? rightPaneRef.current : desktopRightPaneRef.current;
+    if (!el) return;
+    try {
+      // Force visibility of top content (incl. "No options found") after switching audiences.
+      el.scrollTo?.({ top: 0, behavior });
+    } catch {
+      try {
+        el.scrollTop = 0;
+      } catch {}
+    }
+  };
 
   /* ------------------- Touch scroll guard (prevents accidental taps) ------------------- */
   const ignoreClickUntilRef = useRef(0);
@@ -1155,6 +1170,15 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     else setMobilePane("audience");
   }, [isMobile, active?.key]);
 
+  // Guarantee right pane content is visible after any audience change (desktop + mobile).
+  useEffect(() => {
+    if (!active?.key) return;
+    // Desktop should be immediate (no “hidden at bottom” effect). Mobile remains smooth.
+    const behavior = isMobile ? "smooth" : "auto";
+    window.requestAnimationFrame(() => scrollRightToTop(behavior));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.key, isMobile]);
+
   const toggleAudience = (item) => {
     if (shouldIgnoreClick()) return;
     if (!item?.key) return;
@@ -1175,9 +1199,11 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     if (isMobile) {
       setMobilePane("options");
       window.requestAnimationFrame(() => {
-        try {
-          rightPaneRef.current?.scrollTo?.({ top: 0, behavior: "smooth" });
-        } catch {}
+        scrollRightToTop("smooth");
+      });
+    } else {
+      window.requestAnimationFrame(() => {
+        scrollRightToTop("auto");
       });
     }
   };
@@ -1211,6 +1237,11 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
     const next = computeOptions(item.key);
     setSubOptions(next);
+
+    // Ensure preview never "hides" the message/options due to prior scroll position.
+    window.requestAnimationFrame(() => {
+      scrollRightToTop("auto");
+    });
   };
 
   const schedulePreview = (item) => {
@@ -1235,6 +1266,32 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
   };
 
   const activeHref = active?.key ? `/collections/${normSlug(active.key)}` : "/collections";
+
+  // Desktop click-hardening:
+  // - First click selects (previews) to avoid "hover-only" dependency in production.
+  // - Second click (when already active) navigates normally.
+  const onDesktopAudienceClick = (e, item) => {
+    if (!e || !item?.key) return;
+
+    if (shouldIgnoreClick()) {
+      e.preventDefault?.();
+      e.stopPropagation?.();
+      return;
+    }
+
+    // Allow standard navigation patterns.
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+    // If not active, convert click into "select" (no navigation).
+    if (active?.key !== item.key) {
+      e.preventDefault?.();
+      e.stopPropagation?.();
+      cancelHoverIntent();
+      ignoreHoverUntilRef.current = Date.now() + 260;
+      previewAudience(item);
+    }
+    // If already active, allow navigation (keeps "go to collection" behavior).
+  };
 
   return (
     <>
@@ -1740,6 +1797,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                       onMouseLeave={() => cancelHoverIntent()}
                       onFocus={() => previewAudience(item)}
                       onBlur={() => cancelHoverIntent()}
+                      onClick={(e) => onDesktopAudienceClick(e, item)}
                     >
                       {item.label}
                     </Link>
@@ -1748,7 +1806,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
               </div>
             </div>
 
-            <div className="hpFly-right">
+            <div className="hpFly-right" ref={desktopRightPaneRef}>
               {fetchError ? (
                 <div className="hpFly-empty">We’ll be back shortly.</div>
               ) : active?.key ? (

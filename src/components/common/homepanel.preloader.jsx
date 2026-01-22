@@ -4,6 +4,9 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
+// ✅ ALSO preload All Products (audience/category/options) at site load
+import { HomePanelAllProductsPreloader } from "@/components/common/homepanel_all_products";
+
 /**
  * HomePanelPreloader (no UI)
  * -----------------------------------------------------------------------------
@@ -12,6 +15,7 @@ import { useRouter } from "next/navigation";
  * - Store payload in localStorage with TTL.
  * - Dispatch an event so HomePanel can hydrate immediately if it opens too fast.
  * - Warm critical routes via router.prefetch (best-effort).
+ * - Preload HomePanel All Products dataset (audiences/options) at site load.
  *
  * Shared cache keys (MUST match homepanel.jsx):
  * - tdls:homepanel:highlights:v1
@@ -22,9 +26,16 @@ const HP_HL_KEY = "tdls:homepanel:highlights:v1";
 const HP_HL_TS = "tdls:homepanel:highlights_ts:v1";
 const HP_HL_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
+// Ready event name (keep consistent across preloader + homepanel consumer)
+const HP_HL_READY_EVENT = "tdls:homepanel:highlightsReady";
+
 // Lightweight in-flight lock to avoid stampede across tabs/re-mounts
 const HP_HL_LOCK = "tdls:homepanel:highlights_lock:v1";
 const LOCK_TTL_MS = 25 * 1000; // 25s
+
+// Fetch timeout: allow cold-start but never hang
+const FETCH_TIMEOUT_IMMEDIATE_MS = 12000; // first-load attempt
+const FETCH_TIMEOUT_BG_MS = 15000; // idle/visibility refresh attempt
 
 function now() {
   return Date.now();
@@ -41,18 +52,20 @@ function safeParseJSON(raw) {
 function readCache() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(HP_HL_KEY);
+    const raw = window.localStorage.getItem(HP_HL_KEY);
     if (!raw) return null;
 
     const parsed = safeParseJSON(raw);
     if (!parsed || typeof parsed !== "object") return null;
 
-    const trendingProducts = Array.isArray(parsed.trendingProducts) ? parsed.trendingProducts : [];
+    const trendingProducts = Array.isArray(parsed.trendingProducts)
+      ? parsed.trendingProducts
+      : [];
     const bestSellerProducts = Array.isArray(parsed.bestSellerProducts)
       ? parsed.bestSellerProducts
       : [];
 
-    const tsRaw = localStorage.getItem(HP_HL_TS);
+    const tsRaw = window.localStorage.getItem(HP_HL_TS);
     const ts = tsRaw ? Number(tsRaw) : 0;
 
     return {
@@ -69,11 +82,15 @@ function writeCache(payload) {
   if (typeof window === "undefined") return;
   try {
     const safePayload = {
-      trendingProducts: Array.isArray(payload?.trendingProducts) ? payload.trendingProducts : [],
-      bestSellerProducts: Array.isArray(payload?.bestSellerProducts) ? payload.bestSellerProducts : [],
+      trendingProducts: Array.isArray(payload?.trendingProducts)
+        ? payload.trendingProducts
+        : [],
+      bestSellerProducts: Array.isArray(payload?.bestSellerProducts)
+        ? payload.bestSellerProducts
+        : [],
     };
-    localStorage.setItem(HP_HL_KEY, JSON.stringify(safePayload));
-    localStorage.setItem(HP_HL_TS, String(now()));
+    window.localStorage.setItem(HP_HL_KEY, JSON.stringify(safePayload));
+    window.localStorage.setItem(HP_HL_TS, String(now()));
   } catch {}
 }
 
@@ -84,27 +101,31 @@ function isFresh(cache) {
 }
 
 function hasData(cache) {
-  const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
-  const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
+  const t = Array.isArray(cache?.trendingProducts)
+    ? cache.trendingProducts
+    : [];
+  const b = Array.isArray(cache?.bestSellerProducts)
+    ? cache.bestSellerProducts
+    : [];
   return (t.length || 0) + (b.length || 0) > 0;
 }
 
 function dispatchReady() {
   if (typeof window === "undefined") return;
   try {
-    window.dispatchEvent(new Event("tdls:homepanel:highlightsReady"));
+    window.dispatchEvent(new Event(HP_HL_READY_EVENT));
   } catch {}
 }
 
 function acquireLock() {
   if (typeof window === "undefined") return true;
   try {
-    const raw = localStorage.getItem(HP_HL_LOCK);
+    const raw = window.localStorage.getItem(HP_HL_LOCK);
     const t = raw ? Number(raw) : 0;
 
     if (Number.isFinite(t) && t > 0 && now() - t < LOCK_TTL_MS) return false;
 
-    localStorage.setItem(HP_HL_LOCK, String(now()));
+    window.localStorage.setItem(HP_HL_LOCK, String(now()));
     return true;
   } catch {
     // If storage is blocked, just proceed (best-effort)
@@ -115,12 +136,12 @@ function acquireLock() {
 function releaseLock() {
   if (typeof window === "undefined") return;
   try {
-    localStorage.removeItem(HP_HL_LOCK);
+    window.localStorage.removeItem(HP_HL_LOCK);
   } catch {}
 }
 
 async function fetchHighlights({ signal }) {
-  // Primary endpoint: your app-level highlights API (fastest / already curated)
+  // Primary endpoint: app-level highlights API (curated)
   const res = await fetch("/api/home/highlights", {
     method: "GET",
     headers: { Accept: "application/json" },
@@ -133,22 +154,48 @@ async function fetchHighlights({ signal }) {
   const json = await res.json().catch(() => null);
   if (!json || !json.ok) return null;
 
-  const trendingProducts = Array.isArray(json.trendingProducts) ? json.trendingProducts : [];
-  const bestSellerProducts = Array.isArray(json.bestSellerProducts) ? json.bestSellerProducts : [];
+  const trendingProducts = Array.isArray(json.trendingProducts)
+    ? json.trendingProducts
+    : [];
+  const bestSellerProducts = Array.isArray(json.bestSellerProducts)
+    ? json.bestSellerProducts
+    : [];
 
   return { trendingProducts, bestSellerProducts };
 }
 
 function safeIdle(cb, timeoutMs = 900) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") return () => {};
+  let cancelled = false;
+
+  const run = () => {
+    if (cancelled) return;
+    try {
+      cb();
+    } catch {}
+  };
+
   const ric = window.requestIdleCallback;
   if (typeof ric === "function") {
+    let id;
     try {
-      ric(cb, { timeout: timeoutMs });
-      return;
-    } catch {}
+      id = ric(run, { timeout: timeoutMs });
+      return () => {
+        cancelled = true;
+        try {
+          window.cancelIdleCallback?.(id);
+        } catch {}
+      };
+    } catch {
+      // fall through to setTimeout
+    }
   }
-  window.setTimeout(cb, Math.min(450, timeoutMs));
+
+  const tid = window.setTimeout(run, Math.min(450, timeoutMs));
+  return () => {
+    cancelled = true;
+    window.clearTimeout(tid);
+  };
 }
 
 export default function HomePanelPreloader() {
@@ -158,6 +205,8 @@ export default function HomePanelPreloader() {
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+
+    if (typeof window === "undefined") return;
 
     // 1) If cache exists, immediately notify consumers (instant open)
     const existing = readCache();
@@ -176,22 +225,31 @@ export default function HomePanelPreloader() {
       router.prefetch("/admin/login");
     } catch {}
 
-    // 3) Immediate fetch on mount if cache missing or stale
+    // 3) Fetch on mount if cache missing or stale
     const shouldFetchNow = !existing || !isFresh(existing);
 
+    let cancelled = false;
+    let cancelIdle = () => {};
+
     const runFetch = async (reason = "immediate") => {
+      if (cancelled) return;
+
       // Prevent stampede across tabs/mounts
       if (!acquireLock()) return;
 
       const ac = new AbortController();
+      const timeoutMs =
+        reason === "immediate" ? FETCH_TIMEOUT_IMMEDIATE_MS : FETCH_TIMEOUT_BG_MS;
+
       const t = window.setTimeout(() => {
         try {
           ac.abort();
         } catch {}
-      }, reason === "immediate" ? 5200 : 6500);
+      }, timeoutMs);
 
       try {
         const data = await fetchHighlights({ signal: ac.signal });
+        if (cancelled) return;
         if (!data) return;
 
         writeCache(data);
@@ -212,7 +270,7 @@ export default function HomePanelPreloader() {
       runFetch("immediate");
     } else {
       // Cache is fresh: do a silent refresh later (keeps it current without any UI cost)
-      safeIdle(() => runFetch("idle"), 1200);
+      cancelIdle = safeIdle(() => runFetch("idle"), 1200);
     }
 
     // 4) Refresh on visibility return if cache is stale
@@ -221,20 +279,23 @@ export default function HomePanelPreloader() {
 
       const c = readCache();
       if (!c || !isFresh(c)) {
-        // do not block UI; run soon
-        safeIdle(() => runFetch("visible"), 700);
+        cancelIdle?.();
+        cancelIdle = safeIdle(() => runFetch("visible"), 700);
       } else if (hasData(c)) {
-        // ensure listeners get notified in case they mounted after cache write
         dispatchReady();
       }
     };
 
-    document.addEventListener("visibilitychange", onVisibility, { passive: true });
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
+      cancelled = true;
+      cancelIdle?.();
       document.removeEventListener("visibilitychange", onVisibility);
+      // Lock is TTL-based; no forced release here to avoid cross-tab races.
     };
   }, [router]);
 
-  return null;
+  // ✅ Critical: All-products preloader mounts here so desktop production never misses it
+  return <HomePanelAllProductsPreloader />;
 }

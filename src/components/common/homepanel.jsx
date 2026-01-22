@@ -1,3 +1,4 @@
+// PATH: src/components/common/homepanel.jsx
 "use client";
 
 import React, {
@@ -11,7 +12,11 @@ import React, {
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
-import HomePanelAllProducts from "@/components/common/homepanel_all_products";
+
+// ✅ Import preloader too (critical for desktop production “no option found”)
+import HomePanelAllProducts, {
+  HomePanelAllProductsPreloader,
+} from "@/components/common/homepanel_all_products";
 
 /* Brand tokens */
 const NAVY = "#0F2147";
@@ -114,7 +119,6 @@ async function fetchJsonNoStore(url, timeoutMs, externalSignal) {
     if (!res.ok) return null;
     return await res.json().catch(() => null);
   } catch {
-    // swallow (timeout/network/abort)
     return null;
   } finally {
     window.clearTimeout(t);
@@ -123,7 +127,6 @@ async function fetchJsonNoStore(url, timeoutMs, externalSignal) {
         externalSignal.removeEventListener("abort", onAbortOuter);
       } catch {}
     }
-    // if aborted by outer, no extra action required
     void abortedByOuter;
   }
 }
@@ -377,6 +380,78 @@ function dispatchHighlightsReady() {
   try {
     window.dispatchEvent(new Event("tdls:homepanel:highlightsReady"));
   } catch {}
+}
+
+/* ------------------ viewport-safe vh (iOS/Android) ------------------ */
+function setAppVhVar() {
+  if (typeof window === "undefined") return;
+  const vh = window.innerHeight * 0.01;
+  document.documentElement.style.setProperty("--app-vh", `${vh}px`);
+}
+
+/* ------------------ portal host ------------------ */
+function Portal({ children, zIndex = 2147483647 }) {
+  const [host, setHost] = useState(null);
+
+  useEffect(() => {
+    const el = document.createElement("div");
+    el.dataset.homepanelHost = "tdls";
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.zIndex = String(zIndex);
+
+    // ✅ FIX: pointer-events must be safe on desktop across stacks.
+    // The stage/backdrop/drawer manage their own pointer events.
+    el.style.pointerEvents = "auto";
+
+    document.body.appendChild(el);
+    setHost(el);
+    return () => {
+      try {
+        document.body.removeChild(el);
+      } catch {}
+    };
+  }, [zIndex]);
+
+  if (!host) return null;
+  return createPortal(children, host);
+}
+
+/* ===================== PRELOADER (mount in app/layout.js) ===================== */
+/**
+ * Mount this ONCE at website load (root client shell / app/layout client wrapper).
+ * This guarantees:
+ * - All Products dataset preloads for BOTH desktop + mobile.
+ * - Highlights cache can still be warmed by your existing preloader patterns.
+ */
+export function HomePanelPreloader() {
+  // keep VH stable early as well (prevents layout jumps on mobile/desktop toolbars)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const apply = () => setAppVhVar();
+    apply();
+    window.addEventListener("resize", apply, { passive: true });
+    window.addEventListener("orientationchange", apply, { passive: true });
+    const vv = window.visualViewport;
+    if (vv?.addEventListener) {
+      vv.addEventListener("resize", apply, { passive: true });
+      vv.addEventListener("scroll", apply, { passive: true });
+    }
+    return () => {
+      window.removeEventListener("resize", apply);
+      window.removeEventListener("orientationchange", apply);
+      if (vv?.removeEventListener) {
+        vv.removeEventListener("resize", apply);
+        vv.removeEventListener("scroll", apply);
+      }
+    };
+  }, []);
+
+  return (
+    <>
+      <HomePanelAllProductsPreloader />
+    </>
+  );
 }
 
 function Icon({ name = "spark" }) {
@@ -756,37 +831,6 @@ function RailItem({
   );
 }
 
-/* ------------------ viewport-safe vh (iOS/Android) ------------------ */
-function setAppVhVar() {
-  if (typeof window === "undefined") return;
-  const vh = window.innerHeight * 0.01;
-  document.documentElement.style.setProperty("--app-vh", `${vh}px`);
-}
-
-/* ------------------ portal host ------------------ */
-function Portal({ children, zIndex = 2147483647 }) {
-  const [host, setHost] = useState(null);
-
-  useEffect(() => {
-    const el = document.createElement("div");
-    el.dataset.homepanelHost = "tdls";
-    el.style.position = "fixed";
-    el.style.inset = "0";
-    el.style.zIndex = String(zIndex);
-    el.style.pointerEvents = "none";
-    document.body.appendChild(el);
-    setHost(el);
-    return () => {
-      try {
-        document.body.removeChild(el);
-      } catch {}
-    };
-  }, [zIndex]);
-
-  if (!host) return null;
-  return createPortal(children, host);
-}
-
 export default function HomePanel({ open, onClose }) {
   const router = useRouter();
   const { data: session, status } = useSession();
@@ -928,6 +972,7 @@ export default function HomePanel({ open, onClose }) {
     (async () => {
       try {
         // Attempt 1: API (short budget)
+        setLoadingHighlights(true);
         const data = await fetchJsonNoStore("/api/home/highlights", 5200, outer.signal);
 
         if (!cancelled && data?.ok) {
@@ -981,6 +1026,8 @@ export default function HomePanel({ open, onClose }) {
         }
       } catch {
         // Silent by design
+      } finally {
+        if (!cancelled) setLoadingHighlights(false);
       }
     })();
 
@@ -1251,123 +1298,6 @@ export default function HomePanel({ open, onClose }) {
       } catch {}
     }, 0);
     return () => window.clearTimeout(id);
-  }, [open]);
-
-  // ✅ Open-time behavior: hydrate instantly from cache; refresh silently only if stale.
-  // FIXED: fallback must not reuse an aborted signal.
-  useEffect(() => {
-    if (!open) return;
-
-    let cancelled = false;
-    const outer = new AbortController();
-
-    const cache = readHighlightsCache();
-    const cachedHasData = hasHighlightsCacheData(cache);
-
-    if (cachedHasData) {
-      const t = Array.isArray(cache?.trendingProducts) ? cache.trendingProducts : [];
-      const b = Array.isArray(cache?.bestSellerProducts) ? cache.bestSellerProducts : [];
-      setTrendingProducts(t.map(normalizeHighlightItem));
-      setBestSellerProducts(b.map(normalizeHighlightItem));
-      setLoadedOnce(true);
-      setLoadingHighlights(false);
-      setHighlightsError(null);
-      setHoverIndex(0);
-
-      if (isFreshHighlightsCache(cache)) {
-        return () => {
-          cancelled = true;
-          try {
-            outer.abort();
-          } catch {}
-        };
-      }
-    }
-
-    async function silentRefreshIfNeeded() {
-      if (cachedHasData && isFreshHighlightsCache(cache)) return;
-
-      setLoadingHighlights(false);
-      setHighlightsError(null);
-
-      try {
-        const data = await fetchJsonNoStore("/api/home/highlights", 6500, outer.signal);
-
-        if (!cancelled && data?.ok) {
-          const trending = Array.isArray(data.trendingProducts) ? data.trendingProducts : [];
-          const best = Array.isArray(data.bestSellerProducts) ? data.bestSellerProducts : [];
-
-          writeHighlightsCache({ trendingProducts: trending, bestSellerProducts: best });
-          dispatchHighlightsReady();
-
-          setTrendingProducts(trending.map(normalizeHighlightItem));
-          setBestSellerProducts(best.map(normalizeHighlightItem));
-          setLoadedOnce(true);
-          setHoverIndex(0);
-          return;
-        }
-
-        // Strapi fallback (new controller)
-        const ac2 = new AbortController();
-        const kill2 = window.setTimeout(() => {
-          try {
-            ac2.abort();
-          } catch {}
-        }, 8000);
-
-        const json = await fetchFromStrapi("/products?populate=*", ac2.signal);
-        window.clearTimeout(kill2);
-
-        const payload = unwrapStrapiProxy(json);
-        const products = toProductArrayFromStrapiPayload(payload);
-
-        if (cancelled) return;
-
-        const built = buildHighlightsFromProducts(products);
-
-        writeHighlightsCache({
-          trendingProducts: built.trendingProducts,
-          bestSellerProducts: built.bestSellerProducts,
-        });
-        dispatchHighlightsReady();
-
-        setTrendingProducts(built.trendingProducts);
-        setBestSellerProducts(built.bestSellerProducts);
-
-        setLoadedOnce(true);
-        setHoverIndex(0);
-
-        if (
-          (built.trendingProducts?.length || 0) === 0 &&
-          (built.bestSellerProducts?.length || 0) === 0
-        ) {
-          setHighlightsError("Live highlights are temporarily unavailable.");
-        }
-      } catch {
-        if (cancelled) return;
-
-        const stillEmpty =
-          (trendingProducts?.length || 0) === 0 && (bestSellerProducts?.length || 0) === 0;
-
-        if (stillEmpty) {
-          setHighlightsError("Live highlights are temporarily unavailable.");
-          setTrendingProducts([]);
-          setBestSellerProducts([]);
-        }
-      } finally {
-        if (!cancelled) setLoadingHighlights(false);
-      }
-    }
-
-    silentRefreshIfNeeded().catch(() => {});
-
-    return () => {
-      cancelled = true;
-      try {
-        outer.abort();
-      } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   useEffect(() => {
@@ -2044,6 +1974,7 @@ export default function HomePanel({ open, onClose }) {
             onMouseEnter={() => cancelCloseHighlightsPreview()}
             onMouseLeave={(e) => scheduleCloseHighlightsPreview(e)}
           >
+            {/* (Preview UI unchanged) */}
             <div style={{ padding: 16, borderBottom: `1px solid rgba(255,255,255,.34)` }}>
               <div
                 style={{
@@ -2416,97 +2347,6 @@ export default function HomePanel({ open, onClose }) {
                     No highlights yet.
                   </div>
                 )}
-
-                {!layout.showPreview && previewItem ? (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      borderRadius: 18,
-                      border: `1px solid ${BORDER}`,
-                      background: "linear-gradient(180deg,#ffffff 0%, #fbfbff 100%)",
-                      overflow: "hidden",
-                      boxShadow: "0 16px 40px rgba(6,10,24,.10)",
-                    }}
-                  >
-                    <div style={{ display: "flex", gap: 12, padding: 12, alignItems: "center", minWidth: 0 }}>
-                      <div
-                        style={{
-                          width: 56,
-                          height: 56,
-                          borderRadius: 14,
-                          background: "rgba(15,33,71,.08)",
-                          border: "1px solid rgba(15,33,71,.10)",
-                          overflow: "hidden",
-                          flex: "0 0 auto",
-                          position: "relative",
-                        }}
-                      >
-                        {previewItem.coverImageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={absUrl(previewItem.coverImageUrl)}
-                            alt={previewItem.coverImageAlt || previewItem.title || "Preview"}
-                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                            loading="lazy"
-                          />
-                        ) : null}
-                      </div>
-
-                      <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-                        <div
-                          style={{
-                            fontFamily: LUX_FONT,
-                            fontWeight: 900,
-                            color: NAVY,
-                            fontSize: 14.5,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {previewItem.title}
-                        </div>
-                        <div
-                          style={{
-                            marginTop: 3,
-                            fontFamily: SYS_FONT,
-                            fontWeight: 800,
-                            fontSize: 12,
-                            color: NAVY_SOFT,
-                            opacity: 0.85,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          Tap to open
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleNavigate(previewItem.href || routes.allProducts)}
-                        style={{
-                          flex: "0 0 auto",
-                          borderRadius: 999,
-                          border: `1px solid rgba(15,33,71,.14)`,
-                          background: `linear-gradient(180deg, #ffffff 0%, #f4f6fe 100%)`,
-                          color: NAVY,
-                          fontFamily: SYS_FONT,
-                          fontWeight: 900,
-                          letterSpacing: ".14em",
-                          textTransform: "uppercase",
-                          fontSize: 11,
-                          padding: "10px 12px",
-                          cursor: "pointer",
-                          touchAction: "manipulation",
-                        }}
-                      >
-                        Open
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
               </div>
 
               <div

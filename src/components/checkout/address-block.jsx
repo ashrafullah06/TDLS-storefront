@@ -2,53 +2,43 @@
 "use client";
 
 import React, { useMemo } from "react";
-
-const NAVY = "#0F2147";
-const BORDER = "#DFE3EC";
+import { BORDER, NAVY, MUTED } from "./checkout.addressbook";
 
 /**
  * AddressBlock (TDLS)
  * -----------------------------------------------------------------------------
  * PURPOSE
  * - Pure display + action triggers (Select / Edit / Delete)
- * - Default tile is not deletable
  * - Keyboard-accessible (Enter/Space selects)
  * - Defensive against partial/missing fields
  *
- * SINGLE SOURCE OF TRUTH (this file)
- * - Canonical field compatibility is based on your Prisma Address model:
- *   line1, line2, city, state, postalCode, countryIso2, phone, isDefault, label, type, etc.
- * - Backward compatible with legacy field names used across older checkout/address code.
- * - Exported helpers (create/update + normalization) live here so other files can import
- *   from one place and stay model-aligned.
+ * IMPORTANT COMPATIBILITY NOTES
+ * - This component must NOT enforce business rules that the parent already handles.
+ *   Example: default-address deletion is handled by the parent (OTP + backend rules).
+ *   Therefore, Delete is NOT hard-blocked here.
  *
  * Props:
  *  - addr: Address object
  *  - selected: boolean
  *  - onSelect(): void
- *  - onDelete(addr): void (not called for default addr)
+ *  - onEdit(addr): void        (preferred; parent opens modal / AddressForm / OTP)
+ *  - onDelete(addr): void      (preferred; parent handles OTP + API)
  *
- *  NEW (preferred):
- *  - onEdit(addr): void
- *      Parent-driven edit (opens modal, runs OTP, etc.).
- *      If present, overrides the legacy OTP+PUT edit flow.
- *
- *  LEGACY (supported if onEdit not provided):
+ * LEGACY (supported only if onEdit not provided):
  *  - getOtp: () => Promise<{ code:string, identifier:string, purpose?:string }>
  *  - buildUpdatePayload: (addr) => any
  *  - onRefresh: (result) => void
- *  - apiOrigin?: string (defaults to NEXT_PUBLIC_APP_ORIGIN or window.location.origin)
+ *  - apiOrigin?: string (optional; defaults to window.location.origin)
  */
+
 export default function AddressBlock({
   addr = {},
   selected = false,
   onSelect,
   onDelete,
-
-  /** OPTIONAL: parent-driven behavior */
   onEdit,
 
-  /** LEGACY OTP-based edit flow */
+  /** LEGACY OTP-based edit flow (avoid if possible) */
   getOtp,
   buildUpdatePayload,
   onRefresh,
@@ -60,9 +50,6 @@ export default function AddressBlock({
 
   const resolvedOrigin = useMemo(() => {
     if (apiOrigin && typeof apiOrigin === "string") return apiOrigin.replace(/\/+$/, "");
-    if (typeof process !== "undefined" && process?.env?.NEXT_PUBLIC_APP_ORIGIN) {
-      return String(process.env.NEXT_PUBLIC_APP_ORIGIN).replace(/\/+$/, "");
-    }
     if (typeof window !== "undefined" && window.location?.origin) {
       return window.location.origin.replace(/\/+$/, "");
     }
@@ -78,33 +65,26 @@ export default function AddressBlock({
     }
   };
 
-  /* ───────── ALWAYS-on Edit button behavior ─────────
-     1) If parent provides onEdit(addr), delegate fully.
-     2) Otherwise fall back to legacy OTP+PUT flow (kept for compatibility).
+  /* ───────── Edit behavior ─────────
+     1) Preferred: parent-driven via onEdit(addr)
+     2) Legacy: OTP + PUT flow (kept for backward compatibility)
   */
   const handleEdit = async (e) => {
     e.stopPropagation();
 
-    // NEW preferred path: delegate to parent
     if (typeof onEdit === "function") {
       onEdit(addr);
       return;
     }
 
-    // Legacy behavior (kept for compatibility)
-    if (!addr?.id) {
-      console.warn("AddressBlock: missing addr.id — cannot perform update.");
-      return;
-    }
-    if (typeof getOtp !== "function" || typeof buildUpdatePayload !== "function") {
-      console.error(
-        "AddressBlock: getOtp and buildUpdatePayload are required for legacy OTP Edit flow."
-      );
-      return;
-    }
+    // Legacy path
+    if (!addr?.id) return;
+    if (typeof getOtp !== "function" || typeof buildUpdatePayload !== "function") return;
 
     try {
       const otp = await getOtp(); // modal → { code, identifier, purpose? }
+      if (!otp?.code || !otp?.identifier) return;
+
       const rawPayload = buildUpdatePayload(addr) || {};
       const payload = normalizeAddressInput(rawPayload);
 
@@ -115,20 +95,15 @@ export default function AddressBlock({
         otp, // {code, identifier, purpose?}
       });
 
-      if (!res?.ok) {
-        console.warn("Address update failed:", res);
-      }
-
       onRefresh?.(res);
     } catch (err) {
-      console.error("Edit (OTP) flow aborted/failed:", err);
+      // Intentionally silent (parent can surface errors); avoid console noise in prod.
     }
   };
 
   const handleDelete = (e) => {
     e.stopPropagation();
-    if (isDefault) return; // safeguard
-    onDelete?.(addr);
+    if (typeof onDelete === "function") onDelete(addr);
   };
 
   return (
@@ -158,15 +133,13 @@ export default function AddressBlock({
             Edit
           </button>
 
-          {onDelete ? (
+          {typeof onDelete === "function" ? (
             <button
               type="button"
-              className={`btn-danger ${isDefault ? "is-disabled" : ""}`}
+              className="btn-danger"
               onClick={handleDelete}
-              disabled={isDefault}
-              aria-disabled={isDefault}
-              aria-label={isDefault ? "Default address cannot be deleted" : "Delete address"}
-              title={isDefault ? "Default address cannot be deleted" : "Delete address"}
+              aria-label="Delete address"
+              title={isDefault ? "Default address delete may require OTP" : "Delete address"}
             >
               Delete
             </button>
@@ -175,7 +148,7 @@ export default function AddressBlock({
       </div>
 
       <div className="row-mid">
-        <div className="line strong">{display?.contact || "—"}</div>
+        <div className="line contact">{display?.contact || "—"}</div>
         <div className="line strong">{display?.lineA || "—"}</div>
         {display?.lineB ? <div className="line strong">{display.lineB}</div> : null}
         <div className="line strong">{display?.lineC || "—"}</div>
@@ -186,7 +159,7 @@ export default function AddressBlock({
           width: 100%;
           border: 1px solid ${BORDER};
           border-radius: 18px;
-          padding: 18px;
+          padding: 16px;
           background: linear-gradient(180deg, #fff 0%, #fafbff 100%);
           box-shadow: 0 8px 24px rgba(15, 33, 71, 0.06);
           display: grid;
@@ -194,29 +167,36 @@ export default function AddressBlock({
           outline: none;
           cursor: pointer;
         }
-        .addr-tile + .addr-tile {
-          margin-top: 12px;
-        }
+
         .addr-tile.active {
           border-color: #2563eb;
           box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
           background: #f7faff;
         }
+
         .row-top {
           display: flex;
-          align-items: center;
+          align-items: flex-start;
           justify-content: space-between;
-          gap: 8px;
+          gap: 10px;
         }
+
         .title {
           display: flex;
           align-items: center;
           gap: 8px;
           color: ${NAVY};
+          min-width: 0;
         }
+
         .name {
           font-weight: 900;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 52vw;
         }
+
         .pill-default {
           background: #eef2ff;
           color: #3730a3;
@@ -225,38 +205,60 @@ export default function AddressBlock({
           font-size: 11px;
           padding: 3px 10px;
           border-radius: 999px;
+          flex: 0 0 auto;
         }
+
         .actions {
           display: flex;
           gap: 8px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
         }
-        .btn-ghost {
-          height: 36px;
-          padding: 0 10px;
+
+        .btn-ghost,
+        .btn-danger {
+          height: 38px;
+          min-height: 38px;
+          padding: 0 12px;
           border-radius: 10px;
+          font-weight: 900;
+          border: 1px solid ${BORDER};
           background: #fff;
           color: ${NAVY};
-          font-weight: 800;
-          border: 1px solid ${BORDER};
+          cursor: pointer;
         }
+
         .btn-danger {
-          height: 36px;
-          padding: 0 10px;
-          border-radius: 10px;
           background: #fff1f2;
           color: #991b1b;
-          font-weight: 800;
-          border: 1px solid #fecaca;
+          border-color: #fecaca;
         }
-        .btn-danger.is-disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
+
         .row-mid .line {
           color: ${NAVY};
         }
+
         .row-mid .line.strong {
+          font-weight: 850;
+        }
+
+        .row-mid .line.contact {
+          color: ${MUTED};
           font-weight: 800;
+        }
+
+        @media (max-width: 520px) {
+          .addr-tile {
+            padding: 14px;
+          }
+          .name {
+            max-width: 60vw;
+          }
+          .btn-ghost,
+          .btn-danger {
+            height: 42px; /* better tap target on mobile */
+            min-height: 42px;
+          }
         }
       `}</style>
     </div>
@@ -265,21 +267,19 @@ export default function AddressBlock({
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Display & normalization helpers (model-aligned; legacy-safe)
-   -----------------------------------------------------------------------------
-   - getAddressDisplay(addr) returns the exact strings AddressBlock renders.
-   - normalizeAddressInput(data) maps legacy keys into canonical Prisma keys.
-   These are intentionally defined in this file so every address screen can
-   import from one place and stay consistent.
 */
 
 export function getAddressDisplay(addr = {}) {
   const title =
     safeStr(addr?.label) ||
+    safeStr(addr?.alias) ||
+    safeStr(addr?.nickname) ||
     safeStr(addr?.name) ||
     safeStr(addr?.title) ||
-    safeStr(addr?.nickname) ||
     "—";
 
+  // Identity block (some flows attach these in Address.granular or UI payload)
+  const person = safeStr(addr?.name) || safeStr(addr?.fullName) || "";
   const phone =
     safeStr(addr?.phone) ||
     safeStr(addr?.mobile) ||
@@ -287,12 +287,10 @@ export function getAddressDisplay(addr = {}) {
     safeStr(addr?.contactPhone) ||
     "";
 
-  // Email is not part of the canonical Address model, but older UI may still attach it.
   const emailSafe = addr?.email ? String(addr.email).toLowerCase().trim() : "";
+  const contact = [person, phone, emailSafe].filter(Boolean).join(" • ") || "—";
 
-  const contact = [phone, emailSafe].filter(Boolean).join(" • ") || "—";
-
-  // Canonical (Prisma): line1/line2/city/state/postalCode/countryIso2
+  // Canonical: line1/line2/city/state/postalCode/countryIso2
   const line1 =
     safeStr(addr?.line1) ||
     safeStr(addr?.address1) ||
@@ -309,15 +307,11 @@ export function getAddressDisplay(addr = {}) {
     safeStr(addr?.floorNo) ||
     "";
 
-  // Optional granular/BD legacy fields; used only if line2 is missing
   const legacyLineB = [
     addr?.village,
     addr?.postOffice,
     addr?.union,
     addr?.policeStation,
-    addr?.adminLevel4,
-    addr?.adminLevel3,
-    addr?.adminLevel2,
     addr?.sublocality,
     addr?.locality,
     addr?.neighborhood,
@@ -326,17 +320,20 @@ export function getAddressDisplay(addr = {}) {
     .filter(Boolean)
     .join(", ");
 
-  const lineA = [line1].filter(Boolean).join(", ") || "—";
+  const lineA = line1 || "—";
   const lineB = line2 || legacyLineB || "";
 
-  const city = safeStr(addr?.city) || safeStr(addr?.upazila) || safeStr(addr?.adminLevel2) || "";
-  const state = safeStr(addr?.state) || safeStr(addr?.district) || safeStr(addr?.adminLevel1) || "";
-  const postal = safeStr(addr?.postalCode) || safeStr(addr?.zip) || safeStr(addr?.postcode) || "";
+  const city =
+    safeStr(addr?.city) || safeStr(addr?.upazila) || safeStr(addr?.adminLevel2) || "";
+  const state =
+    safeStr(addr?.state) || safeStr(addr?.district) || safeStr(addr?.adminLevel1) || "";
+  const postal =
+    safeStr(addr?.postalCode) || safeStr(addr?.zip) || safeStr(addr?.postcode) || "";
   const countryIso2 = (
     safeStr(addr?.countryIso2) ||
     safeStr(addr?.country) ||
     safeStr(addr?.countryCode) ||
-    ""
+    "BD"
   )
     .toUpperCase()
     .trim();
@@ -347,39 +344,49 @@ export function getAddressDisplay(addr = {}) {
 }
 
 export function normalizeAddressInput(input = {}) {
-  // Keep all original keys, but ensure canonical Prisma keys exist where possible.
-  // This avoids breaking existing callers while keeping the backend model happy.
   const data = { ...(input || {}) };
 
-  // line1/line2
+  // Canonical line1
   if (!safeStr(data.line1)) {
     data.line1 =
+      safeStr(data.streetAddress) ||
       safeStr(data.address1) ||
       safeStr(data.addressLine1) ||
-      safeStr(data.streetAddress) ||
       buildLine1FromGranular(data) ||
       data.line1;
   }
+
+  // Canonical line2
   if (!safeStr(data.line2)) {
-    data.line2 = safeStr(data.address2) || safeStr(data.addressLine2) || safeStr(data.unit) || data.line2;
+    data.line2 =
+      safeStr(data.address2) ||
+      safeStr(data.addressLine2) ||
+      safeStr(data.unit) ||
+      data.line2;
   }
 
-  // city/state/postalCode/countryIso2
+  // Canonical city/state (BD: upazila/district commonly supplied by UI)
   if (!safeStr(data.city)) data.city = safeStr(data.upazila) || safeStr(data.adminLevel2) || data.city;
   if (!safeStr(data.state)) data.state = safeStr(data.district) || safeStr(data.adminLevel1) || data.state;
 
   if (!safeStr(data.postalCode)) data.postalCode = safeStr(data.zip) || safeStr(data.postcode) || data.postalCode;
 
   if (!safeStr(data.countryIso2)) {
-    const c = safeStr(data.country) || safeStr(data.countryCode) || safeStr(data.countryIso2);
-    if (c) data.countryIso2 = String(c).toUpperCase();
+    const c = safeStr(data.countryIso2) || safeStr(data.country) || safeStr(data.countryCode) || "BD";
+    data.countryIso2 = String(c).toUpperCase();
   }
 
-  // phone
   if (!safeStr(data.phone)) data.phone = safeStr(data.mobile) || safeStr(data.phoneNumber) || data.phone;
 
-  // label
-  if (!safeStr(data.label)) data.label = safeStr(data.name) || safeStr(data.title) || safeStr(data.nickname) || data.label;
+  // label is optional but helps UX
+  if (!safeStr(data.label)) {
+    data.label =
+      safeStr(data.label) ||
+      safeStr(data.alias) ||
+      safeStr(data.nickname) ||
+      safeStr(data.name) ||
+      data.label;
+  }
 
   return data;
 }
@@ -391,9 +398,6 @@ function safeStr(v) {
 }
 
 function buildLine1FromGranular(a = {}) {
-  // Respect canonical fields first; this is only a fallback builder.
-  const street = [safeStr(a?.streetNumber), safeStr(a?.route)].filter(Boolean).join(" ");
-  const premise = [safeStr(a?.premise), safeStr(a?.subpremise)].filter(Boolean).join(", ");
   const legacyHouse = [
     safeStr(a?.houseName),
     safeStr(a?.houseNo),
@@ -403,13 +407,18 @@ function buildLine1FromGranular(a = {}) {
     .filter(Boolean)
     .join(", ");
 
+  const street = [safeStr(a?.streetNumber), safeStr(a?.route)].filter(Boolean).join(" ");
+  const premise = [safeStr(a?.premise), safeStr(a?.subpremise)].filter(Boolean).join(", ");
+
   const built = [legacyHouse, premise, street].filter(Boolean).join(", ");
   return built || "";
 }
 
-/* ──────────────────────────── API helpers (exported) ─────────────────────────
-   Header-based OTP calls that match your server routes.
-   Purposes remain: address_create / address_update.
+/* ──────────────────────────── LEGACY API helpers ────────────────────────────
+   Updated to match your CURRENT conventions:
+   - Endpoint: /api/customers/address-book and /api/customers/address-book/[id]
+   - OTP passed in BODY: otp: { identifier, code, purpose }
+   These helpers are kept only for older callers; newer code should mutate in parent.
 */
 
 export async function createAddressWithOtp({
@@ -425,18 +434,20 @@ export async function createAddressWithOtp({
     /\/+$/,
     ""
   );
-  const url = `${base}/api/customers/address-book`;
 
-  const res = await fetch(url, {
+  const res = await fetch(`${base}/api/customers/address-book`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-otp-code": String(otp.code),
-      "x-otp-identifier": String(otp.identifier),
-      "x-otp-purpose": String(otp.purpose || "address_create"),
-    },
-    body: JSON.stringify({ ...normalized, makeDefault: !!makeDefault }),
+    headers: { "content-type": "application/json" },
     credentials: "include",
+    body: JSON.stringify({
+      ...normalized,
+      makeDefault: !!makeDefault,
+      otp: {
+        identifier: String(otp.identifier),
+        code: String(otp.code),
+        purpose: String(otp.purpose || "address_create"),
+      },
+    }),
   });
 
   return safeJson(res);
@@ -457,18 +468,20 @@ export async function updateAddressWithOtp({
     /\/+$/,
     ""
   );
-  const url = `${base}/api/customers/address-book/${encodeURIComponent(id)}`;
 
-  const res = await fetch(url, {
+  const res = await fetch(`${base}/api/customers/address-book/${encodeURIComponent(id)}`, {
     method: "PUT",
-    headers: {
-      "content-type": "application/json",
-      "x-otp-code": String(otp.code),
-      "x-otp-identifier": String(otp.identifier),
-      "x-otp-purpose": String(otp.purpose || "address_update"),
-    },
-    body: JSON.stringify({ ...normalized, makeDefault: !!makeDefault }),
+    headers: { "content-type": "application/json" },
     credentials: "include",
+    body: JSON.stringify({
+      ...normalized,
+      makeDefault: !!makeDefault,
+      otp: {
+        identifier: String(otp.identifier),
+        code: String(otp.code),
+        purpose: String(otp.purpose || "address_update"),
+      },
+    }),
   });
 
   return safeJson(res);
@@ -482,7 +495,6 @@ async function safeJson(res) {
     j = { ok: false, error: "BAD_JSON" };
   }
 
-  // Preserve existing backend shape; add minimal debug fields only.
   if (j && typeof j === "object") {
     if (typeof j.ok !== "boolean") j.ok = !!res?.ok;
     j.__httpStatus = res.status;

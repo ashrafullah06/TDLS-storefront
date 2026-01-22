@@ -10,7 +10,12 @@ import GoBackButton from "./go-back-button";
 import Navbar from "@/components/common/navbar";
 import BottomFloatingBar from "@/components/common/bottomfloatingbar";
 
-import CheckoutAddressForm from "./checkout.addressform";
+/**
+ * IMPORTANT:
+ * Single canonical address input component:
+ * - src/components/checkout/address-form.jsx
+ */
+import AddressForm from "./address-form";
 import { OtpDialog, CheckoutModeDialog } from "./checkout.dialogs";
 
 import {
@@ -394,8 +399,10 @@ export default function CheckoutPage() {
     if (!addr) return;
     setSelectedKey(addr._key);
     setShipping(addr);
+
+    // Keep only canonical keys; avoid legacy "checkout_address" ghosting.
     try {
-      localStorage.setItem("checkout_address", JSON.stringify(addr));
+      localStorage.setItem("checkout_address_shipping", JSON.stringify(addr));
     } catch {}
   }, []);
 
@@ -420,9 +427,6 @@ export default function CheckoutPage() {
 
   /* --------------------
    * INIT: load everything in parallel on mount
-   * - Cart snapshot starts immediately (not click-triggered)
-   * - Account: address bundle + profile in parallel
-   * - Guest: draft in sessionStorage loaded immediately
    * -------------------- */
   useEffect(() => {
     (async () => {
@@ -458,7 +462,10 @@ export default function CheckoutPage() {
           profile.read().catch(() => ({})),
         ]);
 
-        const bundle = bundleRes.status === "fulfilled" ? bundleRes.value : { ok: false, list: [], def: null };
+        const bundle =
+          bundleRes.status === "fulfilled"
+            ? bundleRes.value
+            : { ok: false, list: [], def: null };
         const meObj = me.status === "fulfilled" ? me.value : {};
 
         let currentUser = { ...sessionUser };
@@ -787,7 +794,6 @@ export default function CheckoutPage() {
       localStorage.setItem("checkout_address_shipping", JSON.stringify(saved));
     } catch {}
 
-    // If server saved, refresh bundle to keep the grid consistent
     if (!res.localOnly) await refreshAccountAddressesKeepSelection();
 
     setShippingEditorOpen(false);
@@ -849,7 +855,6 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Optimistic local remove, then refresh bundle to guarantee single source of truth
     setAddresses((prev) => prev.filter((a) => a._key !== addr._key && String(a.id) !== String(addr.id)));
 
     if (selectedKey === addr._key) {
@@ -892,17 +897,20 @@ export default function CheckoutPage() {
     delete rest.line1;
     delete rest.line2;
 
-    const shippingDraft = {
-      ...rest,
-      name: nameRaw,
-      phone: phoneRaw,
-      email: emailRaw,
-      nameNormalized: nameNorm,
-      phoneNormalized: phoneNorm,
-      emailNormalized: emailNorm,
-      countryIso2: String(rest.countryIso2 || "BD").toUpperCase(),
-      makeDefault: false,
-    };
+    const shippingDraft = normalizeAddress(
+      {
+        ...rest,
+        name: nameRaw,
+        phone: phoneRaw,
+        email: emailRaw,
+        nameNormalized: nameNorm,
+        phoneNormalized: phoneNorm,
+        emailNormalized: emailNorm,
+        countryIso2: String(rest.countryIso2 || "BD").toUpperCase(),
+        makeDefault: false,
+      },
+      0
+    );
 
     setGuestDraft((prev) => {
       const next = {
@@ -943,17 +951,20 @@ export default function CheckoutPage() {
     delete rest.line1;
     delete rest.line2;
 
-    const billingDraft = {
-      ...rest,
-      name: nameRaw,
-      phone: phoneRaw,
-      email: emailRaw,
-      nameNormalized: nameNorm,
-      phoneNormalized: phoneNorm,
-      emailNormalized: emailNorm,
-      countryIso2: String(rest.countryIso2 || "BD").toUpperCase(),
-      makeDefault: false,
-    };
+    const billingDraft = normalizeAddress(
+      {
+        ...rest,
+        name: nameRaw,
+        phone: phoneRaw,
+        email: emailRaw,
+        nameNormalized: nameNorm,
+        phoneNormalized: phoneNorm,
+        emailNormalized: emailNorm,
+        countryIso2: String(rest.countryIso2 || "BD").toUpperCase(),
+        makeDefault: false,
+      },
+      0
+    );
 
     setGuestDraft((prev) => {
       const next = {
@@ -1263,13 +1274,26 @@ export default function CheckoutPage() {
     );
   }
 
+  /**
+   * FIX (critical):
+   * - No nested buttons inside a button.
+   * - Use a div role="button" wrapper for tile selection.
+   */
   const AddressTile = ({ a }) => {
     const selected = selectedKey && a?._key === selectedKey;
+
     return (
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         className={`addr-tile${selected ? " selected" : ""}`}
         onClick={() => select(a)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            select(a);
+          }
+        }}
         title="Select this address"
       >
         <div className="addr-tile-top">
@@ -1344,6 +1368,11 @@ export default function CheckoutPage() {
             display: grid;
             gap: 10px;
             cursor: pointer;
+            outline: none;
+          }
+          .addr-tile:focus-visible {
+            box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.18), 0 10px 26px rgba(15, 33, 71, 0.06);
+            border-color: rgba(29, 78, 216, 0.55);
           }
           .addr-tile.selected {
             border-color: rgba(29, 78, 216, 0.55);
@@ -1411,7 +1440,7 @@ export default function CheckoutPage() {
             border-radius: 999px;
           }
         `}</style>
-      </button>
+      </div>
     );
   };
 
@@ -1481,7 +1510,7 @@ export default function CheckoutPage() {
           setEditingShipping(null);
         }}
       >
-        <CheckoutAddressForm
+        <AddressForm
           title=""
           subtitle=""
           prefill={{
@@ -1512,7 +1541,7 @@ export default function CheckoutPage() {
           setEditingBilling(null);
         }}
       >
-        <CheckoutAddressForm
+        <AddressForm
           title=""
           subtitle=""
           prefill={{
@@ -1535,29 +1564,28 @@ export default function CheckoutPage() {
 
       <div className="checkout bg-white min-h-[100dvh]">
         <style jsx global>{`
-          .container {
-            padding-top: var(--nav-h, 88px);
-          }
+          /* Scoped: do not globally modify .container site-wide */
           .checkout {
+            padding-top: var(--nav-h, 88px);
             padding-bottom: max(140px, env(safe-area-inset-bottom));
           }
-          .card {
+          .checkout .card {
             border: 1px solid ${BORDER};
             border-radius: 18px;
             background: #fff;
             box-shadow: 0 8px 24px rgba(15, 33, 71, 0.06);
             overflow: hidden;
           }
-          .card-head {
+          .checkout .card-head {
             padding: 16px 18px;
             border-bottom: 1px solid ${BORDER};
             font-weight: 900;
             color: ${NAVY};
           }
-          .card-body {
+          .checkout .card-body {
             padding: 16px;
           }
-          .toast {
+          .checkout .toast {
             background: #fee2e2;
             border: 1px solid #fecaca;
             color: #991b1b;
@@ -1565,7 +1593,7 @@ export default function CheckoutPage() {
             padding: 10px 12px;
             font-weight: 900;
           }
-          .sticky-col {
+          .checkout .sticky-col {
             position: sticky;
             top: calc(var(--nav-h, 88px) + 16px);
             align-self: flex-start;
@@ -1728,7 +1756,7 @@ export default function CheckoutPage() {
                         boxShadow: "0 8px 24px rgba(15,33,71,0.06)",
                       }}
                     >
-                      <CheckoutAddressForm
+                      <AddressForm
                         title="Shipping address"
                         subtitle="Enter your details. This is session-only and will not be saved."
                         prefill={{
@@ -1775,7 +1803,7 @@ export default function CheckoutPage() {
 
                       {guestDraft.billingDifferent ? (
                         <div className="mt-4">
-                          <CheckoutAddressForm
+                          <AddressForm
                             title="Billing address"
                             subtitle="For COD, billing and shipping must match."
                             prefill={{
@@ -1987,21 +2015,23 @@ export default function CheckoutPage() {
 /* ===========================
    What was fixed / improved
    ===========================
-   1) True parallel preload on mount:
-      - Cart snapshot starts immediately (buildFreshCartSnapshot) and is applied as soon as it resolves.
-      - Account mode hydrates address-book bundle + profile in parallel, not sequentially.
-      - No “load later on click” paths were introduced.
+   1) Enforced the “landing/orchestrator” role:
+      - No giant inline form implementation.
+      - Uses single canonical AddressForm: ./address-form (src/components/checkout/address-form.jsx).
 
-   2) Address management is single source of truth:
-      - All account CRUD + default uses the canonical /api/customers/address-book layer via checkout.addressbook (book.*).
-      - After save/delete/default, we refresh via book.bundle() to keep UI consistent and deduped.
+   2) Removed invalid nested button DOM (production-critical):
+      - AddressTile is no longer a <button> containing <button>s.
+      - Prevents iOS Safari / desktop click+focus inconsistencies.
 
-   3) Smooth checkout UX:
-      - Guest draft writes to sessionStorage live (no page reload).
-      - Place Order CTA guard provides deterministic guidance and scrolls to the right section.
-      - COD OTP flow remains strictly at confirmation only (guest + account).
+   3) Uprooted ghosting triggers:
+      - Avoid writing legacy "checkout_address".
+      - Scoped CSS to .checkout to stop global container padding side effects.
 
-   4) Code consistency:
-      - This main file only imports the split modules you already created (addressbook/cart/dialogs/addressform).
-      - No extra splitting is done here; no duplicate old inline helpers remain.
+   4) Guest shipping -> Summary is instant:
+      - onDraftChange writes into guestDraft immediately (sessionStorage too).
+      - effectiveShipping derives from guestDraft.shipping; Summary always reflects it.
+
+   5) Hydration remains “load with checkout page”:
+      - cart preload starts immediately.
+      - account bundle + profile still hydrate in parallel after session detection.
 */

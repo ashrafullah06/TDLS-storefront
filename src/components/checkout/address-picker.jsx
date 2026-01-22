@@ -1,54 +1,13 @@
-// FILE: src/components/checkout/address-picker.jsx
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AddressForm from "./address-form";
+import AddressBlock from "./address-block";
 
-/** Brand palette */
-const NAVY = "#0F2147";
-const BORDER = "#DFE3EC";
-const MUTED = "#6B7280";
+/** Prefer canonical palette from the shared checkout module (single source). */
+import { BORDER, NAVY, MUTED } from "./checkout.addressbook";
 
 /* ───────────────── utils ───────────────── */
-const titleCase = (s = "") =>
-  s
-    .toString()
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (m) => m.toUpperCase());
-
-const compactLines = (a = {}) => {
-  const first = [titleCase(a.name || ""), a.phone, (a.email || "").toLowerCase()]
-    .filter(Boolean)
-    .join(" • ");
-
-  const l1 = [
-    a.houseName,
-    a.houseNo,
-    a.apartmentNo,
-    a.floorNo,
-    a.line1 || a.address1 || a.streetAddress,
-  ]
-    .filter(Boolean)
-    .map((x, i) => (i <= 3 ? titleCase(x) : x))
-    .join(", ");
-
-  const l2 = [a.line2 || a.address2, a.village, a.postOffice, a.union, a.policeStation]
-    .filter(Boolean)
-    .map(titleCase)
-    .join(", ");
-
-  const l3parts = [a.upazila || a.city, a.district || a.state];
-  if (a.postalCode) l3parts.push(a.postalCode);
-  l3parts.push((a.countryIso2 || a.country || "BD").toUpperCase());
-  const l3 = l3parts
-    .filter(Boolean)
-    .map((x, idx) => (idx < l3parts.length - 1 ? titleCase(x) : x))
-    .join(", ");
-
-  return { first, l1, l2, l3 };
-};
 
 async function fetchJSON(url, init) {
   const r = await fetch(url, {
@@ -91,7 +50,6 @@ function normalizeList(arr) {
 function needsOtpFromErrorMessage(msg = "") {
   const m = String(msg || "").trim();
   if (!m) return false;
-  // backend-style codes we should treat as "OTP required or OTP related"
   const codes = [
     "OTP_CODE_REQUIRED",
     "OTP_IDENTIFIER_PHONE_REQUIRED",
@@ -103,7 +61,11 @@ function needsOtpFromErrorMessage(msg = "") {
   return codes.some((c) => m.includes(c));
 }
 
-/* ───────────────── Canonical Address CRUD API (single source) ───────────────── */
+/* ───────────────── Canonical Address CRUD API (single source) ─────────────────
+   Matches your saved conventions:
+   - base: /api/customers/address-book
+   - id routes: /api/customers/address-book/[id]
+*/
 const AddressAPI = {
   async list() {
     const j = await fetchJSON("/api/customers/address-book");
@@ -127,7 +89,6 @@ const AddressAPI = {
   },
 
   async remove(id, payload) {
-    // DELETE with JSON body (supported; backend reads req.json())
     return fetchJSON(`/api/customers/address-book/${id}`, {
       method: "DELETE",
       headers: { "content-type": "application/json" },
@@ -136,7 +97,7 @@ const AddressAPI = {
   },
 };
 
-/* ───────────────── OTP (request only; consume happens in address mutation endpoint) ───────────────── */
+/* ───────────────── OTP request (mutation consumes OTP) ───────────────── */
 async function requestOtp(identifier, channel = "sms", purpose = "address_update") {
   const res = await fetch("/api/auth/request-otp", {
     method: "POST",
@@ -149,19 +110,37 @@ async function requestOtp(identifier, channel = "sms", purpose = "address_update
   return Number(j?.ttlSeconds || j?.ttl || 90) || 90;
 }
 
+function purposeLabel(purpose) {
+  switch (purpose) {
+    case "address_create":
+      return "Address creation verification";
+    case "address_delete":
+      return "Address deletion verification";
+    case "address_update":
+    default:
+      return "Address update verification";
+  }
+}
+
 /* ───────────────── Component ───────────────── */
 export default function AddressPicker({
   onSelectedAddress,
   defaultProfile, // { name, phone, email, phoneVerified }
   type = "shipping", // "shipping" | "billing"
 }) {
+  /** IMPORTANT: must match checkout-page.js + clear helpers */
+  const LS_SEL_KEY = useMemo(() => {
+    return type === "billing" ? "checkout_address_billing" : "checkout_address_shipping";
+  }, [type]);
+
   const [items, setItems] = useState([]);
   const [selId, setSelId] = useState(null);
+
   const [editing, setEditing] = useState(null);
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState("");
 
-  // OTP state
+  // OTP state (promise-based)
   const [otpAsk, setOtpAsk] = useState({
     open: false,
     identifier: "",
@@ -172,11 +151,122 @@ export default function AddressPicker({
   const [otpCode, setOtpCode] = useState("");
   const otpResolverRef = useRef(null);
 
-  function getDefaultIdentifier() {
+  const lockScrollRef = useRef({ prev: "" });
+
+  const getDefaultIdentifier = useCallback(() => {
     const phone = String(defaultProfile?.phone || "").trim();
-    // Your backend verifyOtpRequired() requires PHONE identifier for mutations.
-    // If you later expand backend to allow email, you can relax this.
     return phone || "";
+  }, [defaultProfile?.phone]);
+
+  const computePhoneVerified = useCallback(
+    (a) => {
+      const samePhone = !!a?.phone && a.phone === (defaultProfile?.phone || "");
+      return !!defaultProfile?.phoneVerified || samePhone || !!a?.phoneVerifiedAt;
+    },
+    [defaultProfile?.phone, defaultProfile?.phoneVerified]
+  );
+
+  const emitSelected = useCallback(
+    (a) => {
+      if (!a) return;
+
+      const phoneVerified = computePhoneVerified(a);
+      const payload = {
+        ...a,
+        phoneVerified,
+        // normalize type for downstream consumers that rely on it
+        type: a?.type || (type === "billing" ? "BILLING" : "SHIPPING"),
+      };
+
+      onSelectedAddress?.(payload);
+      try {
+        localStorage.setItem(LS_SEL_KEY, JSON.stringify(payload));
+      } catch {}
+    },
+    [LS_SEL_KEY, computePhoneVerified, onSelectedAddress, type]
+  );
+
+  const hydrate = useCallback(async () => {
+    setErr("");
+
+    // fast selection rehydrate (instant; then validate against fetched list)
+    let storedSelId = null;
+    try {
+      const raw = localStorage.getItem(LS_SEL_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (saved?.id) storedSelId = String(saved.id);
+      }
+    } catch {}
+
+    const list = await AddressAPI.list();
+    setItems(list);
+
+    let chosen = null;
+
+    if (storedSelId && list.some((x) => String(x.id) === storedSelId)) {
+      chosen = list.find((x) => String(x.id) === storedSelId);
+    } else {
+      chosen = list.find((a) => a.isDefault) || list[0] || null;
+    }
+
+    if (chosen) {
+      setSelId(chosen.id);
+      emitSelected(chosen);
+    } else {
+      setSelId(null);
+      try {
+        localStorage.removeItem(LS_SEL_KEY);
+      } catch {}
+      onSelectedAddress?.(null);
+    }
+  }, [LS_SEL_KEY, emitSelected, onSelectedAddress]);
+
+  useEffect(() => {
+    hydrate().catch(() => setErr("Could not load addresses."));
+  }, [hydrate]);
+
+  /* ───────────────── modal ghosting control ───────────────── */
+  useEffect(() => {
+    if (!open) return;
+
+    // lock html scroll
+    const prev = document.documentElement.style.overflow;
+    lockScrollRef.current.prev = prev;
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.documentElement.style.overflow = lockScrollRef.current.prev || "";
+    };
+  }, [open]);
+
+  function openAdd() {
+    setEditing(null);
+    setOpen(true);
+    setErr("");
+  }
+
+  function openEdit(a) {
+    const merged = {
+      ...a,
+      // ensure user identity fields are present for unified form experience
+      name: a.name || defaultProfile?.name || "",
+      email: a.email || defaultProfile?.email || "",
+      phone: a.phone || defaultProfile?.phone || "",
+      phoneVerified: computePhoneVerified(a),
+
+      // ensure UI aliases exist for AddressForm (which accepts both DB + UI shapes)
+      streetAddress: a.streetAddress || a.address1 || a.line1 || "",
+      address2: a.address2 || a.line2 || "",
+      countryIso2: (a.countryIso2 || a.country || "BD").toUpperCase(),
+      postalCode: a.postalCode || a.postcode || "",
+      // keep type explicit
+      type: a?.type || (type === "billing" ? "BILLING" : "SHIPPING"),
+    };
+
+    setEditing(merged);
+    setOpen(true);
+    setErr("");
   }
 
   async function promptOtp({ purpose = "address_update" } = {}) {
@@ -239,87 +329,21 @@ export default function AddressPicker({
     resolveOtp(code);
   }
 
-  // On mount: fetch list and rehydrate selected tile from localStorage first, fallback to default
-  async function hydrate() {
-    setErr("");
-    const list = await AddressAPI.list();
-    setItems(list);
-
-    let selectedFromStorage = null;
-    try {
-      const raw = localStorage.getItem(`checkout_${type}_address`);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        if (saved?.id && list.some((x) => x.id === saved.id)) {
-          selectedFromStorage = list.find((x) => x.id === saved.id);
-        }
-      }
-    } catch {}
-
-    const chosen = selectedFromStorage || list.find((a) => a.isDefault) || list[0] || null;
-
-    if (chosen) {
-      setSelId(chosen.id);
-
-      const samePhone = !!chosen.phone && chosen.phone === (defaultProfile?.phone || "");
-      const phoneVerified =
-        !!defaultProfile?.phoneVerified || samePhone || !!chosen.phoneVerifiedAt;
-
-      const payload = { ...chosen, phoneVerified };
-      onSelectedAddress?.(payload);
-
-      try {
-        localStorage.setItem(`checkout_${type}_address`, JSON.stringify(payload));
-      } catch {}
-    } else {
-      setSelId(null);
-      try {
-        localStorage.removeItem(`checkout_${type}_address`);
-      } catch {}
-    }
-  }
-
-  useEffect(() => {
-    hydrate().catch(() => setErr("Could not load addresses."));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function openAdd() {
-    setEditing(null);
-    setOpen(true);
-    setErr("");
-  }
-
-  function openEdit(a) {
-    const merged = {
-      ...a,
-      name: a.name || defaultProfile?.name || "",
-      email: a.email || defaultProfile?.email || "",
-      phone: a.phone || defaultProfile?.phone || "",
-      phoneVerified:
-        !!defaultProfile?.phoneVerified ||
-        (a.phone && a.phone === defaultProfile?.phone) ||
-        !!a.phoneVerifiedAt,
-
-      streetAddress: a.streetAddress || a.address1 || a.line1 || "",
-      address2: a.address2 || a.line2 || "",
-      countryIso2: (a.countryIso2 || a.country || "BD").toUpperCase(),
-      postalCode: a.postalCode || a.postcode || "",
-    };
-
-    setEditing(merged);
-    setOpen(true);
-    setErr("");
-  }
-
-  /* Save (create/update) aligned to backend:
-     - UPDATE: always requires OTP (backend enforces).
-     - CREATE: try without OTP; if backend requires OTP, prompt and retry. */
+  /* Save aligned to backend:
+     - UPDATE: prompt OTP, then update with otp payload (secure).
+     - CREATE: attempt no-OTP first; if backend requires, prompt OTP then retry.
+  */
   async function saveAddress(payload) {
     setErr("");
 
     const isEdit = !!payload?.id;
     const purpose = isEdit ? "address_update" : "address_create";
+
+    // Ensure type is preserved for downstream behavior
+    const withType = {
+      ...payload,
+      type: payload?.type || (type === "billing" ? "BILLING" : "SHIPPING"),
+    };
 
     try {
       if (isEdit) {
@@ -327,14 +351,13 @@ export default function AddressPicker({
         if (!code) return false;
 
         const identifier = getDefaultIdentifier();
-        await AddressAPI.update(payload.id, {
-          ...payload,
+        await AddressAPI.update(withType.id, {
+          ...withType,
           otp: { identifier, code, purpose },
         });
       } else {
-        // optimistic create (no OTP step unless backend requires)
         try {
-          await AddressAPI.create(payload);
+          await AddressAPI.create(withType);
         } catch (e) {
           if (!needsOtpFromErrorMessage(e?.message)) throw e;
 
@@ -343,7 +366,7 @@ export default function AddressPicker({
 
           const identifier = getDefaultIdentifier();
           await AddressAPI.create({
-            ...payload,
+            ...withType,
             otp: { identifier, code, purpose },
           });
         }
@@ -367,8 +390,9 @@ export default function AddressPicker({
   }
 
   /* Delete aligned to backend:
-     - If deleting DEFAULT: OTP required.
-     - If deleting non-default: try without OTP, prompt only if backend demands. */
+     - Try without OTP for non-default (if backend allows).
+     - If backend requires OTP or deleting default => prompt OTP and retry.
+  */
   async function removeAddress(a) {
     setErr("");
     if (!a?.id) return;
@@ -410,91 +434,28 @@ export default function AddressPicker({
         {items.length === 0 ? (
           <div className="empty">
             <p>No saved addresses yet.</p>
-            <button className="btn" onClick={openAdd}>
+            <button className="btn" onClick={openAdd} type="button">
               Add address
             </button>
           </div>
         ) : (
           <>
-            {items.map((a) => {
-              const { first, l1, l2, l3 } = compactLines(a);
-              const isDefault = !!a.isDefault;
-
-              return (
-                <div key={a.id} className={`tile ${isDefault ? "def" : ""}`}>
-                  <div className="head">
-                    <div className="badges">
-                      {isDefault && <span className="pill default">Default</span>}
-                      {isDefault && <span className="pill linked">Linked to your account</span>}
-                    </div>
-                    <div className="sel">
-                      <input
-                        type="radio"
-                        name={`${type}-addr`}
-                        checked={selId === a.id}
-                        onChange={() => {
-                          setSelId(a.id);
-
-                          const samePhone = !!a.phone && a.phone === (defaultProfile?.phone || "");
-                          const phoneVerified =
-                            !!defaultProfile?.phoneVerified || samePhone || !!a.phoneVerifiedAt;
-
-                          const payload = { ...a, phoneVerified };
-                          onSelectedAddress?.(payload);
-
-                          try {
-                            localStorage.setItem(
-                              `checkout_${type}_address`,
-                              JSON.stringify(payload)
-                            );
-                          } catch {}
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="who">
-                    {first ? (
-                      <div className="v">
-                        <b>{first}</b>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="addr">
-                    {l1 ? (
-                      <div className="v">
-                        <b>{l1}</b>
-                      </div>
-                    ) : null}
-                    {l2 ? (
-                      <div className="v">
-                        <b>{l2}</b>
-                      </div>
-                    ) : null}
-                    {l3 ? (
-                      <div className="v">
-                        <b>{l3}</b>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="row">
-                    <div className="actions">
-                      <button type="button" onClick={() => openEdit(a)} className="muted">
-                        Edit
-                      </button>
-                      <button type="button" onClick={() => removeAddress(a)} className="danger">
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            {items.map((a) => (
+              <AddressBlock
+                key={a.id}
+                addr={a}
+                selected={selId === a.id}
+                onSelect={() => {
+                  setSelId(a.id);
+                  emitSelected(a);
+                }}
+                onEdit={openEdit}
+                onDelete={removeAddress}
+              />
+            ))}
 
             <div>
-              <button onClick={openAdd} className="btn mt-2">
+              <button onClick={openAdd} className="btn mt-2" type="button">
                 + Add new address
               </button>
             </div>
@@ -502,12 +463,34 @@ export default function AddressPicker({
         )}
       </div>
 
-      {/* Modal: Address editor */}
+      {/* Modal: Address editor (uses the SINGLE canonical AddressForm) */}
       {open && (
-        <div className="modal" role="dialog" aria-modal="true">
+        <div
+          className="modal"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            // click outside closes (prevents stuck overlays)
+            if (e.target === e.currentTarget) {
+              setOpen(false);
+              setEditing(null);
+            }
+          }}
+        >
           <div className="sheet">
             <div className="sheet-head">
               <div className="title">{editing?.id ? "Edit address" : "Add address"}</div>
+              <button
+                type="button"
+                className="x"
+                aria-label="Close"
+                onClick={() => {
+                  setOpen(false);
+                  setEditing(null);
+                }}
+              >
+                ×
+              </button>
             </div>
             <div className="sheet-body">
               <AddressForm
@@ -527,14 +510,13 @@ export default function AddressPicker({
         </div>
       )}
 
-      {/* Inline OTP dialog (no separate verify endpoint; mutation consumes OTP) */}
+      {/* Inline OTP dialog (mutation consumes OTP; no separate verify endpoint) */}
       {otpAsk.open && (
-        <div className="otp-overlay">
+        <div className="otp-overlay" role="dialog" aria-modal="true">
           <div className="otp-sheet">
             <div className="otp-head">
               <div className="otp-ttl">Verify change</div>
               <button
-                id="otp-close-btn"
                 className="otp-x"
                 aria-label="Close"
                 type="button"
@@ -543,38 +525,62 @@ export default function AddressPicker({
                 ×
               </button>
             </div>
+
             <div className="otp-body">
               <div className="otp-line">
-                For your security, we sent a 6-digit code to <b>{otpAsk.identifier}</b> via{" "}
-                <b>{otpAsk.channel === "email" ? "email" : "SMS"}</b>.
+                {purposeLabel(otpAsk.purpose)} — we sent a 6-digit code to{" "}
+                <b>{otpAsk.identifier}</b>.
               </div>
 
               <input
                 className="otp-input"
                 value={otpCode}
-                onChange={(e) =>
-                  setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))
-                }
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                 placeholder="••••••"
                 inputMode="numeric"
                 autoFocus
               />
 
-              <button
-                id="otp-ok-btn"
-                className="otp-submit"
-                disabled={otpCode.length !== 6}
-                type="button"
-                onClick={handleOtpConfirm}
-              >
-                Continue
-              </button>
+              <div className="otp-actions">
+                <button
+                  className="otp-submit"
+                  disabled={otpCode.length !== 6}
+                  type="button"
+                  onClick={handleOtpConfirm}
+                >
+                  Continue
+                </button>
+
+                <button
+                  className="otp-resend"
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setErr("");
+                      const ttl = await requestOtp(
+                        otpAsk.identifier,
+                        otpAsk.channel || "sms",
+                        otpAsk.purpose
+                      );
+                      setOtpAsk((s) => ({ ...s, ttl: ttl || 90 }));
+                    } catch (e) {
+                      setErr(e?.message || "Could not resend OTP.");
+                    }
+                  }}
+                >
+                  Resend
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       <style jsx>{`
+        .picker {
+          width: 100%;
+        }
+
         .err {
           color: #dc2626;
           font-weight: 800;
@@ -583,97 +589,32 @@ export default function AddressPicker({
 
         .grid {
           display: grid;
-          gap: 18px;
+          gap: 14px;
         }
+
         .empty {
           display: flex;
           align-items: center;
           gap: 10px;
+          flex-wrap: wrap;
         }
+
         .btn {
-          height: 40px;
+          height: 42px;
           padding: 0 14px;
           border-radius: 12px;
           font-weight: 900;
           color: #fff;
           background: ${NAVY};
           border: 1px solid ${NAVY};
+          cursor: pointer;
         }
 
-        .tile {
-          border: 1px solid ${BORDER};
-          border-radius: 18px;
-          padding: 18px;
-          background: linear-gradient(180deg, #fff 0%, #fafbff 100%);
-          box-shadow: 0 8px 24px rgba(15, 33, 71, 0.06);
-        }
-        .tile.def {
-          outline: 2px solid rgba(15, 33, 71, 0.08);
-        }
-        .head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-        }
-        .badges {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
-        .pill {
-          font-weight: 800;
-          font-size: 11px;
-          padding: 3px 10px;
-          border-radius: 999px;
-          border: 1px solid ${BORDER};
-          background: #fff;
-          color: ${NAVY};
-        }
-        .pill.default {
-          background: #eef2ff;
-          color: #3730a3;
-          border-color: #c7d2fe;
-        }
-        .pill.linked {
-          background: #ecfdf5;
-          color: #065f46;
-          border-color: #a7f3d0;
+        .mt-2 {
+          margin-top: 8px;
         }
 
-        .who .v,
-        .addr .v {
-          color: ${NAVY};
-        }
-        .row {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 10px;
-          margin-top: 12px;
-        }
-        .actions {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-        .muted {
-          border: 1px solid ${BORDER};
-          background: #fff;
-          color: ${NAVY};
-          padding: 8px 12px;
-          border-radius: 12px;
-          font-weight: 800;
-        }
-        .danger {
-          background: #fff;
-          color: #b91c1c;
-          border: 1px solid #fca5a5;
-          padding: 8px 12px;
-          border-radius: 12px;
-          font-weight: 800;
-        }
-
+        /* Modal */
         .modal {
           position: fixed;
           inset: 0;
@@ -681,45 +622,63 @@ export default function AddressPicker({
           display: flex;
           align-items: center;
           justify-content: center;
-          z-index: 50;
+          z-index: 5000;
+          padding: 12px;
+          overscroll-behavior: contain;
         }
+
         .sheet {
           width: 760px;
-          max-width: calc(100% - 32px);
+          max-width: calc(100% - 24px);
           background: #fff;
           border-radius: 16px;
           border: 1px solid ${BORDER};
           overflow: hidden;
           box-shadow: 0 16px 40px rgba(15, 33, 71, 0.25);
-
-          /* Ensure visible within navbar + bottom bar safe zones */
           max-height: calc(
             100vh -
               (env(safe-area-inset-top) + var(--navbar-h, 96px)) -
-              (env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))) -
+              (env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))) -
               24px
           );
           display: flex;
           flex-direction: column;
         }
+
         .sheet-head {
           display: flex;
           align-items: center;
-          gap: 8px;
+          justify-content: space-between;
+          gap: 10px;
           padding: 12px 14px;
           border-bottom: 1px solid ${BORDER};
           flex: 0 0 auto;
         }
+
         .title {
-          font-weight: 800;
+          font-weight: 900;
           color: ${NAVY};
         }
+
+        .x {
+          width: 36px;
+          height: 36px;
+          border-radius: 12px;
+          border: 1px solid ${BORDER};
+          background: #fff;
+          font-size: 20px;
+          cursor: pointer;
+          color: ${NAVY};
+        }
+
         .sheet-body {
           padding: 16px;
           overflow: auto;
           flex: 1 1 auto;
         }
 
+        /* OTP */
         .otp-overlay {
           position: fixed;
           inset: 0;
@@ -727,25 +686,28 @@ export default function AddressPicker({
           display: flex;
           align-items: center;
           justify-content: center;
-          z-index: 70;
+          z-index: 6000;
           padding: 14px;
+          overscroll-behavior: contain;
         }
+
         .otp-sheet {
           width: min(460px, 92vw);
           background: #fff;
           border-radius: 16px;
           border: 1px solid ${BORDER};
           box-shadow: 0 16px 40px rgba(15, 33, 71, 0.25);
-
           max-height: calc(
             100vh -
               (env(safe-area-inset-top) + var(--navbar-h, 96px)) -
-              (env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))) -
+              (env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))) -
               24px
           );
           display: flex;
           flex-direction: column;
         }
+
         .otp-head {
           display: flex;
           align-items: center;
@@ -754,10 +716,12 @@ export default function AddressPicker({
           border-bottom: 1px solid ${BORDER};
           flex: 0 0 auto;
         }
+
         .otp-ttl {
           font-weight: 900;
           color: ${NAVY};
         }
+
         .otp-x {
           width: 36px;
           height: 36px;
@@ -766,7 +730,9 @@ export default function AddressPicker({
           background: #fff;
           font-size: 20px;
           cursor: pointer;
+          color: ${NAVY};
         }
+
         .otp-body {
           padding: 16px;
           display: grid;
@@ -774,9 +740,12 @@ export default function AddressPicker({
           overflow: auto;
           flex: 1 1 auto;
         }
+
         .otp-line {
           color: ${NAVY};
+          font-weight: 750;
         }
+
         .otp-input {
           height: 54px;
           border: 1px solid ${BORDER};
@@ -784,13 +753,50 @@ export default function AddressPicker({
           font-size: 22px;
           text-align: center;
           letter-spacing: 8px;
+          outline: none;
         }
+
+        .otp-actions {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
         .otp-submit {
+          flex: 1;
+          min-width: 160px;
           height: 46px;
           border-radius: 12px;
           background: ${NAVY};
           color: #fff;
           font-weight: 900;
+          border: 0;
+          cursor: pointer;
+        }
+
+        .otp-submit:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .otp-resend {
+          height: 46px;
+          padding: 0 14px;
+          border-radius: 12px;
+          border: 1px solid ${BORDER};
+          background: #fff;
+          color: ${NAVY};
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        @media (max-width: 520px) {
+          .sheet-body {
+            padding: 12px;
+          }
+          .btn {
+            width: 100%;
+          }
         }
       `}</style>
     </div>
