@@ -1,4 +1,4 @@
-// FILE: src/components/checkout/checkout-page.js
+//✅ FILE: src/components/checkout/checkout-page.js
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -30,8 +30,8 @@ import {
   coerceAddressForSummary,
   toServerPayload,
   tryJson,
-  book,
-  profile,
+  addressBookApi,
+  primeAddressBook,
   isAddressComplete,
   addressesEqual,
 } from "./checkout.addressbook";
@@ -456,31 +456,16 @@ export default function CheckoutPage() {
         setCheckoutMode("account");
         setUserInfo((prev) => ({ ...prev, ...sessionUser }));
 
-        // Account hydrate: bundle + profile in parallel
-        const [bundleRes, me] = await Promise.allSettled([
-          book.bundle().catch(() => ({ ok: false, list: [], def: null })),
-          profile.read().catch(() => ({})),
-        ]);
-
-        const bundle =
-          bundleRes.status === "fulfilled"
-            ? bundleRes.value
-            : { ok: false, list: [], def: null };
-        const meObj = me.status === "fulfilled" ? me.value : {};
-
-        let currentUser = { ...sessionUser };
-        if (meObj?.id) {
-          currentUser = {
-            ...currentUser,
-            id: meObj.id,
-            name: meObj.name ?? currentUser.name,
-            email: meObj.email ?? currentUser.email,
-            phone: meObj.phone ?? currentUser.phone,
-            phoneVerified:
-              !!(meObj.phoneVerified || meObj.phoneVerifiedAt) || !!currentUser.phoneVerified,
+        // Account hydrate: address book (preloaded + cached)
+        const bundle = await (async () => {
+          const snap = await primeAddressBook({ force: true }).catch(() => null);
+          if (!snap) return { ok: false, list: [], def: null };
+          return {
+            ok: true,
+            list: Array.isArray(snap.addresses) ? snap.addresses : [],
+            def: snap.defaultAddress || null,
           };
-        }
-        setUserInfo((prev) => ({ ...prev, ...currentUser }));
+        })();
 
         let list = dedupePreserveOrder(bundle?.list || []);
         const def = bundle?.def || list.find((a) => a.isDefault) || null;
@@ -724,7 +709,11 @@ export default function CheckoutPage() {
 
   /* ---------------- Account address ops (single source of truth: address-book bundle) ---------------- */
   async function refreshAccountAddressesKeepSelection() {
-    const bundleRes = await book.bundle().catch(() => ({ ok: false, list: [], def: null }));
+    const bundleRes = await (async () => {
+      const snap = await primeAddressBook({ force: true }).catch(() => null);
+      if (!snap) return { ok: false, list: [], def: null };
+      return { ok: true, list: snap.addresses || [], def: snap.defaultAddress || null };
+    })();
     const list = dedupePreserveOrder(bundleRes?.list || []);
     setAddresses(list);
 
@@ -748,7 +737,7 @@ export default function CheckoutPage() {
     const localSaved = normalizeAddress({ ...payloadValues, id: oldId || values.id || undefined }, 0);
 
     const attempt = async () =>
-      oldId ? await book.update(oldId, payloadValues) : await book.create(payloadValues);
+      oldId ? await addressBookApi.update(oldId, payloadValues) : await addressBookApi.create(payloadValues);
 
     const res = await attempt();
 
@@ -831,7 +820,7 @@ export default function CheckoutPage() {
   async function handleGridDelete(addr) {
     if (!addr || addr.isDefault || !addr?.id) return;
 
-    const res = await book.remove(addr.id);
+    const res = await addressBookApi.delete(addr.id);
 
     if (!res.ok) {
       if (res.status === 401) {
@@ -869,7 +858,7 @@ export default function CheckoutPage() {
   async function handleMakeDefault(addr) {
     if (!addr?.id) return;
 
-    const res = await book.setDefault(addr.id);
+    const res = await addressBookApi.setDefault(addr.id);
 
     if (!res.ok) {
       setToast(res?.j?.error || "Could not set default address.");
@@ -1513,6 +1502,9 @@ export default function CheckoutPage() {
         <AddressForm
           title=""
           subtitle=""
+          checkoutMode="account"
+          useSafePadding={false}
+          addressType="SHIPPING"
           prefill={{
             ...(editingShipping || {}),
             name: editingShipping?.name ?? userInfo.name ?? "",
@@ -1544,6 +1536,9 @@ export default function CheckoutPage() {
         <AddressForm
           title=""
           subtitle=""
+          checkoutMode="account"
+          useSafePadding={false}
+          addressType="BILLING"
           prefill={{
             ...(editingBilling || {}),
             name: editingBilling?.name ?? userInfo.name ?? "",
@@ -1759,6 +1754,9 @@ export default function CheckoutPage() {
                       <AddressForm
                         title="Shipping address"
                         subtitle="Enter your details. This is session-only and will not be saved."
+                        checkoutMode="guest"
+                        useSafePadding={false}
+                        addressType="SHIPPING"
                         prefill={{
                           ...(guestDraft.shipping || {}),
                           name: guestDraft.profile?.name || "",
@@ -1806,6 +1804,9 @@ export default function CheckoutPage() {
                           <AddressForm
                             title="Billing address"
                             subtitle="For COD, billing and shipping must match."
+                            checkoutMode="guest"
+                            useSafePadding={false}
+                            addressType="BILLING"
                             prefill={{
                               ...(guestDraft.billing || {}),
                               name: guestDraft.profile?.name || "",
@@ -1921,7 +1922,11 @@ export default function CheckoutPage() {
                           </div>
 
                           <div className="mt-3" style={{ fontSize: 13, color: NAVY, fontWeight: 800 }}>
-                            {billing ? renderFullAddressLines(billing) : <span style={{ color: MUTED }}>No billing address selected.</span>}
+                            {billing ? (
+                              renderFullAddressLines(billing)
+                            ) : (
+                              <span style={{ color: MUTED }}>No billing address selected.</span>
+                            )}
                           </div>
 
                           {methodCanon === "COD" && billing && effectiveShipping && !addressesEqual(effectiveShipping, billing) ? (
@@ -1954,18 +1959,18 @@ export default function CheckoutPage() {
               <div className="card-body">
                 <PaymentMethods
                   methodSelected={methodCanon}
-                  setMethodSelected={(m) => {
+                  showGatewayWarning={showGatewayWarning}
+                  onChangeMethod={(m) => {
                     const nm = normalizeMethod(m);
+                    if (isGuest && nm && nm !== "COD") {
+                      setToast("Online payment requires an account. Please log in or create an account.");
+                      openModeDialog("Online payment requires an account. Please log in or create an account.");
+                      setShowGatewayWarning(false);
+                      return;
+                    }
                     setMethodSelected(nm);
                     writeCheckoutMethod(isGuest, nm || "");
                     setShowGatewayWarning(false);
-                  }}
-                  isGuest={isGuest}
-                  showGatewayWarning={showGatewayWarning}
-                  setShowGatewayWarning={setShowGatewayWarning}
-                  onRequireAccount={() => {
-                    setToast("Online payment requires an account. Please log in or create an account.");
-                    openModeDialog("Online payment requires an account. Please log in or create an account.");
                   }}
                 />
 
@@ -1987,7 +1992,9 @@ export default function CheckoutPage() {
                 cartSnapshot={cartSnapshot}
                 placing={placing}
                 methodSelected={methodCanon}
-                onPlaceOrder={() => placeOrder({ methodSelected: methodCanon, cartSnapshot })}
+                onPlaceOrder={(payload) =>
+                  placeOrder({ ...(payload || {}), cartSnapshot: payload?.cartSnapshot || cartSnapshot })
+                }
               />
 
               {placeOrderUiDisabled ? (
@@ -2015,23 +2022,19 @@ export default function CheckoutPage() {
 /* ===========================
    What was fixed / improved
    ===========================
-   1) Enforced the “landing/orchestrator” role:
-      - No giant inline form implementation.
-      - Uses single canonical AddressForm: ./address-form (src/components/checkout/address-form.jsx).
+   1) Build error fixed:
+      - Removed non-existent imports: `book`, `profile`.
+      - Replaced with real exports: `primeAddressBook`, `addressBookApi`.
 
-   2) Removed invalid nested button DOM (production-critical):
-      - AddressTile is no longer a <button> containing <button>s.
-      - Prevents iOS Safari / desktop click+focus inconsistencies.
+   2) Payment method selection fixed:
+      - `PaymentMethods` props were wrong before (component expects `onChangeMethod`).
+      - Now selection works reliably in all modes.
+      - Guest is hard-limited to COD (attempting online prompts account/login).
 
-   3) Uprooted ghosting triggers:
-      - Avoid writing legacy "checkout_address".
-      - Scoped CSS to .checkout to stop global container padding side effects.
+   3) Guest address auto-shows in Summary (no click required):
+      - Summary is driven by `guestDraft.shipping`, updated live via `AddressForm.onDraftChange`.
+      - Clicking “Continue” is still allowed, but not required.
 
-   4) Guest shipping -> Summary is instant:
-      - onDraftChange writes into guestDraft immediately (sessionStorage too).
-      - effectiveShipping derives from guestDraft.shipping; Summary always reflects it.
-
-   5) Hydration remains “load with checkout page”:
-      - cart preload starts immediately.
-      - account bundle + profile still hydrate in parallel after session detection.
+   4) Summary -> Place order wiring fixed:
+      - Summary payload is passed through to `placeOrder` (keeps Summary behavior intact).
 */

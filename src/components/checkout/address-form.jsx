@@ -292,6 +292,13 @@ export default function AddressForm({
   const storageRef = useRef(null);
   const modeRef = useRef("account");
 
+  // Track whether user/autofill has started interacting (prevents overwrite flashes)
+  const userInteractedRef = useRef(false);
+  const hydratedFromStorageRef = useRef(false);
+
+  // Keep latest vals in a ref (for flush operations)
+  const valsRef = useRef(null);
+
   // Hydration-safe init: resolve mode + storage on mount and whenever checkoutMode changes.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -334,14 +341,22 @@ export default function AddressForm({
     };
   });
 
+  useEffect(() => {
+    valsRef.current = vals;
+  }, [vals]);
+
   const [history, setHistory] = useState({});
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
   const [showOptional, setShowOptional] = useState(false);
 
-  const lastDraftSigRef = useRef("");
   const saveTimerRef = useRef(null);
   const lastPersistSigRef = useRef("");
+
+  // Blink-safe draft-change dispatch (debounced)
+  const lastDraftSigRef = useRef("");
+  const draftNotifyTimerRef = useRef(null);
+  const pendingDraftRef = useRef(null);
 
   const divisionSuggestions = useMemo(() => {
     const base = [
@@ -358,38 +373,94 @@ export default function AddressForm({
     return Array.from(new Set([...extra, ...base]));
   }, [history]);
 
+  // Helper: "safe merge" - do not overwrite non-empty fields after user interaction,
+  // unless a new address id is being applied (selection from address book).
+  const safeMergeInto = useCallback((prev, incoming, { allowOverwrite }) => {
+    const next = { ...prev };
+
+    const prevId = String(prev?.id || "").trim();
+    const incId = String(incoming?.id || "").trim();
+
+    // If a different id comes in, treat as new address selection -> allow overwrite fully
+    const newSelection = !!incId && incId !== prevId;
+
+    const overwrite = allowOverwrite || newSelection;
+
+    for (const k of Object.keys(incoming || {})) {
+      const v = incoming[k];
+      if (v === undefined) continue;
+
+      if (overwrite) {
+        next[k] = v;
+        continue;
+      }
+
+      // Fill-only mode: only fill if current is empty-ish and incoming is meaningful
+      const cur = next[k];
+      const curEmpty =
+        cur == null ||
+        (typeof cur === "string" && cur.trim() === "") ||
+        (typeof cur === "number" && !Number.isFinite(cur));
+
+      const incMeaningful =
+        v != null && (!(typeof v === "string") || v.trim() !== "");
+
+      if (curEmpty && incMeaningful) next[k] = v;
+    }
+
+    return next;
+  }, []);
+
   // When storage becomes available, load draft/history and merge with prefill + defaults.
   useEffect(() => {
     if (!storage) return;
 
-    const draft = readDraftFrom(storage);
+    const st = storage;
+    const draft = readDraftFrom(st);
     const p = prefill && typeof prefill === "object" ? prefill : {};
 
-    setHistory(readHistoryFrom(storage));
+    setHistory(readHistoryFrom(st));
 
     setVals((prev) => {
       const typeFromProp =
         String(addressType || "SHIPPING").toUpperCase() === "BILLING" ? "BILLING" : "SHIPPING";
 
-      const merged = {
-        ...prev,
-        ...(draft && typeof draft === "object" ? draft : {}),
-        ...(p && typeof p === "object" ? p : {}),
+      const allowOverwrite = !userInteractedRef.current;
 
-        // hard normalize type + country
+      // Merge order: prev -> draft -> prefill (prefill is higher priority)
+      let merged = { ...prev };
+
+      if (draft && typeof draft === "object") {
+        merged = safeMergeInto(merged, draft, { allowOverwrite });
+      }
+      if (p && typeof p === "object") {
+        merged = safeMergeInto(merged, p, { allowOverwrite });
+      }
+
+      // hard normalize type + country + makeDefault
+      const next = {
+        ...merged,
         type:
-          String(p?.type || (draft?.type ?? typeFromProp))
+          String(p?.type || merged?.type || draft?.type || typeFromProp)
             .toUpperCase()
             .trim() === "BILLING"
             ? "BILLING"
             : "SHIPPING",
-        countryIso2: String(p?.countryIso2 || draft?.countryIso2 || prev.countryIso2 || "BD")
+        countryIso2: String(p?.countryIso2 || merged?.countryIso2 || "BD")
           .toUpperCase()
           .trim(),
-        makeDefault: p?.makeDefault ?? p?.isDefault ?? draft?.makeDefault ?? prev.makeDefault,
+        makeDefault:
+          p?.makeDefault ??
+          p?.isDefault ??
+          merged?.makeDefault ??
+          draft?.makeDefault ??
+          prev.makeDefault,
       };
 
-      return merged;
+      // Mark we did storage hydration once (useful for debugging / future safety)
+      hydratedFromStorageRef.current = true;
+
+      return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storage]);
@@ -438,11 +509,10 @@ export default function AddressForm({
     };
 
     setVals((prev) => {
-      const next = { ...prev };
+      const allowOverwrite = !userInteractedRef.current;
 
-      for (const k of Object.keys(patch)) {
-        if (patch[k] !== undefined) next[k] = patch[k];
-      }
+      // Apply patch with "no-overwrite" unless new id
+      let next = safeMergeInto(prev, patch, { allowOverwrite });
 
       next.type =
         String(next.type || "SHIPPING").toUpperCase().trim() === "BILLING" ? "BILLING" : "SHIPPING";
@@ -566,8 +636,26 @@ export default function AddressForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validateSignal]);
 
+  function markInteracted() {
+    userInteractedRef.current = true;
+  }
+
   function setField(k, v) {
-    setVals((p) => ({ ...p, [k]: v }));
+    markInteracted();
+
+    // Clear per-field error instantly on edit (prevents flicker)
+    setFieldErrors((prev) => {
+      if (!prev || !prev[k]) return prev;
+      const next = { ...prev };
+      delete next[k];
+      return next;
+    });
+
+    setVals((p) => {
+      const prevV = p?.[k];
+      if (Object.is(prevV, v)) return p;
+      return { ...p, [k]: v };
+    });
   }
 
   function isCompleteLocal(a) {
@@ -579,15 +667,42 @@ export default function AddressForm({
     return true;
   }
 
-  // Live canonical draft updates to parent, guarded to prevent loops.
-  useEffect(() => {
-    if (typeof onDraftChange !== "function") return;
-
-    const canonical = buildCanonicalAddressPayload(vals, { forceDefault });
+  function computeDraft() {
+    const current = valsRef.current || vals;
+    const canonical = buildCanonicalAddressPayload(current, { forceDefault });
 
     const phoneValid = !requirePhone || isValidBDMobile(canonical.phoneNormalized);
     const userOk = !includeUserFields || (!!canonical.nameNormalized && phoneValid);
     const complete = userOk && isCompleteLocal(canonical);
+
+    return { canonical, complete };
+  }
+
+  function flushDraftChange() {
+    if (typeof onDraftChange !== "function") return;
+    if (draftNotifyTimerRef.current) {
+      clearTimeout(draftNotifyTimerRef.current);
+      draftNotifyTimerRef.current = null;
+    }
+    const { canonical, complete } = computeDraft();
+    const sig = JSON.stringify({
+      v: canonical,
+      complete,
+      includeUserFields: !!includeUserFields,
+      requirePhone: !!requirePhone,
+      forceDefault: !!forceDefault,
+    });
+    if (sig === lastDraftSigRef.current) return;
+    lastDraftSigRef.current = sig;
+    onDraftChange(canonical, complete);
+  }
+
+  // Live canonical draft updates to parent, blink-safe (debounced) to avoid rapid toggle UI flashes.
+  useEffect(() => {
+    if (typeof onDraftChange !== "function") return;
+
+    const { canonical, complete } = computeDraft();
+    pendingDraftRef.current = { canonical, complete };
 
     const sig = JSON.stringify({
       v: canonical,
@@ -597,12 +712,32 @@ export default function AddressForm({
       forceDefault: !!forceDefault,
     });
 
+    // If exactly identical payload, do nothing.
     if (sig === lastDraftSigRef.current) return;
-    lastDraftSigRef.current = sig;
 
-    onDraftChange(canonical, complete);
+    if (draftNotifyTimerRef.current) clearTimeout(draftNotifyTimerRef.current);
+    draftNotifyTimerRef.current = setTimeout(() => {
+      const p = pendingDraftRef.current;
+      if (!p) return;
+
+      const sig2 = JSON.stringify({
+        v: p.canonical,
+        complete: p.complete,
+        includeUserFields: !!includeUserFields,
+        requirePhone: !!requirePhone,
+        forceDefault: !!forceDefault,
+      });
+      if (sig2 === lastDraftSigRef.current) return;
+
+      lastDraftSigRef.current = sig2;
+      onDraftChange(p.canonical, p.complete);
+    }, 160);
+
+    return () => {
+      if (draftNotifyTimerRef.current) clearTimeout(draftNotifyTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vals, includeUserFields, requirePhone, forceDefault]);
+  }, [vals, includeUserFields, requirePhone, forceDefault, typeof onDraftChange]);
 
   function rememberField(field, value) {
     const s = String(value || "").trim();
@@ -698,10 +833,14 @@ export default function AddressForm({
 
   async function handleSubmit(e) {
     e?.preventDefault?.();
+
+    // Ensure parent has the final stable draft before submit actions (blink-safe)
+    flushDraftChange();
+
     setError("");
     setFieldErrors({});
 
-    const canonical = buildCanonicalAddressPayload(vals, { forceDefault });
+    const canonical = buildCanonicalAddressPayload(valsRef.current || vals, { forceDefault });
 
     const errs = {};
     const missingLabels = [];
@@ -851,6 +990,7 @@ export default function AddressForm({
                 spellCheck={false}
                 value={vals.name || ""}
                 onChange={(e) => setField("name", e.target.value)}
+                onInput={() => markInteracted()}
                 placeholder="Your full name"
                 onBlur={() => rememberField("name", vals.name)}
                 onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -869,10 +1009,13 @@ export default function AddressForm({
                 spellCheck={false}
                 value={vals.phone || ""}
                 onChange={(e) => setField("phone", e.target.value)}
+                onInput={() => markInteracted()}
                 onBlur={(e) => {
                   const n = normalizeBDPhone(e.target.value);
-                  if (n && n !== vals.phone) setField("phone", n);
+                  if (n && n !== (valsRef.current?.phone || vals.phone)) setField("phone", n);
                   rememberField("phone", n || e.target.value);
+                  // Emit a stable draft after normalization (prevents parent toggling twice)
+                  flushDraftChange();
                 }}
                 placeholder="017XXXXXXXX / +88017XXXXXXXX"
                 onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -889,6 +1032,7 @@ export default function AddressForm({
                 spellCheck={false}
                 value={vals.email || ""}
                 onChange={(e) => setField("email", e.target.value)}
+                onInput={() => markInteracted()}
                 placeholder="name@email.com"
                 onBlur={() => rememberField("email", vals.email)}
                 onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -909,6 +1053,7 @@ export default function AddressForm({
               autoCapitalize="words"
               value={vals.streetAddress || vals.address1 || ""}
               onChange={(e) => setField("streetAddress", e.target.value)}
+              onInput={() => markInteracted()}
               placeholder="Street / Road / Area"
               onBlur={() => rememberField("streetAddress", vals.streetAddress)}
               onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -929,6 +1074,7 @@ export default function AddressForm({
               autoCapitalize="words"
               value={vals.upazila || vals.city || ""}
               onChange={(e) => setField("upazila", e.target.value)}
+              onInput={() => markInteracted()}
               placeholder="Upazila / City"
               onBlur={() => rememberField("upazila", vals.upazila)}
               onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -947,6 +1093,7 @@ export default function AddressForm({
               autoCapitalize="words"
               value={vals.district || ""}
               onChange={(e) => setField("district", e.target.value)}
+              onInput={() => markInteracted()}
               placeholder="District"
               onBlur={() => rememberField("district", vals.district)}
               onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -962,6 +1109,7 @@ export default function AddressForm({
               autoCapitalize="words"
               value={vals.division || ""}
               onChange={(e) => setField("division", e.target.value)}
+              onInput={() => markInteracted()}
               placeholder="Division"
               onBlur={() => rememberField("division", vals.division)}
               onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -976,6 +1124,7 @@ export default function AddressForm({
               inputMode="numeric"
               value={vals.postalCode || ""}
               onChange={(e) => setField("postalCode", e.target.value)}
+              onInput={() => markInteracted()}
               placeholder="Postal code"
               onBlur={() => rememberField("postalCode", vals.postalCode)}
               onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1009,6 +1158,7 @@ export default function AddressForm({
                   autoComplete="address-line1"
                   value={vals.houseNo || ""}
                   onChange={(e) => setField("houseNo", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="House No"
                   onBlur={() => rememberField("houseNo", vals.houseNo)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1020,6 +1170,7 @@ export default function AddressForm({
                   name="houseName"
                   value={vals.houseName || ""}
                   onChange={(e) => setField("houseName", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="House Name"
                   onBlur={() => rememberField("houseName", vals.houseName)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1031,6 +1182,7 @@ export default function AddressForm({
                   name="apartmentNo"
                   value={vals.apartmentNo || ""}
                   onChange={(e) => setField("apartmentNo", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="Apartment"
                   onBlur={() => rememberField("apartmentNo", vals.apartmentNo)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1042,6 +1194,7 @@ export default function AddressForm({
                   name="floorNo"
                   value={vals.floorNo || ""}
                   onChange={(e) => setField("floorNo", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="Floor"
                   onBlur={() => rememberField("floorNo", vals.floorNo)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1058,6 +1211,7 @@ export default function AddressForm({
                   autoCapitalize="words"
                   value={vals.address2 || ""}
                   onChange={(e) => setField("address2", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="Nearby landmark / extra details"
                   onBlur={() => rememberField("address2", vals.address2)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1074,6 +1228,7 @@ export default function AddressForm({
                   autoCapitalize="words"
                   value={vals.postOffice || ""}
                   onChange={(e) => setField("postOffice", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="Post Office"
                   onBlur={() => rememberField("postOffice", vals.postOffice)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1087,6 +1242,7 @@ export default function AddressForm({
                   autoCapitalize="words"
                   value={vals.union || ""}
                   onChange={(e) => setField("union", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="Union"
                   onBlur={() => rememberField("union", vals.union)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1100,6 +1256,7 @@ export default function AddressForm({
                   autoCapitalize="words"
                   value={vals.policeStation || vals.thana || ""}
                   onChange={(e) => setField("policeStation", e.target.value)}
+                  onInput={() => markInteracted()}
                   placeholder="Police Station / Thana"
                   onBlur={() => rememberField("policeStation", vals.policeStation)}
                   onFocus={(e) => ensureFieldVisible(e.currentTarget)}
@@ -1338,6 +1495,21 @@ export default function AddressForm({
               16px + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) +
                 env(safe-area-inset-bottom)
             );
+          }
+
+          /* Blink-safe autofill paint (Chrome/WebKit) */
+          .ca-field input:-webkit-autofill,
+          .ca-field input:-webkit-autofill:hover,
+          .ca-field input:-webkit-autofill:focus,
+          .ca-field select:-webkit-autofill,
+          .ca-field select:-webkit-autofill:hover,
+          .ca-field select:-webkit-autofill:focus {
+            -webkit-text-fill-color: ${NAVY};
+            box-shadow: 0 0 0px 1000px #ffffff inset,
+              inset 0 2px 8px rgba(15, 33, 71, 0.08),
+              inset 0 1px 0 rgba(255, 255, 255, 0.9),
+              0 10px 22px rgba(15, 33, 71, 0.06);
+            transition: background-color 9999s ease-in-out 0s;
           }
 
           .ca-field input::placeholder {

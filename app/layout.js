@@ -17,11 +17,13 @@ import AdminRouteGate from "@/components/admin/admin_route_gate"; // ✅ new tin
 import SlidingMenuBarPreloader from "@/components/common/slidingmenubar.preloader";
 
 // ✅ NEW: Preload HomePanel data (no click loading)
-// (This now also mounts the All Products preloader internally to prevent duplication.)
 import HomePanelPreloader from "@/components/common/homepanel.preloader";
 
 // ✅ NEW: Preload BottomFloatingBar data (no click loading)
 import BottomFloatingBarPreloader from "@/components/common/bottomfloatingbar.preloader";
+
+// ✅ NEW: Preload Collections / All Products dataset (no click loading)
+import { HomePanelAllProductsPreloader } from "@/components/common/homepanel_all_products";
 
 /* ------------------------- URL + asset normalization ------------------------- */
 const SITE_URL = (() => {
@@ -191,6 +193,7 @@ export default function RootLayout({ children }) {
               {/* ✅ Preloaders run as early as possible on site load (no UI) */}
               <SlidingMenuBarPreloader />
               <HomePanelPreloader />
+              <HomePanelAllProductsPreloader />
               <BottomFloatingBarPreloader />
 
               <Providers>
