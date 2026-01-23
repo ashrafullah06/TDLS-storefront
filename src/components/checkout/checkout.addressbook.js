@@ -932,3 +932,112 @@ export function useCheckoutAddressBook({
     setDefault,
   };
 }
+
+/* =====================================================================================
+ * Backward-compatible exports expected by checkout-page.js
+ * -------------------------------------------------------------------------------------
+ * checkout-page.js imports { book, profile } from this module.
+ * - book.* wraps the single source of truth: /api/customers/address-book
+ * - profile.read() provides identity prefill for account-mode (and safe fallback)
+ * ===================================================================================== */
+
+/**
+ * book.bundle()
+ * - Returns: { ok, list, def, status?, j? }
+ *   - list: normalized addresses (deduped, non-archived)
+ *   - def: normalized default address (or null)
+ */
+async function bundleAddressBook({ signal } = {}) {
+  const l = await addressBookApi.list({ signal }).catch(() => ({
+    ok: false,
+    status: 0,
+    addresses: [],
+    defaultAddress: null,
+    j: { error: "NETWORK_ERROR" },
+  }));
+
+  if (!l?.ok) {
+    return {
+      ok: false,
+      status: l?.status ?? 0,
+      list: [],
+      def: null,
+      j: l?.j || { error: "ADDRESS_BOOK_LIST_FAILED" },
+    };
+  }
+
+  let list = dedupePreserveOrder(l.addresses || []);
+  let def = l.defaultAddress || null;
+
+  // If default wasn't included in list, merge it in to keep UI consistent
+  if (def) list = mergeDefaultIntoList(list, def);
+
+  // If no explicit default but list has isDefault flag, derive it
+  if (!def) {
+    def = list.find((a) => a.isDefault) || null;
+  }
+
+  // Final dedupe + order stability
+  list = dedupePreserveOrder(list);
+
+  return { ok: true, status: l.status, list, def, j: l.j };
+}
+
+/**
+ * profile.read()
+ * - Returns a minimal profile object used for prefill:
+ *   { name, email, phone, phoneNormalized }
+ *
+ * Implementation notes:
+ * - Primary attempt: /api/customers/me (if your app exposes it)
+ * - Fallback: /api/auth/session (exists in your storefront)
+ * - Never throws; returns {} on failure.
+ */
+async function readProfile({ signal } = {}) {
+  // 1) Preferred: app profile endpoint (if present)
+  try {
+    const r1 = await tryJson("/api/customers/me", "GET", null, null, signal);
+    if (r1?.ok && r1?.j) {
+      const u = r1.j?.user || r1.j?.data || r1.j;
+      const name = safeString(u?.name || u?.fullName || u?.customerName).trim();
+      const email = trimLower(u?.email || u?.user?.email || "");
+      const phoneRaw = safeString(u?.phone || u?.mobile || u?.phoneNumber || "").trim();
+      const phoneNormalized = phoneRaw ? normalizeBDPhone(phoneRaw) : "";
+      return { name, email, phone: phoneNormalized || phoneRaw, phoneNormalized };
+    }
+  } catch {}
+
+  // 2) Fallback: auth session endpoint (known to exist)
+  try {
+    const r2 = await tryJson("/api/auth/session", "GET", null, null, signal);
+    if (r2?.ok && r2?.j) {
+      // Common NextAuth-ish shapes:
+      // - { user: {...} }
+      // - { session: { user: {...} } }
+      const u = r2.j?.user || r2.j?.session?.user || r2.j?.data?.user || null;
+      if (u) {
+        const name = safeString(u?.name || u?.fullName || u?.customerName).trim();
+        const email = trimLower(u?.email || "");
+        const phoneRaw = safeString(u?.phone || u?.mobile || u?.phoneNumber || "").trim();
+        const phoneNormalized = phoneRaw ? normalizeBDPhone(phoneRaw) : "";
+        return { name, email, phone: phoneNormalized || phoneRaw, phoneNormalized };
+      }
+    }
+  } catch {}
+
+  return {};
+}
+
+/** Backward-compatible API surface used by checkout-page.js */
+export const book = {
+  bundle: bundleAddressBook,
+  create: (values, opts) => addressBookApi.create(values, opts),
+  update: (id, values, opts) => addressBookApi.update(id, values, opts),
+  remove: (id, opts) => addressBookApi.remove(id, opts),
+  setDefault: (id, opts) => addressBookApi.setDefault(id, opts),
+};
+
+export const profile = {
+  read: readProfile,
+};
+

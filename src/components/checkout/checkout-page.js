@@ -57,6 +57,12 @@ const SS_CHECKOUT_MODE_KEY = "tdlc_checkout_mode_session_v1";
 const SS_CHECKOUT_METHOD_KEY = "tdlc_checkout_method_session_v1";
 const LS_CHECKOUT_METHOD_KEY = "checkout_method";
 
+/**
+ * AddressForm internal draft key (guest/session + account/local).
+ * We must mirror it here to keep Summary / Review in sync instantly.
+ */
+const AF_DRAFT_KEY = "tdlc_checkout_address_draft_v1";
+
 /** OTP is used ONLY at COD confirmation (both guest + account). */
 const COD_OTP_PURPOSE = "cod_confirm";
 
@@ -93,6 +99,23 @@ function clearGuestDraft() {
   try {
     sessionStorage.removeItem(SS_GUEST_KEY);
   } catch {}
+}
+
+/**
+ * AddressForm maintains its own draft (AF_DRAFT_KEY). If AddressForm hydrates UI from it
+ * without calling onDraftChange immediately, our Summary can remain empty.
+ * So we proactively pull AF_DRAFT_KEY (guest -> sessionStorage) and merge into guestDraft.
+ */
+function readAddressFormDraftFromSession() {
+  try {
+    const raw = sessionStorage.getItem(AF_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function readCheckoutModePref() {
@@ -340,6 +363,9 @@ export default function CheckoutPage() {
   const lastGuestShipSigRef = useRef("");
   const lastGuestBillSigRef = useRef("");
 
+  // Ensure we only do the AddressForm->guestDraft rehydration once per mount / mode enter
+  const guestAfHydratedRef = useRef(false);
+
   const isGuest = checkoutMode === "guest";
   const methodCanon = normalizeMethod(methodSelected);
 
@@ -539,6 +565,36 @@ export default function CheckoutPage() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [isGuest]);
+
+  /* ---------------- Guest: hard-sync Summary with AddressForm draft ----------------
+   * If AddressForm hydrates its UI from AF_DRAFT_KEY without immediately emitting onDraftChange,
+   * Summary can remain empty even after typing + pressing Continue.
+   * We read AF_DRAFT_KEY once when entering guest mode to keep checkout state canonical.
+   * ------------------------------------------------------------------------------- */
+  useEffect(() => {
+    if (checkoutMode !== "guest") {
+      guestAfHydratedRef.current = false;
+      return;
+    }
+    if (guestAfHydratedRef.current) return;
+
+    const fromAF = readAddressFormDraftFromSession();
+    if (fromAF && typeof fromAF === "object") {
+      // Best-effort: treat it as shipping draft if it contains address fields.
+      // (AddressForm stores canonical payload-ish shapes; normalizeAddress will unify.)
+      const maybeHasAddress =
+        !!String(fromAF.streetAddress || fromAF.line1 || fromAF.address1 || "").trim() ||
+        !!String(fromAF.upazila || fromAF.city || "").trim();
+
+      if (maybeHasAddress) {
+        applyGuestShippingDraft(fromAF);
+        // If AF draft also holds a billing payload, user will still edit it via Billing form.
+      }
+    }
+
+    guestAfHydratedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutMode]);
 
   /* ---------------- OTP for COD confirmation (account + guest) ---------------- */
   async function openOtpModalFor(identifier, channelGuess = "sms") {
@@ -820,7 +876,8 @@ export default function CheckoutPage() {
   async function handleGridDelete(addr) {
     if (!addr || addr.isDefault || !addr?.id) return;
 
-    const res = await addressBookApi.delete(addr.id);
+    // FIX: addressBookApi uses `.remove()` (not `.delete()`).
+    const res = await addressBookApi.remove(addr.id);
 
     if (!res.ok) {
       if (res.status === 401) {
@@ -882,9 +939,9 @@ export default function CheckoutPage() {
     const rest = values && typeof values === "object" ? { ...values } : {};
     delete rest._key;
     delete rest._ord;
-    delete rest.address1;
-    delete rest.line1;
-    delete rest.line2;
+
+    // Do NOT delete line1/line2/address1/address2 here; AddressForm may supply DB-shaped keys.
+    // normalizeAddress will reconcile streetAddress/line1/address1 variants safely.
 
     const shippingDraft = normalizeAddress(
       {
@@ -936,9 +993,6 @@ export default function CheckoutPage() {
     const rest = values && typeof values === "object" ? { ...values } : {};
     delete rest._key;
     delete rest._ord;
-    delete rest.address1;
-    delete rest.line1;
-    delete rest.line2;
 
     const billingDraft = normalizeAddress(
       {
@@ -1245,7 +1299,7 @@ export default function CheckoutPage() {
   /* ---------------- Render helpers ---------------- */
   function renderFullAddressLines(a) {
     if (!a) return <span>—</span>;
-    const line1 = [a.houseName, a.houseNo, a.apartmentNo, a.floorNo, a.line1 || a.address1]
+    const line1 = [a.houseName, a.houseNo, a.apartmentNo, a.floorNo, a.line1 || a.address1 || a.streetAddress]
       .filter(Boolean)
       .join(", ");
     const line2 = [a.village, a.postOffice, a.union, a.policeStation].filter(Boolean).join(", ");
@@ -1269,13 +1323,13 @@ export default function CheckoutPage() {
    * - Use a div role="button" wrapper for tile selection.
    */
   const AddressTile = ({ a }) => {
-    const selected = selectedKey && a?._key === selectedKey;
+    const selectedNow = selectedKey && a?._key === selectedKey;
 
     return (
       <div
         role="button"
         tabIndex={0}
-        className={`addr-tile${selected ? " selected" : ""}`}
+        className={`addr-tile${selectedNow ? " selected" : ""}`}
         onClick={() => select(a)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -1287,9 +1341,7 @@ export default function CheckoutPage() {
       >
         <div className="addr-tile-top">
           <div className="addr-tile-name">{titleCase(a?.name || userInfo?.name || "Address")}</div>
-          <div className="addr-tile-actions">
-            {a?.isDefault ? <span className="pill-default">Default</span> : null}
-          </div>
+          <div className="addr-tile-actions">{a?.isDefault ? <span className="pill-default">Default</span> : null}</div>
         </div>
 
         <div className="addr-tile-body">{renderFullAddressLines(a)}</div>
@@ -1447,6 +1499,9 @@ export default function CheckoutPage() {
           setModeDialogOpen(false);
           setMethodSelected(null);
           writeCheckoutMethod(true, "");
+
+          // Ensure we rehydrate from AddressForm draft on fresh guest entry.
+          guestAfHydratedRef.current = false;
         }}
         onLogin={gotoLogin}
         onCreate={gotoSignup}
@@ -1768,9 +1823,33 @@ export default function CheckoutPage() {
                         showMakeDefault={false}
                         submitLabel="Continue"
                         validateSignal={guestShipValidateSignal}
-                        onDraftChange={(vals) => applyGuestShippingDraft(vals)}
+                        onDraftChange={(vals) => {
+                          applyGuestShippingDraft(vals);
+                          if (placeOrderCtaWarning) setPlaceOrderCtaWarning("");
+                          if (toast) setToast("");
+                        }}
                         onCancel={() => {}}
-                        onSubmit={async () => true}
+                        onSubmit={async (vals) => {
+                          // Critical: AddressForm may not emit onDraftChange for autofill/submit paths.
+                          // Always sync here so Summary updates immediately.
+                          if (vals && typeof vals === "object") applyGuestShippingDraft(vals);
+
+                          const err = (() => {
+                            // Validate with the most recent draft snapshot (after applyGuestShippingDraft commit)
+                            // If state commit hasn't landed yet, validateGuestReady() will still force validate signals.
+                            return validateGuestReady();
+                          })();
+
+                          if (err) {
+                            setToast(err);
+                            return false;
+                          }
+
+                          // Smooth next step (payment)
+                          const paymentCard = document.getElementById("payment-card");
+                          paymentCard?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+                          return true;
+                        }}
                       />
                     </div>
 
@@ -1791,6 +1870,7 @@ export default function CheckoutPage() {
                             const v = !!e.target.checked;
                             setGuestDraft((p) => {
                               const next = { ...p, billingDifferent: v };
+                              // If turning off, billing should not block summary; keep draft but it won't be used.
                               writeGuestDraft(next);
                               return next;
                             });
@@ -1818,9 +1898,26 @@ export default function CheckoutPage() {
                             showMakeDefault={false}
                             submitLabel="Continue"
                             validateSignal={guestBillValidateSignal}
-                            onDraftChange={(vals) => applyGuestBillingDraft(vals)}
+                            onDraftChange={(vals) => {
+                              applyGuestBillingDraft(vals);
+                              if (placeOrderCtaWarning) setPlaceOrderCtaWarning("");
+                              if (toast) setToast("");
+                            }}
                             onCancel={() => {}}
-                            onSubmit={async () => true}
+                            onSubmit={async (vals) => {
+                              if (vals && typeof vals === "object") applyGuestBillingDraft(vals);
+
+                              // For COD constraint, billing must be complete and match shipping.
+                              const err = validateGuestReady();
+                              if (err) {
+                                setToast(err);
+                                return false;
+                              }
+
+                              const paymentCard = document.getElementById("payment-card");
+                              paymentCard?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+                              return true;
+                            }}
                           />
                         </div>
                       ) : (
@@ -1929,7 +2026,10 @@ export default function CheckoutPage() {
                             )}
                           </div>
 
-                          {methodCanon === "COD" && billing && effectiveShipping && !addressesEqual(effectiveShipping, billing) ? (
+                          {methodCanon === "COD" &&
+                          billing &&
+                          effectiveShipping &&
+                          !addressesEqual(effectiveShipping, billing) ? (
                             <div className="mt-3" style={{ color: "#b91c1c", fontWeight: 900, fontSize: 13 }}>
                               For Cash on Delivery, shipping and billing addresses must be the same.
                             </div>
@@ -1945,11 +2045,7 @@ export default function CheckoutPage() {
                 ) : null}
 
                 {/* MODE NOT CHOSEN */}
-                {!checkoutMode ? (
-                  <div style={{ color: MUTED, fontWeight: 900 }}>
-                    Please choose Guest Mode or Login to continue.
-                  </div>
-                ) : null}
+                {!checkoutMode ? <div style={{ color: MUTED, fontWeight: 900 }}>Please choose Guest Mode or Login to continue.</div> : null}
               </div>
             </section>
 
@@ -2004,9 +2100,7 @@ export default function CheckoutPage() {
                     onClick={handleDisabledPlaceOrderClick}
                     aria-label="Complete required steps before placing order"
                   />
-                  {placeOrderCtaWarning ? (
-                    <div className="po-guard-msg-inline">{placeOrderCtaWarning}</div>
-                  ) : null}
+                  {placeOrderCtaWarning ? <div className="po-guard-msg-inline">{placeOrderCtaWarning}</div> : null}
                 </>
               ) : null}
             </div>
@@ -2020,21 +2114,17 @@ export default function CheckoutPage() {
 }
 
 /* ===========================
-   What was fixed / improved
+   What was fixed / upgraded
    ===========================
-   1) Build error fixed:
-      - Removed non-existent imports: `book`, `profile`.
-      - Replaced with real exports: `primeAddressBook`, `addressBookApi`.
+   1) Guest address not appearing in Summary / Review:
+      - Added hard-sync from AddressForm draft key (tdlc_checkout_address_draft_v1) when entering Guest mode.
+      - Ensured AddressForm “Continue” always commits values into guestDraft via onSubmit (even if onDraftChange didn’t fire).
+      - Stopped deleting DB-shaped keys (line1/line2/address1/address2) in guest draft apply, preventing data loss across AddressForm variants.
 
-   2) Payment method selection fixed:
-      - `PaymentMethods` props were wrong before (component expects `onChangeMethod`).
-      - Now selection works reliably in all modes.
-      - Guest is hard-limited to COD (attempting online prompts account/login).
+   2) Account address delete runtime bug:
+      - Fixed API call: addressBookApi.remove() is the canonical method (was incorrectly calling .delete()).
 
-   3) Guest address auto-shows in Summary (no click required):
-      - Summary is driven by `guestDraft.shipping`, updated live via `AddressForm.onDraftChange`.
-      - Clicking “Continue” is still allowed, but not required.
-
-   4) Summary -> Place order wiring fixed:
-      - Summary payload is passed through to `placeOrder` (keeps Summary behavior intact).
+   3) Smoother flow + device-safe behavior preserved:
+      - Continue scrolls to Payment after valid guest address submission.
+      - No business logic changes to order placement, OTP, cart snapshot logic, or payment restrictions.
 */
