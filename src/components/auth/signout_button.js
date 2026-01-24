@@ -1,8 +1,8 @@
-//src/components/auth/signout_button.js
-'use client';
+// src/components/auth/signout_button.js
+"use client";
 
-import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 
 /**
  * IMPORTANT (Decoupling):
@@ -14,7 +14,10 @@ import { useState, useEffect } from 'react';
  * then do a refresh/navigation to update any UI state.
  */
 function clearCustomerClientArtifacts() {
-  try { sessionStorage.removeItem('tdlc_manual_signout'); } catch {}
+  // manual signout marker is timestamp-based; remove after use
+  try {
+    sessionStorage.removeItem("tdlc_manual_signout");
+  } catch {}
 
   const removeByPrefix = (storage, prefixes) => {
     try {
@@ -24,39 +27,45 @@ function clearCustomerClientArtifacts() {
         if (k) keys.push(k);
       }
       for (const k of keys) {
-        const kk = String(k || '');
+        const kk = String(k || "");
         if (prefixes.some((p) => kk.startsWith(p))) {
-          try { storage.removeItem(kk); } catch {}
+          try {
+            storage.removeItem(kk);
+          } catch {}
         }
       }
     } catch {}
   };
 
   const customerPrefixes = [
-    'tdlc_customer_',
-    'tdlc_cart_',
-    'tdlc_checkout_',
-    'customer_',
-    'cart_',
-    'checkout_',
+    "tdlc_customer_",
+    "tdlc_cart_",
+    "tdlc_checkout_",
+    "customer_",
+    "cart_",
+    "checkout_",
   ];
 
-  try { removeByPrefix(localStorage, customerPrefixes); } catch {}
-  try { removeByPrefix(sessionStorage, customerPrefixes); } catch {}
+  try {
+    removeByPrefix(localStorage, customerPrefixes);
+  } catch {}
+  try {
+    removeByPrefix(sessionStorage, customerPrefixes);
+  } catch {}
 }
 
 /** Customer-only hard logout endpoint (server clears customer cookies/session) */
 async function callCustomerHardLogout() {
   try {
-    const res = await fetch('/api/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
+    const res = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ ok: true }),
     });
     await res.json().catch(() => null);
-    return true;
+    return res.ok;
   } catch {
     return false;
   }
@@ -65,15 +74,15 @@ async function callCustomerHardLogout() {
 /** Standards-compliant POST <form> fallback to /api/auth/logout */
 function postCustomerLogoutForm(redirectTo) {
   try {
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/api/auth/logout';
-    form.style.display = 'none';
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/api/auth/logout";
+    form.style.display = "none";
 
     if (redirectTo) {
-      const cbInput = document.createElement('input');
-      cbInput.type = 'hidden';
-      cbInput.name = 'callbackUrl';
+      const cbInput = document.createElement("input");
+      cbInput.type = "hidden";
+      cbInput.name = "callbackUrl";
       cbInput.value = redirectTo;
       form.appendChild(cbInput);
     }
@@ -82,14 +91,16 @@ function postCustomerLogoutForm(redirectTo) {
     form.submit();
   } catch {
     if (redirectTo) {
-      try { window.location.assign(redirectTo); } catch {}
+      try {
+        window.location.assign(redirectTo);
+      } catch {}
     }
   }
 }
 
 export default function SignoutButton({
-  label = 'Sign out',
-  redirectTo = '/',
+  label = "Sign out",
+  redirectTo = "/",
   onDone,
   auto = false,
 }) {
@@ -101,8 +112,13 @@ export default function SignoutButton({
     setBusy(true);
 
     try {
-      // Mark a manual signout so guards/unload won't send a second POST
-      try { sessionStorage.setItem('tdlc_manual_signout', '1'); } catch {}
+      /**
+       * Mark a manual signout so guards/unload won't send a second POST.
+       * Use a timestamp (NOT "1") so it doesn't block idle signout forever.
+       */
+      try {
+        sessionStorage.setItem("tdlc_manual_signout", String(Date.now()));
+      } catch {}
 
       // 1) Customer-only server cleanup (NEVER touches admin plane by design)
       const hardOk = await callCustomerHardLogout();
@@ -111,14 +127,26 @@ export default function SignoutButton({
       clearCustomerClientArtifacts();
 
       // Optional hook
-      try { onDone && onDone(); } catch {}
+      try {
+        onDone && onDone();
+      } catch {}
 
-      // 3) Redirect + refresh (forces UI/session re-evaluation)
+      /**
+       * 3) Redirect + refresh (forces UI/session re-evaluation)
+       * router.refresh alone can allow a brief "bounce back" if session providers
+       * still have in-memory state; hard navigation guarantees correctness.
+       */
       try {
         router.replace(redirectTo);
         router.refresh();
+      } catch {}
+
+      try {
+        window.location.replace(redirectTo);
       } catch {
-        try { window.location.assign(redirectTo); } catch {}
+        try {
+          window.location.assign(redirectTo);
+        } catch {}
       }
 
       // If hard logout failed, do a standards fallback post to ensure cookies clear
@@ -141,20 +169,20 @@ export default function SignoutButton({
       onClick={handleSignOut}
       disabled={busy}
       style={{
-        background: '#0f2147',
-        color: '#fff',
-        border: '1px solid #0f2147',
-        letterSpacing: '.07em',
-        boxShadow: '0 2px 8px #eaeaea90',
+        background: "#0f2147",
+        color: "#fff",
+        border: "1px solid #0f2147",
+        letterSpacing: ".07em",
+        boxShadow: "0 2px 8px #eaeaea90",
         borderRadius: 9,
-        padding: '14px 32px',
+        padding: "14px 32px",
         fontSize: 17,
         minWidth: 0,
-        cursor: 'pointer',
+        cursor: "pointer",
       }}
-      aria-busy={busy ? 'true' : 'false'}
+      aria-busy={busy ? "true" : "false"}
     >
-      {busy ? 'Signing out…' : label}
+      {busy ? "Signing out…" : label}
     </button>
   );
 }

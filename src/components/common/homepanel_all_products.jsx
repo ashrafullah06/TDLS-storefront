@@ -45,17 +45,31 @@ async function fetchFromStrapi(path, signal) {
   }
 }
 
+/**
+ * IMPORTANT PERFORMANCE NOTE:
+ * Use a "lite" query FIRST to avoid huge `populate=*` payloads that can take minutes on cold-start.
+ * Fall back to the old queries only if the lite path fails.
+ */
 async function fetchProductsClient(signal) {
-  const payload =
+  // Lite query: only fetch relation slugs we need to build menus.
+  // Strapi v4 query syntax: populate[rel][fields][0]=slug
+  const lite =
     (await fetchFromStrapi(
-      "/products?populate=*&pagination[pageSize]=500",
+      "/products?pagination[pageSize]=500&fields[0]=id&fields[1]=slug" +
+        "&populate[audience_categories][fields][0]=slug" +
+        "&populate[categories][fields][0]=slug" +
+        "&populate[sub_categories][fields][0]=slug" +
+        "&populate[super_categories][fields][0]=slug" +
+        "&populate[age_groups][fields][0]=slug" +
+        "&populate[gender_groups][fields][0]=slug",
       signal
     )) ||
+    (await fetchFromStrapi("/products?populate=*&pagination[pageSize]=500", signal)) ||
     (await fetchFromStrapi("/products?populate=*", signal)) ||
     (await fetchFromStrapi("/products", signal));
 
-  if (!payload) return [];
-  const data = Array.isArray(payload.data) ? payload.data : [];
+  if (!lite) return [];
+  const data = Array.isArray(lite.data) ? lite.data : [];
   return data.map((n) =>
     n?.attributes ? { id: n.id, ...n.attributes, attributes: n.attributes } : n
   );
@@ -64,9 +78,10 @@ async function fetchProductsClient(signal) {
 async function fetchAgeGroupsClient(signal) {
   const payload =
     (await fetchFromStrapi(
-      "/age-groups?populate=*&pagination[pageSize]=500",
+      "/age-groups?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order",
       signal
     )) ||
+    (await fetchFromStrapi("/age-groups?populate=*&pagination[pageSize]=500", signal)) ||
     (await fetchFromStrapi("/age-groups?populate=*", signal)) ||
     (await fetchFromStrapi("/age-groups", signal));
 
@@ -88,9 +103,10 @@ async function fetchAgeGroupsClient(signal) {
 async function fetchCategoriesClient(signal) {
   const payload =
     (await fetchFromStrapi(
-      "/categories?populate=*&pagination[pageSize]=500",
+      "/categories?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order",
       signal
     )) ||
+    (await fetchFromStrapi("/categories?populate=*&pagination[pageSize]=500", signal)) ||
     (await fetchFromStrapi("/categories?populate=*", signal)) ||
     (await fetchFromStrapi("/categories", signal));
 
@@ -111,6 +127,10 @@ async function fetchCategoriesClient(signal) {
 
 async function fetchAudienceCategoriesClient(signal) {
   const payload =
+    (await fetchFromStrapi(
+      "/audience-categories?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order",
+      signal
+    )) ||
     (await fetchFromStrapi(
       "/audience-categories?populate=*&pagination[pageSize]=500",
       signal
@@ -828,23 +848,8 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
   // Mobile UX: show audience list first, then a dedicated "options" pane
   const [mobilePane, setMobilePane] = useState("audience"); // "audience" | "options"
-  const rightPaneRef = useRef(null);
-  const desktopRightPaneRef = useRef(null); // ensures options never "hide" when switching at bottom
 
-  const scrollRightToTop = (behavior = "auto") => {
-    const el = isMobile ? rightPaneRef.current : desktopRightPaneRef.current;
-    if (!el) return;
-    try {
-      // Force visibility of top content (incl. "No options found") after switching audiences.
-      el.scrollTo?.({ top: 0, behavior });
-    } catch {
-      try {
-        el.scrollTop = 0;
-      } catch {}
-    }
-  };
-
-  /* ------------------- Touch scroll guard (prevents accidental taps) ------------------- */
+  /* ------------------- Touch click-hardening (kept) ------------------- */
   const ignoreClickUntilRef = useRef(0);
   const gestureRef = useRef({ active: false, x: 0, y: 0, moved: false });
 
@@ -869,7 +874,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       (typeof e.clientY === "number" ? e.clientY : 0) - gestureRef.current.y
     );
 
-    // Small threshold: treat as scroll intent, then ignore the synthetic click
+    // Gesture threshold: ignore synthetic click after a swipe-like movement.
     if (dx > 8 || dy > 8) gestureRef.current.moved = true;
   };
 
@@ -878,7 +883,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const moved = Boolean(gestureRef.current.moved);
     gestureRef.current.active = false;
 
-    // If user was scrolling, ignore click events that follow immediately (mobile browsers)
     if (moved) ignoreClickUntilRef.current = Date.now() + 320;
   };
 
@@ -1052,6 +1056,27 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     [ageGroups, categoriesList, audienceCategories]
   );
 
+  /**
+   * CRITICAL FIX (late-loading 2–3 minutes):
+   * Build "extra audiences" from PRODUCTS immediately (fast, always available once products are),
+   * so you never see 2–3 audiences appear later only after audienceCategories finishes.
+   */
+  const extrasFromProducts = useMemo(() => {
+    const set = new Set();
+    (products || []).forEach((p) => {
+      const slugs = Array.isArray(p?.audience_categories_slugs)
+        ? p.audience_categories_slugs
+        : extractRelSlugs(p, "audience_categories");
+      slugs.forEach((s) => {
+        const k = normSlug(s);
+        if (k) set.add(k);
+      });
+    });
+
+    // remove base keys here later (barItems handles it)
+    return Array.from(set);
+  }, [products]);
+
   const barItems = useMemo(() => {
     const base = [
       { key: "women", label: "Women" },
@@ -1069,7 +1094,8 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
     const baseKeys = new Set(base.map((x) => normSlug(x.key)));
 
-    const extras = (audienceCategories || [])
+    // extras from taxonomy (if/when loaded)
+    const taxExtras = (audienceCategories || [])
       .map((a) => {
         const k = normSlug(a.slug);
         if (!k) return null;
@@ -1082,19 +1108,29 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       .filter(Boolean)
       .filter((x) => x.key && !baseKeys.has(x.key));
 
+    // extras from products (immediate; prevents late appearance)
+    const prodExtras = (extrasFromProducts || [])
+      .map((k) => normSlug(k))
+      .filter(Boolean)
+      .filter((k) => !baseKeys.has(k))
+      .map((k) => ({ key: k, label: titleizeSlug(k), order: undefined }));
+
+    // Merge (taxonomy wins label/order if present)
     const map = new Map();
-    extras.forEach((x) => map.set(normSlug(x.key), x));
+    prodExtras.forEach((x) => map.set(normSlug(x.key), x));
+    taxExtras.forEach((x) => map.set(normSlug(x.key), { ...map.get(normSlug(x.key)), ...x }));
+
     const deduped = Array.from(map.values());
 
     deduped.sort((a, b) => {
       const ai = typeof a.order === "number" ? a.order : Infinity;
       const bi = typeof b.order === "number" ? b.order : Infinity;
       if (ai !== bi) return ai - bi;
-      return a.label.localeCompare(b.label);
+      return String(a.label || "").localeCompare(String(b.label || ""));
     });
 
     return base.concat(deduped.map(({ key, label }) => ({ key, label })));
-  }, [audienceCategories]);
+  }, [audienceCategories, extrasFromProducts]);
 
   const computeOptions = (key) => {
     const cache = optionsCacheRef.current;
@@ -1170,15 +1206,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     else setMobilePane("audience");
   }, [isMobile, active?.key]);
 
-  // Guarantee right pane content is visible after any audience change (desktop + mobile).
-  useEffect(() => {
-    if (!active?.key) return;
-    // Desktop should be immediate (no “hidden at bottom” effect). Mobile remains smooth.
-    const behavior = isMobile ? "smooth" : "auto";
-    window.requestAnimationFrame(() => scrollRightToTop(behavior));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.key, isMobile]);
-
   const toggleAudience = (item) => {
     if (shouldIgnoreClick()) return;
     if (!item?.key) return;
@@ -1196,16 +1223,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
     const next = computeOptions(item.key);
     setSubOptions(next);
 
-    if (isMobile) {
-      setMobilePane("options");
-      window.requestAnimationFrame(() => {
-        scrollRightToTop("smooth");
-      });
-    } else {
-      window.requestAnimationFrame(() => {
-        scrollRightToTop("auto");
-      });
-    }
+    if (isMobile) setMobilePane("options");
   };
 
   /* ===================== Desktop hover-intent (previews options without hypersensitivity) ===================== */
@@ -1237,11 +1255,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
     const next = computeOptions(item.key);
     setSubOptions(next);
-
-    // Ensure preview never "hides" the message/options due to prior scroll position.
-    window.requestAnimationFrame(() => {
-      scrollRightToTop("auto");
-    });
   };
 
   const schedulePreview = (item) => {
@@ -1257,12 +1270,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
       if (hoverKeyRef.current !== String(item.key)) return;
       previewAudience(item);
     }, 170);
-  };
-
-  const onLeftWheel = () => {
-    // When scrolling the left list, do NOT switch selection from incidental hover.
-    ignoreHoverUntilRef.current = Date.now() + 240;
-    cancelHoverIntent();
   };
 
   const activeHref = active?.key ? `/collections/${normSlug(active.key)}` : "/collections";
@@ -1299,11 +1306,18 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
         :root{
           --hpFly-radius: 18px;
           --hpFly-shadow: 0 18px 44px rgba(6,10,24,.12);
-          --hpFly-maxw: 1240px;
-          --hpFly-leftw: 280px;
+          --hpFly-maxw: 1280px;
+          --hpFly-leftw: 300px;
           --hpFly-minh: 480px;
           --hpFly-maxh: min(80vh, 820px);
+          --hpFly-padB: 18px;
+          --hpFly-padT: 12px;
         }
+
+        /* ===================== SCROLLING REMOVED =====================
+           - No internal scroll containers (no overflow auto/scroll).
+           - Chip row wraps instead of horizontal scrolling.
+           - Audience list is not a scroll container. */
 
         .hpFly-root{
           width: 100%;
@@ -1313,6 +1327,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           flex-direction: column;
           gap: 10px;
           color: ${NEUTRAL_TEXT};
+          contain: layout paint;
         }
 
         .hpFly-top{
@@ -1374,40 +1389,37 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           border-radius: var(--hpFly-radius);
           background: linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.86) 100%);
           box-shadow: var(--hpFly-shadow);
-          overflow: hidden;
+          overflow: hidden; /* keep clean edges */
+          contain: layout paint;
         }
 
         .hpFly-grid{
           display: grid;
           grid-template-columns: var(--hpFly-leftw) 1fr;
-          min-height: var(--hpFly-minh);
-          max-height: var(--hpFly-maxh);
+          min-width: 0;
         }
 
+        /* Audience list (desktop) — NOT scrollable */
         .hpFly-left{
           border-right: 1px solid rgba(231,227,218,.88);
           background: linear-gradient(180deg, rgba(250,249,246,.95) 0%, rgba(255,255,255,.92) 100%);
           padding: 10px;
-          overflow: auto;
-          -webkit-overflow-scrolling: touch;
-          overscroll-behavior: contain;
-          touch-action: pan-y;
+          padding-bottom: var(--hpFly-padB);
+          overflow: hidden; /* no scrollbars */
+          max-height: none; /* remove height constraint that forced scrolling */
+          touch-action: manipulation;
         }
-        .hpFly-left::-webkit-scrollbar{ width: 0px; height: 0px; }
 
+        /* Options pane — NOT scrollable */
         .hpFly-right{
           padding: 12px;
-          overflow-y: auto;
-          overflow-x: hidden;
-          -webkit-overflow-scrolling: touch;
-          overscroll-behavior: contain;
-          touch-action: pan-y;
+          padding-bottom: var(--hpFly-padB);
+          overflow: hidden; /* no scrollbars */
           background: rgba(255,255,255,.80);
           min-width: 0;
           writing-mode: horizontal-tb;
           text-orientation: mixed;
         }
-        .hpFly-right::-webkit-scrollbar{ width: 0px; height: 0px; }
 
         .hpFly-right a,
         .hpFly-right button{
@@ -1470,6 +1482,18 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           gap: 8px;
         }
 
+        /* Reduce need for scroll by allowing multi-column audience list on desktop */
+        @media (min-width: 980px){
+          .hpFly-left .hpFly-stack{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+          }
+          .hpFly-left .hpFly-audBtn{
+            text-align: left;
+          }
+        }
+
         .hpFly-empty{
           font-family: ${SYS_FONT};
           font-weight: 800;
@@ -1481,11 +1505,10 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           background: rgba(255,255,255,.92);
         }
 
+        /* ===================== MOBILE ===================== */
         .hpFly-mobileShell{
           display: flex;
           flex-direction: column;
-          min-height: var(--hpFly-minh);
-          max-height: min(86vh, 860px);
         }
 
         .hpFly-mobileHeader{
@@ -1533,17 +1556,15 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           text-overflow: ellipsis;
         }
 
+        /* Chip row — wraps, NO horizontal scrolling */
         .hpFly-chipRow{
           display: flex;
+          flex-wrap: wrap;
           gap: 8px;
-          overflow-x: auto;
-          overflow-y: hidden;
+          overflow: hidden; /* no scrollbars */
           padding: 10px 10px 8px;
-          -webkit-overflow-scrolling: touch;
-          scrollbar-width: none;
-          touch-action: pan-x;
+          touch-action: manipulation;
         }
-        .hpFly-chipRow::-webkit-scrollbar{ width: 0px; height: 0px; }
 
         .hpFly-chip{
           flex: 0 0 auto;
@@ -1571,14 +1592,11 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           box-shadow: 0 10px 22px rgba(201,176,101,.14);
         }
 
+        /* Mobile body — NOT scrollable */
         .hpFly-mobileBody{
-          flex: 1 1 auto;
-          overflow: auto;
-          -webkit-overflow-scrolling: touch;
-          overscroll-behavior: contain;
-          padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-          overflow-x: hidden;
-          touch-action: pan-y;
+          overflow: hidden; /* no scrollbars */
+          padding-bottom: calc(var(--hpFly-padB) + env(safe-area-inset-bottom, 0px));
+          touch-action: manipulation;
         }
 
         .hpFly-mobileHint{
@@ -1601,7 +1619,6 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
           .hpFly-mobileShell{ display: none; }
         }
 
-        /* extra-small screens: reduce chip + button density (no overflow) */
         @media (max-width: 390px){
           .hpFly-chip{ padding: 9px 10px; font-size: 10.5px; }
           .hpFly-backBtn{ padding: 8px 10px; font-size: 10.5px; }
@@ -1673,6 +1690,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                     className="hpFly-stack"
                     style={{
                       padding: 10,
+                      paddingBottom: 18,
                       display: "grid",
                       gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                       gap: 8,
@@ -1752,7 +1770,8 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
                   })}
                 </div>
 
-                <div className="hpFly-mobileBody hpFly-right" ref={rightPaneRef}>
+                {/* Options area intentionally NOT a scroll container */}
+                <div className="hpFly-right" style={{ padding: 12 }}>
                   <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 2px 10px" }}>
                     <Link className="hpFly-link" href={activeHref} prefetch>
                       See all ↗
@@ -1777,7 +1796,7 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
 
           {/* =============== DESKTOP/TABLET: split layout preserved =============== */}
           <div className="hpFly-grid" aria-label="Collections flyout (desktop)">
-            <div className="hpFly-left" onWheel={onLeftWheel}>
+            <div className="hpFly-left">
               <div className="hpFly-kicker">Choose</div>
 
               <div className="hpFly-stack" aria-label="Collections list">
@@ -1806,7 +1825,8 @@ export default function HomePanelAllProducts({ onAfterNavigate }) {
               </div>
             </div>
 
-            <div className="hpFly-right" ref={desktopRightPaneRef}>
+            {/* Options pane is NOT scrollable */}
+            <div className="hpFly-right">
               {fetchError ? (
                 <div className="hpFly-empty">We’ll be back shortly.</div>
               ) : active?.key ? (

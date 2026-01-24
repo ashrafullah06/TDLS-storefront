@@ -22,14 +22,16 @@ function json(body, status = 200) {
 
 export async function GET() {
   try {
-    // 1) get the current session (JWT may be stale)
+    // NextAuth expects /api/auth/session to return:
+    // - the session object, OR
+    // - null
     const session = await auth();
 
     if (!session?.user?.id) {
-      return json({ ok: true, user: null, session: null }, 200);
+      return json(null, 200);
     }
 
-    // 2) always refresh critical fields from DB so UI is up-to-date after OTP
+    // Always refresh critical fields from DB so UI is up-to-date after OTP
     const fresh = await prisma.user.findUnique({
       where: { id: session.user.id },
       select: {
@@ -39,14 +41,14 @@ export async function GET() {
         phone: true,
         phoneVerifiedAt: true,
         defaultAddressId: true,
-        // add anything else your checkout/UI needs
+        // add anything else your checkout/UI needs here (select only)
       },
     });
 
-    // safety: if user record disappeared, treat as signed out
-    if (!fresh) return json({ ok: true, user: null, session: null }, 200);
+    // Safety: if user record disappeared, treat as signed out
+    if (!fresh) return json(null, 200);
 
-    // 3) merge fresh fields into session.user (without mutating original object structure)
+    // Merge fresh fields into session.user (do not mutate session object)
     const merged = {
       ...session,
       user: {
@@ -57,14 +59,15 @@ export async function GET() {
         phone: fresh.phone ?? session.user.phone ?? null,
         phoneVerifiedAt: fresh.phoneVerifiedAt ?? null,
         defaultAddressId: fresh.defaultAddressId ?? null,
-        // stable derived flag so the UI can reliably hide the “verify” prompt
+        // Stable derived flag so the UI can reliably hide the “verify” prompt
         phoneVerified: Boolean(fresh.phoneVerifiedAt),
       },
     };
 
-    return json({ ok: true, user: merged.user, session: merged }, 200);
+    // IMPORTANT: return the session object itself (NextAuth-compatible)
+    return json(merged, 200);
   } catch {
-    // Never return empty body; always return JSON so callers don't crash
-    return json({ ok: true, user: null, session: null }, 200);
+    // IMPORTANT: return null (NextAuth-compatible)
+    return json(null, 200);
   }
 }

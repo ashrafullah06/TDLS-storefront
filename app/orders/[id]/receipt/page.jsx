@@ -1,4 +1,4 @@
-//app/orders/[id]/receipt/page.jsx
+// app/orders/[id]/receipt/page.jsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -55,9 +55,25 @@ const firstNonEmpty = (...vals) => {
   return "";
 };
 
+/**
+ * IMPORTANT: Always render timestamps in Bangladesh time (Asia/Dhaka),
+ * not server timezone.
+ */
 const fmtTs = (d) => {
   try {
-    return new Date(d).toLocaleString("en-GB");
+    const dt = new Date(d);
+    if (!dt || Number.isNaN(dt.getTime())) return "—";
+
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Dhaka",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(dt);
   } catch {
     return "—";
   }
@@ -464,6 +480,9 @@ export default async function ReceiptPage({ params }) {
 
   if (!order) return notFound();
 
+  // ✅ Fix: determine guest mode reliably (no user id => guest)
+  const isGuest = !order?.user?.id;
+
   const orderSnap = getOrderSnapshot(order);
   const snapIdx = buildSnapshotIndex(orderSnap);
 
@@ -491,6 +510,8 @@ export default async function ReceiptPage({ params }) {
   const amountDue = Math.max(grand - paid, 0);
 
   const mode = computePaymentMode(order);
+
+  // ✅ Bangladesh time
   const placedAt = fmtTs(order.placedAt || order.createdAt);
 
   const events = Array.isArray(order.events) ? order.events : [];
@@ -824,9 +845,12 @@ export default async function ReceiptPage({ params }) {
 
                 <ReceiptPrintButton className="btn" />
 
-                <Link href="/customer/dashboard" className="btn alt">
-                  My Orders
-                </Link>
+                {/* ✅ Only show for logged-in customers (not guest) */}
+                {!isGuest && (
+                  <Link href="/customer/dashboard" className="btn alt">
+                    My Orders
+                  </Link>
+                )}
 
                 <Link href="/product" className="btn">
                   Continue Shopping

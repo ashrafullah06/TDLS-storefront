@@ -94,8 +94,20 @@ const OTP_SECRET = requireEnv("OTP_SECRET");
 void OTP_SECRET; // keep required, even if not used directly in this file
 
 // Cookie names (defaults remain unchanged)
+//
+// FIX (critical):
+// - Your /api/auth/logout endpoint already clears Auth.js/NextAuth default cookie names.
+// - Previously customer session cookie defaulted to "tdlc_c_session", so logout/idle-logout
+//   did not actually clear the real session cookie → “signed in again” bounce-back.
+// - Align default customer session cookie name to Auth.js defaults (while still allowing
+//   override via CUSTOMER_AUTH_COOKIE_NAME).
+const DEFAULT_CUSTOMER_SESSION_COOKIE_NAME = IS_PROD
+  ? "__Secure-authjs.session-token"
+  : "authjs.session-token";
+
 export const CUSTOMER_SESSION_COOKIE_NAME =
-  process.env.CUSTOMER_AUTH_COOKIE_NAME || "tdlc_c_session";
+  process.env.CUSTOMER_AUTH_COOKIE_NAME || DEFAULT_CUSTOMER_SESSION_COOKIE_NAME;
+
 export const ADMIN_SESSION_COOKIE_NAME =
   process.env.ADMIN_AUTH_COOKIE_NAME || "tdlc_a_session";
 
@@ -914,7 +926,12 @@ function cookieProfileCustomer() {
     },
     callbackUrl: {
       name: "tdlc_c_callback",
-      options: { sameSite: "lax", path: "/", secure: IS_PROD, ...COOKIE_DOMAIN_OPT },
+      options: {
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
     pkceCodeVerifier: {
       name: "tdlc_c_pkce",
@@ -973,7 +990,12 @@ function cookieProfileAdmin() {
     },
     callbackUrl: {
       name: "tdlc_a_callback",
-      options: { sameSite: "lax", path: "/", secure: IS_PROD, ...COOKIE_DOMAIN_OPT },
+      options: {
+        sameSite: "lax",
+        path: "/",
+        secure: IS_PROD,
+        ...COOKIE_DOMAIN_OPT,
+      },
     },
     pkceCodeVerifier: {
       name: "tdlc_a_pkce",
@@ -1095,7 +1117,9 @@ const customerOptions = {
         if (!verify?.ok) return null;
 
         if (!user) {
-          user = await prisma.user.create({ data: { ...whereUser, isActive: true } });
+          user = await prisma.user.create({
+            data: { ...whereUser, isActive: true },
+          });
         }
 
         try {
@@ -1139,13 +1163,28 @@ const customerOptions = {
       const isOAuth = provider === "google" || provider === "facebook";
 
       if (isOAuth && account) {
-        const email = (user?.email || token?.email || profile?.email || "").toString();
+        const email = (
+          user?.email ||
+          token?.email ||
+          profile?.email ||
+          ""
+        ).toString();
         const name =
-          user?.name || token?.name || profile?.name || profile?.given_name || null;
-        const image = user?.image || token?.picture || profile?.picture || null;
+          user?.name ||
+          token?.name ||
+          profile?.name ||
+          profile?.given_name ||
+          null;
+        const image =
+          user?.image || token?.picture || profile?.picture || null;
 
         try {
-          const dbUser = await linkOAuthToPrismaUser({ provider, email, name, image });
+          const dbUser = await linkOAuthToPrismaUser({
+            provider,
+            email,
+            name,
+            image,
+          });
           if (dbUser?.id) {
             token.uid = dbUser.id;
             token.email = dbUser.email ?? token.email ?? null;
@@ -1653,7 +1692,13 @@ export async function requireAdmin(
 
   if (!userId || (scope && scope !== "admin")) {
     if (optional) {
-      return { userId: null, session: null, user: null, roles: [], permissions: [] };
+      return {
+        userId: null,
+        session: null,
+        user: null,
+        roles: [],
+        permissions: [],
+      };
     }
     const err = new Error("unauthorized");
     err.status = 401;
@@ -1666,7 +1711,8 @@ export async function requireAdmin(
   });
 
   if (!user || user.isActive === false) {
-    if (optional) return { userId, session: null, user: null, roles: [], permissions: [] };
+    if (optional)
+      return { userId, session: null, user: null, roles: [], permissions: [] };
     const err = new Error("unauthorized");
     err.status = 401;
     throw err;
@@ -1675,7 +1721,8 @@ export async function requireAdmin(
   const kind = String(user.kind || "");
   const isStaffKind = kind === "STAFF_ONLY" || kind === "CUSTOMER_AND_STAFF";
   if (kind && !isStaffKind) {
-    if (optional) return { userId, session: null, user, roles: [], permissions: [] };
+    if (optional)
+      return { userId, session: null, user, roles: [], permissions: [] };
     const err = new Error("forbidden");
     err.status = 403;
     throw err;

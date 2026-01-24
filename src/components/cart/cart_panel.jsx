@@ -4,7 +4,7 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useCart as use_cart } from "@/components/common/cart_context";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 
 const NAVY = "#0F2147";
 const GOLD = "#A67C37";
@@ -16,6 +16,8 @@ const NAVBAR_BASE_TOP = 96; // your existing safe distance
 const HALF_INCH = 48; // ~0.5 inch in px
 const NAVBAR_SAFE_TOP = NAVBAR_BASE_TOP + HALF_INCH; // shifted down by 0.5"
 const BOTTOM_SAFE = 96; // keep clear from bottomfloatingbar (mobile too)
+
+const AUTO_CLOSE_MS_DEFAULT = 3500;
 
 function money(n) {
   const v = Number(n ?? 0);
@@ -59,11 +61,18 @@ function clearGuestCheckoutState() {
 export default function CartPanel() {
   const cartCtx = use_cart?.();
   const router = useRouter();
+  const pathname = usePathname();
 
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+
+  // Mobile has no "hover". We treat touch/pointer interactions inside the panel as "interacting"
+  // to avoid auto-closing while user scrolls/reads/taps.
+  const [interacting, setInteracting] = useState(false);
+  const interactingRef = useRef(false);
+  const interactingClearRef = useRef(null);
 
   const closeTimerRef = useRef(null);
   const lastActiveElRef = useRef(null);
@@ -73,9 +82,63 @@ export default function CartPanel() {
   const touchStartRef = useRef({ x: 0, y: 0, t: 0 });
   const touchMovedRef = useRef(false);
 
+  // open-source control (event / qty-change) + auto-close overrides
+  const lastOpenReasonRef = useRef("unknown"); // "event" | "qty" | "manual"
+  const autoCloseMsRef = useRef(AUTO_CLOSE_MS_DEFAULT);
+  const allowAutoCloseRef = useRef(true);
+
+  // Cart image cache (prevents “image disappears” when some add-to-cart paths send partial payloads)
+  const imageCacheRef = useRef(new Map()); // key => url
+  const titleCacheRef = useRef(new Map()); // optional: keep title stable if later payload is partial
+
   const close = useCallback(() => {
     setOpen(false);
   }, []);
+
+  const clearAutoCloseTimer = useCallback(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const setInteractingSafe = useCallback((v) => {
+    interactingRef.current = !!v;
+    setInteracting(!!v);
+  }, []);
+
+  const bumpInteracting = useCallback(() => {
+    // mark interacting immediately and keep it alive briefly after last interaction
+    setInteractingSafe(true);
+    if (interactingClearRef.current) clearTimeout(interactingClearRef.current);
+    interactingClearRef.current = setTimeout(() => {
+      setInteractingSafe(false);
+      interactingClearRef.current = null;
+    }, 1200);
+  }, [setInteractingSafe]);
+
+  const scheduleAutoClose = useCallback(
+    (msMaybe) => {
+      clearAutoCloseTimer();
+
+      // Must match desktop behavior: auto-close after a few seconds unless user interacts.
+      if (!open) return;
+      if (!allowAutoCloseRef.current) return;
+
+      // Do not auto-close if user is actively interacting or desktop hover is active.
+      if (hovered) return;
+      if (interactingRef.current) return;
+
+      const ms = Number(msMaybe ?? autoCloseMsRef.current ?? AUTO_CLOSE_MS_DEFAULT);
+      if (!Number.isFinite(ms) || ms <= 0) return;
+
+      closeTimerRef.current = setTimeout(() => {
+        setOpen(false);
+        closeTimerRef.current = null;
+      }, ms);
+    },
+    [open, hovered, clearAutoCloseTimer]
+  );
 
   // only portal on client
   useEffect(() => {
@@ -99,23 +162,53 @@ export default function CartPanel() {
     };
   }, []);
 
-  // listen for global "cart:open-panel"
+  // Listen for global "cart:open-panel" (and provide a stable programmatic hook to avoid missed events)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const handleOpen = () => {
+    const handleOpen = (evt) => {
+      // support optional detail overrides without breaking existing emitters
+      // detail: { autoCloseMs?: number, allowAutoClose?: boolean, reason?: string }
+      const detail = evt?.detail || {};
+      const ms = Number(detail.autoCloseMs);
+      if (Number.isFinite(ms) && ms > 0) autoCloseMsRef.current = ms;
+      else autoCloseMsRef.current = AUTO_CLOSE_MS_DEFAULT;
+
+      if (typeof detail.allowAutoClose === "boolean") {
+        allowAutoCloseRef.current = detail.allowAutoClose;
+      } else {
+        allowAutoCloseRef.current = true;
+      }
+
+      lastOpenReasonRef.current = detail.reason || "event";
       lastActiveElRef.current = document.activeElement;
+
       setOpen(true);
       setHovered(false);
+      setInteractingSafe(false);
     };
 
     window.addEventListener("cart:open-panel", handleOpen);
+
+    // Expose a stable, idempotent hook for any component (QuickView/ProductCard/PDP)
+    // so mobile production can’t “miss” the event due to timing/unmounted listeners.
+    // Usage from anywhere on client:
+    //   window.__TDLC_OPEN_CART_PANEL__?.({ reason:"add-to-cart", autoCloseMs:3500 })
+    try {
+      window.__TDLC_OPEN_CART_PANEL__ = handleOpen;
+    } catch {}
+
     return () => {
       window.removeEventListener("cart:open-panel", handleOpen);
+      try {
+        if (window.__TDLC_OPEN_CART_PANEL__ === handleOpen) {
+          delete window.__TDLC_OPEN_CART_PANEL__;
+        }
+      } catch {}
     };
-  }, []);
+  }, [setInteractingSafe]);
 
-  // focus close on open, restore focus on close, ESC closes
+  // Focus close on open, restore focus on close, ESC closes
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -153,28 +246,22 @@ export default function CartPanel() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, close]);
 
-  // auto-close logic (unless hovered) — disable on mobile for better UX
+  // Prevent background scroll when open (mobile + desktop)
   useEffect(() => {
-    if (closeTimerRef.current) {
-      clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
+    if (typeof document === "undefined") return;
+    if (!open) return;
 
-    if (!open || hovered) return;
-    if (isMobile) return;
-
-    closeTimerRef.current = setTimeout(() => {
-      setOpen(false);
-      closeTimerRef.current = null;
-    }, 3500);
+    const el = document.documentElement;
+    const prevOverflow = el.style.overflow;
+    const prevOverscroll = el.style.overscrollBehavior;
+    el.style.overflow = "hidden";
+    el.style.overscrollBehavior = "none";
 
     return () => {
-      if (closeTimerRef.current) {
-        clearTimeout(closeTimerRef.current);
-        closeTimerRef.current = null;
-      }
+      el.style.overflow = prevOverflow;
+      el.style.overscrollBehavior = prevOverscroll;
     };
-  }, [open, hovered, isMobile]);
+  }, [open]);
 
   // ───────────────── derive cart data from context ─────────────────
   const items = Array.isArray(cartCtx?.items) ? cartCtx.items : [];
@@ -192,6 +279,65 @@ export default function CartPanel() {
   const itemCount = items.length;
   const totalQty = items.reduce((sum, it) => sum + Number(it.quantity || 0), 0);
   const empty = !loading && itemCount === 0;
+
+  // Detect add-to-cart across ALL pages even if some emitters fail to dispatch the open event.
+  // This is the “single rule” to open reliably: when totalQty increases, open the panel.
+  const prevQtyRef = useRef(0);
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    // avoid “open on first hydration” when cart is restored from storage/server
+    if (!hydratedRef.current) {
+      hydratedRef.current = true;
+      prevQtyRef.current = totalQty;
+      return;
+    }
+
+    const prev = Number(prevQtyRef.current || 0);
+    const curr = Number(totalQty || 0);
+    prevQtyRef.current = curr;
+
+    if (!Number.isFinite(prev) || !Number.isFinite(curr)) return;
+
+    // If quantity increased, it is an add-to-cart action: open and auto-close (mobile + desktop).
+    if (curr > prev) {
+      // Suppress auto-opening while on cart/checkout pages (prevents annoying re-open loops)
+      // Does not change UI; it prevents an edge-case bug.
+      const p = String(pathname || "");
+      const suppress = p.startsWith("/cart") || p.startsWith("/checkout");
+      if (!suppress) {
+        lastOpenReasonRef.current = "qty";
+        allowAutoCloseRef.current = true;
+        autoCloseMsRef.current = AUTO_CLOSE_MS_DEFAULT;
+
+        lastActiveElRef.current = typeof document !== "undefined" ? document.activeElement : null;
+        setOpen(true);
+        setHovered(false);
+        setInteractingSafe(false);
+      }
+    }
+  }, [totalQty, pathname, setInteractingSafe]);
+
+  // Auto-close behavior must match desktop on mobile as per your requirement.
+  // We schedule auto-close whenever panel opens or interaction/hover ends.
+  useEffect(() => {
+    if (!open) {
+      clearAutoCloseTimer();
+      return;
+    }
+    scheduleAutoClose(autoCloseMsRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    // if user starts hovering/interacting, timer should stop; when it ends, restart
+    if (hovered || interacting) {
+      clearAutoCloseTimer();
+      return;
+    }
+    scheduleAutoClose(autoCloseMsRef.current);
+  }, [hovered, interacting, open, scheduleAutoClose, clearAutoCloseTimer]);
 
   const onCheckout = () => {
     if (empty) return;
@@ -215,6 +361,7 @@ export default function CartPanel() {
 
   // swipe close (mobile: drag down; desktop: drag right)
   const onTouchStart = (e) => {
+    bumpInteracting();
     const t = e.touches?.[0];
     if (!t) return;
     touchMovedRef.current = false;
@@ -222,6 +369,7 @@ export default function CartPanel() {
   };
 
   const onTouchMove = (e) => {
+    bumpInteracting();
     const t = e.touches?.[0];
     if (!t) return;
     const dx = t.clientX - touchStartRef.current.x;
@@ -230,15 +378,12 @@ export default function CartPanel() {
     // mark as moved if meaningful
     if (Math.abs(dx) > 8 || Math.abs(dy) > 8) touchMovedRef.current = true;
 
-    // prevent accidental scroll-jank only for strong gestures
-    if (isMobile && dy > 24) {
-      try {
-        e.preventDefault?.();
-      } catch {}
-    }
+    // NOTE: Do not call preventDefault here; it causes passive-listener issues in production
+    // and can break scrolling on some mobile browsers.
   };
 
   const onTouchEnd = (e) => {
+    bumpInteracting();
     if (!touchMovedRef.current) return;
 
     const changed = e.changedTouches?.[0];
@@ -272,7 +417,11 @@ export default function CartPanel() {
         className="tdlcCartOverlay"
         data-state={state}
         aria-hidden="true"
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
+          if (e.target === e.currentTarget) close();
+        }}
+        onClick={(e) => {
+          // Safari iOS sometimes prefers click to pointerdown for reliability
           if (e.target === e.currentTarget) close();
         }}
       />
@@ -284,17 +433,18 @@ export default function CartPanel() {
         aria-label="Cart panel"
         onMouseEnter={() => {
           setHovered(true);
-          if (closeTimerRef.current) {
-            clearTimeout(closeTimerRef.current);
-            closeTimerRef.current = null;
-          }
+          clearAutoCloseTimer();
         }}
-        onMouseLeave={() => setHovered(false)}
+        onMouseLeave={() => {
+          setHovered(false);
+          // timer restarts via effect when hovered=false
+        }}
+        onPointerDown={() => bumpInteracting()}
+        onPointerMove={() => bumpInteracting()}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
         style={{
-          // keep your existing safe offsets as CSS vars
           ["--tdlc-top-safe"]: `${NAVBAR_SAFE_TOP}px`,
           ["--tdlc-bottom-safe"]: `${BOTTOM_SAFE}px`,
         }}
@@ -317,9 +467,7 @@ export default function CartPanel() {
           <div className="tdlcCartTitleRow">
             <div className="tdlcCartTitle">Your Cart</div>
             <div className="tdlcCartMeta">
-              {empty
-                ? "No items added yet."
-                : `${totalQty} item${totalQty === 1 ? "" : "s"} · ${money(subtotal)}`}
+              {empty ? "No items added yet." : `${totalQty} item${totalQty === 1 ? "" : "s"} · ${money(subtotal)}`}
             </div>
           </div>
 
@@ -328,7 +476,7 @@ export default function CartPanel() {
         </div>
 
         {/* Body */}
-        <div className="tdlcCartBody">
+        <div className="tdlcCartBody" onPointerDown={() => bumpInteracting()} onScroll={() => bumpInteracting()}>
           {loading ? (
             <div className="tdlcStateBlock">
               <div className="tdlcStateTitle">Updating cart…</div>
@@ -352,24 +500,44 @@ export default function CartPanel() {
                 const unit = Number(it.unitPrice ?? it.price ?? 0);
                 const line = qty * unit;
 
+                const key = it.id || it.lineId || `cart-item-${idx}`;
+                const rawImg = it.thumbnail || it.image || "";
+                const rawTitle = it.title || "";
+
+                // Cache image/title when present; if later payload is partial, keep last known good values.
+                if (rawImg) imageCacheRef.current.set(key, rawImg);
+                if (rawTitle) titleCacheRef.current.set(key, rawTitle);
+
+                const stableImg = rawImg || imageCacheRef.current.get(key) || "";
+                const stableTitle = rawTitle || titleCacheRef.current.get(key) || "Untitled product";
+
                 return (
-                  <li key={it.id || it.lineId || `cart-item-${idx}`} className="tdlcItem">
+                  <li key={key} className="tdlcItem">
                     <div className="tdlcThumb">
-                      {it.thumbnail || it.image ? (
+                      {stableImg ? (
                         <img
-                          src={it.thumbnail || it.image}
-                          alt={it.title || "Cart item"}
+                          src={stableImg}
+                          alt={stableTitle || "Cart item"}
                           className="tdlcThumbImg"
                           loading="lazy"
+                          onError={(e) => {
+                            // If a URL fails, do not poison cache; show fallback
+                            try {
+                              const img = e.currentTarget;
+                              img.style.display = "none";
+                            } catch {}
+                          }}
                         />
                       ) : (
                         <div className="tdlcThumbFallback">TDLC</div>
                       )}
+                      {/* if image fails and gets hidden, keep fallback visible */}
+                      {!stableImg ? null : <div className="tdlcThumbFallback tdlcThumbFallbackOverlay">TDLC</div>}
                     </div>
 
                     <div className="tdlcItemInfo">
                       <div className="tdlcItemTop">
-                        <div className="tdlcItemTitle">{it.title || "Untitled product"}</div>
+                        <div className="tdlcItemTitle">{stableTitle}</div>
                       </div>
 
                       <div className="tdlcItemMeta">
@@ -405,7 +573,7 @@ export default function CartPanel() {
         </div>
 
         {/* Footer */}
-        <div className="tdlcCartFooter">
+        <div className="tdlcCartFooter" onPointerDown={() => bumpInteracting()}>
           <div className="tdlcFooterLine" />
           <div className="tdlcTotalsRow">
             <div className="tdlcTotalsLabel">Subtotal</div>
@@ -436,6 +604,7 @@ export default function CartPanel() {
             opacity: 0;
             pointer-events: none;
             transition: opacity 220ms ease;
+            touch-action: manipulation;
           }
           .tdlcCartOverlay[data-state="open"] {
             opacity: 1;
@@ -455,6 +624,7 @@ export default function CartPanel() {
             transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 240ms ease;
             opacity: 0;
             pointer-events: none;
+            overscroll-behavior: contain;
           }
 
           /* Side drawer variant (desktop/tablet) */
@@ -473,22 +643,17 @@ export default function CartPanel() {
             transform: translateX(0);
           }
 
-          /* Bottom sheet variant (mobile)
-             Fix: lift the entire sheet above BottomFloatingBar + iOS safe-area.
-             This prevents the panel/footer/CTA from being hidden underneath the bar. */
+          /* Bottom sheet variant (mobile) */
           .tdlcCartPanel[data-variant="sheet"] {
-            --tdlc-sheet-bottom: calc(var(--tdlc-bottom-safe) + env(safe-area-inset-bottom, 0px));
-
+            --tdlc-sheet-bottom: calc(var(--tdlc-bottom-safe) + env(safe-area-inset-bottom));
             left: 0;
             right: 0;
             bottom: var(--tdlc-sheet-bottom);
             top: auto;
-            width: 100vw;
-
-            /* keep premium proportions while guaranteeing no overflow */
-            height: min(82vh, calc(100dvh - var(--tdlc-sheet-bottom) - 10px));
+            width: 100%;
+            /* IMPORTANT: 100vh first, then 100dvh overrides when supported */
             height: min(82vh, calc(100vh - var(--tdlc-sheet-bottom) - 10px));
-
+            height: min(82vh, calc(100dvh - var(--tdlc-sheet-bottom) - 10px));
             border-radius: 26px 26px 0 0;
             transform: translateY(110%);
           }
@@ -593,9 +758,9 @@ export default function CartPanel() {
             flex: 1 1 auto;
             overflow: auto;
             padding: 12px 12px 10px;
+            -webkit-overflow-scrolling: touch;
           }
 
-          /* premium scrollbar */
           .tdlcCartBody::-webkit-scrollbar {
             width: 10px;
           }
@@ -668,6 +833,7 @@ export default function CartPanel() {
             overflow: hidden;
             border: 1px solid rgba(224, 228, 242, 0.95);
             background: radial-gradient(circle at 30% 10%, #e0e7ff, #f3f4f6);
+            position: relative;
           }
           .tdlcThumbImg {
             width: 100%;
@@ -684,6 +850,13 @@ export default function CartPanel() {
             font-weight: 900;
             letter-spacing: 0.18em;
             color: rgba(15, 33, 71, 0.65);
+          }
+          /* Overlay fallback (only visible when image element is hidden by onError) */
+          .tdlcThumbFallbackOverlay {
+            position: absolute;
+            inset: 0;
+            background: transparent;
+            pointer-events: none;
           }
 
           .tdlcItemInfo {
@@ -794,7 +967,7 @@ export default function CartPanel() {
             color: ${NAVY};
             font-weight: 950;
             font-size: 12px;
-            letter-spacing: 0.10em;
+            letter-spacing: 0.1em;
             text-transform: uppercase;
             cursor: pointer;
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
@@ -856,7 +1029,6 @@ export default function CartPanel() {
             line-height: 1.35;
           }
 
-          /* Mobile tightening: keep premium look but reduce visual scale on small screens */
           @media (max-width: 520px) {
             .tdlcCartHeader {
               padding: 12px 14px 10px;
@@ -911,11 +1083,10 @@ export default function CartPanel() {
             }
           }
 
-          /* Landscape phones: keep height stable and non-overflow */
           @media (max-height: 420px) and (max-width: 920px) {
             .tdlcCartPanel[data-variant="sheet"] {
-              height: min(78vh, calc(100dvh - var(--tdlc-sheet-bottom) - 8px));
               height: min(78vh, calc(100vh - var(--tdlc-sheet-bottom) - 8px));
+              height: min(78vh, calc(100dvh - var(--tdlc-sheet-bottom) - 8px));
             }
           }
         `}</style>

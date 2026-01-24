@@ -3,10 +3,10 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { getSession, signOut } from "next-auth/react";
+import { getSession } from "next-auth/react";
 
 /**
- * TDLC AutoSignoutGuard — CUSTOMER-ONLY idle signout
+ * TDLS AutoSignoutGuard — CUSTOMER-ONLY idle signout
  *
  * HARD GUARANTEES:
  * - MUST NOT run on /admin routes (admin & customer fully decoupled)
@@ -14,23 +14,14 @@ import { getSession, signOut } from "next-auth/react";
  * - MUST NOT clear admin cookies or admin storage namespaces
  * - MUST NOT sign out on navigation/unload events
  *
- * IMPORTANT CHANGE:
- * - Customer "signed in" is determined by CUSTOMER NextAuth session (getSession()).
- *   (No more localStorage heuristics that can fire incorrectly.)
+ * CUSTOMER "signed in" is determined by CUSTOMER NextAuth session (getSession()).
  *
  * Server logout:
- * - We use NextAuth signOut() for customer plane only (it hits /api/auth/*),
- *   and we NEVER call server logout while on /admin routes.
+ * - NEVER call next-auth signOut() here (decoupling safety).
+ * - Always use customer-only hard logout endpoint: POST /api/auth/logout
  */
 
 /* ===================== IDLE POLICY (HARD) ===================== */
-/**
- * Requirement:
- * - Never sign out while the customer is active.
- * - Only sign out after 1 hour of inactivity (silent / no interaction).
- *
- * We clamp any env misconfig to >= 60 minutes.
- */
 const MIN_IDLE_MINUTES = 60;
 const RAW_IDLE_MINUTES = Number(process.env.NEXT_PUBLIC_AUTO_SIGNOUT_MINUTES);
 const IDLE_MINUTES =
@@ -45,12 +36,12 @@ const DISABLE_GUARD =
   String(process.env.NEXT_PUBLIC_DISABLE_AUTO_SIGNOUT || "").trim() === "1";
 
 /* ===================== CROSS-TAB SYNC (CUSTOMER ONLY) ===================== */
-const BC_NAME = "tdlc_customer_plane_signout_v2";
+const BC_NAME = "tdlc_customer_plane_signout_v3";
 const MSG_SIGNOUT = "SIGNOUT_CUSTOMER";
 const MSG_ACTIVITY = "ACTIVITY_CUSTOMER";
 
 // Storage fallback for cross-tab activity (BroadcastChannel may be unavailable)
-const ACTIVITY_KEY = "tdlc_customer_last_activity_v2";
+const ACTIVITY_KEY = "tdlc_customer_last_activity_v3";
 
 /* ===================== ROUTE SAFETY ===================== */
 function isAdminPath(p) {
@@ -90,20 +81,41 @@ function inAuthFlow() {
   }
 }
 
+/**
+ * Manual signout should only suppress the guard briefly.
+ * - New format: timestamp (ms)
+ * - Legacy: "1" -> auto-migrate to timestamp so it expires
+ */
 function manualSignoutInProgress() {
   try {
-    return sessionStorage.getItem("tdlc_manual_signout") === "1";
+    const v = sessionStorage.getItem("tdlc_manual_signout");
+    if (!v) return false;
+
+    if (v === "1") {
+      try {
+        sessionStorage.setItem("tdlc_manual_signout", String(Date.now()));
+      } catch {}
+      return true;
+    }
+
+    const t = Number(v);
+    if (!Number.isFinite(t)) return true;
+
+    // suppress for 60 seconds max
+    return Date.now() - t < 60_000;
   } catch {
     return false;
   }
 }
 
 /**
- * CUSTOMER logout action:
+ * CUSTOMER logout action (customer-only hard logout endpoint):
  * - Clears customer-only client artifacts.
- * - Uses NextAuth customer signOut() (never admin).
+ * - Calls POST /api/auth/logout (server clears customer cookies at /, /api, /api/auth, /customer).
+ * - Broadcasts signout to other customer tabs.
+ * - Hard reload to guarantee UI session does not "bounce back".
  */
-async function customerSignOut({ broadcast = true } = {}) {
+async function customerHardSignOut({ broadcast = true } = {}) {
   clearCustomerClientStorage();
 
   // Extra safety: never run while on /admin routes
@@ -113,29 +125,36 @@ async function customerSignOut({ broadcast = true } = {}) {
   if (broadcast) {
     try {
       const bc = new BroadcastChannel(BC_NAME);
-      bc.postMessage({ type: MSG_SIGNOUT, scope: "customer", at: Date.now(), v: 2 });
+      bc.postMessage({ type: MSG_SIGNOUT, scope: "customer", at: Date.now(), v: 3 });
       bc.close();
     } catch {}
   }
 
   try {
-    // Avoid redirect loops: we handle redirect on the page level
-    await signOut({ redirect: false });
-  } catch {
-    // no throw
-  }
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ ok: true }),
+    }).catch(() => null);
+  } catch {}
+
+  try {
+    window.location.reload();
+  } catch {}
 }
 
 export default function AutoSignoutGuard() {
   const nextPathname = usePathname();
 
   const lastActivityRef = useRef(Date.now());
-
-  // Two-tick confirmation (prevents “logout on click” race at the threshold edge)
   const pendingSignoutRef = useRef(0);
 
   const intervalRef = useRef(null);
   const bcRef = useRef(null);
+
+  // last-known customer auth state
   const sessionKnownAuthedRef = useRef(false);
 
   // Ensure we only run signout once per mount
@@ -144,6 +163,7 @@ export default function AutoSignoutGuard() {
   // Activity throttles (keep cheap but reliable)
   const lastHiFreqMarkRef = useRef(0);
   const lastActivitySyncRef = useRef(0);
+  const lastSessionCheckRef = useRef(0);
 
   const stopIdleLoop = () => {
     if (intervalRef.current) {
@@ -158,7 +178,7 @@ export default function AutoSignoutGuard() {
     if (signingOutRef.current) return;
     signingOutRef.current = true;
     stopIdleLoop();
-    void customerSignOut({ broadcast: true });
+    void customerHardSignOut({ broadcast: true });
   };
 
   const applyActivity = (at) => {
@@ -169,7 +189,6 @@ export default function AutoSignoutGuard() {
   };
 
   const syncActivityCrossTab = (now) => {
-    // Broadcast + storage sync at a controlled cadence
     const t = Number(now || Date.now());
     const SYNC_EVERY_MS = 3_000;
 
@@ -177,18 +196,46 @@ export default function AutoSignoutGuard() {
     lastActivitySyncRef.current = t;
 
     try {
-      // Storage sync (fires “storage” in other tabs)
       localStorage.setItem(ACTIVITY_KEY, String(t));
     } catch {}
 
     try {
-      // BroadcastChannel sync (real-time where supported)
-      bcRef.current?.postMessage?.({ type: MSG_ACTIVITY, scope: "customer", at: t, v: 2 });
+      bcRef.current?.postMessage?.({ type: MSG_ACTIVITY, scope: "customer", at: t, v: 3 });
     } catch {}
   };
 
-  const markActivity = () => {
+  const ensureCustomerSession = async (now = Date.now()) => {
+    const CHECK_EVERY_MS = 30_000;
+    if (now - lastSessionCheckRef.current < CHECK_EVERY_MS) {
+      return sessionKnownAuthedRef.current;
+    }
+    lastSessionCheckRef.current = now;
+
+    try {
+      const s = await getSession();
+      const authed = !!s?.user;
+
+      // If we just became authed, reset baseline activity to avoid instant idle signout.
+      if (authed && !sessionKnownAuthedRef.current) {
+        lastActivityRef.current = Date.now();
+        pendingSignoutRef.current = 0;
+      }
+
+      sessionKnownAuthedRef.current = authed;
+      return authed;
+    } catch {
+      // Preserve last-known state; do NOT disable guard due to transient fetch failures.
+      return sessionKnownAuthedRef.current;
+    }
+  };
+
+  const markActivity = async () => {
     const now = Date.now();
+
+    // Keep auth state warm (hydration-safe)
+    if (!sessionKnownAuthedRef.current) {
+      await ensureCustomerSession(now);
+    }
 
     // HARD RULE: if already idle for >= 1 hour, do NOT reset timer—sign out.
     if (
@@ -202,12 +249,15 @@ export default function AutoSignoutGuard() {
     }
 
     applyActivity(now);
-    syncActivityCrossTab(now);
+    if (sessionKnownAuthedRef.current) syncActivityCrossTab(now);
   };
 
-  const markActivityThrottled = () => {
-    // For scroll/move/wheel/touchmove: mark activity max 1x per 1000ms
+  const markActivityThrottled = async () => {
     const now = Date.now();
+
+    if (!sessionKnownAuthedRef.current) {
+      await ensureCustomerSession(now);
+    }
 
     // HARD RULE: if already idle for >= 1 hour, do NOT reset timer—sign out.
     if (
@@ -224,7 +274,7 @@ export default function AutoSignoutGuard() {
     lastHiFreqMarkRef.current = now;
 
     applyActivity(now);
-    syncActivityCrossTab(now);
+    if (sessionKnownAuthedRef.current) syncActivityCrossTab(now);
   };
 
   useEffect(() => {
@@ -243,21 +293,13 @@ export default function AutoSignoutGuard() {
 
     let mounted = true;
 
-    // Determine customer auth strictly via CUSTOMER NextAuth session
-    const ensureCustomerSession = async () => {
-      try {
-        const s = await getSession();
-        if (!mounted) return false;
-
-        const authed = !!s?.user;
-        sessionKnownAuthedRef.current = authed;
-        return authed;
-      } catch {
-        if (!mounted) return false;
-        // Preserve last-known state; do NOT disable guard due to transient fetch failures.
-        return sessionKnownAuthedRef.current;
+    // Initialize from cross-tab activity if present (prevents false idle if another tab was active)
+    try {
+      const t = Number(localStorage.getItem(ACTIVITY_KEY));
+      if (Number.isFinite(t) && Date.now() - t < IDLE_MS) {
+        lastActivityRef.current = Math.max(lastActivityRef.current, t);
       }
-    };
+    } catch {}
 
     // Cross-tab signout + activity sync (customer only)
     try {
@@ -268,18 +310,17 @@ export default function AutoSignoutGuard() {
         const v = Number(e?.data?.v || 0);
         const at = Number(e?.data?.at || 0);
 
-        if (v !== 2) return;
+        if (v !== 3) return;
         if (scope !== "customer") return;
 
         if (type === MSG_SIGNOUT) {
           stopIdleLoop();
           if (!signingOutRef.current) signingOutRef.current = true;
-          void customerSignOut({ broadcast: false });
+          void customerHardSignOut({ broadcast: false });
           return;
         }
 
         if (type === MSG_ACTIVITY) {
-          // If the customer is active in another tab, we must not sign out here.
           applyActivity(at);
         }
       };
@@ -288,7 +329,6 @@ export default function AutoSignoutGuard() {
     }
 
     const onStorage = (e) => {
-      // Activity sync fallback for browsers without BroadcastChannel
       try {
         if (!e || e.key !== ACTIVITY_KEY) return;
         const t = Number(e.newValue);
@@ -297,102 +337,90 @@ export default function AutoSignoutGuard() {
       } catch {}
     };
 
-    const onVisibilityChange = () => {
+    const onVisibilityChange = async () => {
+      if (!mounted) return;
       if (inAuthFlow() || manualSignoutInProgress()) return;
+
+      // When tab becomes visible, re-check session (hydration-safe)
+      if (document.visibilityState !== "hidden") {
+        await ensureCustomerSession(Date.now());
+      }
+
       if (!sessionKnownAuthedRef.current) return;
 
-      if (document.visibilityState !== "hidden") {
-        const now = Date.now();
-        const idleFor = now - lastActivityRef.current;
+      const now = Date.now();
+      const idleFor = now - lastActivityRef.current;
 
-        // HARD RULE: returning to the tab does NOT “save” an already-idle session.
-        if (idleFor >= IDLE_MS) {
-          triggerIdleSignoutOnce();
-          return;
-        }
-
-        markActivity();
+      // HARD RULE: returning to tab does NOT “save” an already-idle session
+      if (idleFor >= IDLE_MS) {
+        triggerIdleSignoutOnce();
+        return;
       }
+
+      void markActivity();
     };
 
-    // Start loop only if customer session exists
-    (async () => {
-      const authed = await ensureCustomerSession();
-      if (!mounted) return;
+    stopIdleLoop();
 
-      if (!authed) {
+    // Run loop regardless; it will activate enforcement once session becomes authed
+    intervalRef.current = window.setInterval(async () => {
+      const p = safePathname(nextPathname);
+      if (!p || isAdminPath(p)) {
         stopIdleLoop();
         return;
       }
 
-      stopIdleLoop();
+      if (inAuthFlow() || manualSignoutInProgress()) return;
+      if (signingOutRef.current) return;
 
-      intervalRef.current = window.setInterval(async () => {
-        // Re-check path each tick to prevent any admin leakage during transitions
-        const p = safePathname(nextPathname);
-        if (!p || isAdminPath(p)) {
-          stopIdleLoop();
+      const now = Date.now();
+
+      // Keep checking session until it becomes authenticated (fixes “guard died at mount”)
+      await ensureCustomerSession(now);
+      if (!sessionKnownAuthedRef.current) return;
+
+      const idleFor = now - lastActivityRef.current;
+
+      // Only sign out after 2 consecutive ticks past threshold.
+      if (idleFor >= IDLE_MS) {
+        if (!pendingSignoutRef.current) {
+          pendingSignoutRef.current = now;
           return;
         }
+        if (now - pendingSignoutRef.current < 5_000) return;
 
-        if (inAuthFlow() || manualSignoutInProgress()) return;
-        if (signingOutRef.current) return;
+        triggerIdleSignoutOnce();
+        return;
+      }
 
-        const now = Date.now();
-        const idleFor = now - lastActivityRef.current;
+      pendingSignoutRef.current = 0;
+    }, 15_000);
 
-        if (!sessionKnownAuthedRef.current) {
-          stopIdleLoop();
-          return;
-        }
+    // Activity listeners (customer side only)
+    window.addEventListener("mousedown", markActivity, { passive: true });
+    window.addEventListener("keydown", markActivity, { passive: true });
+    window.addEventListener("touchstart", markActivity, { passive: true });
+    window.addEventListener("pointerdown", markActivity, { passive: true });
+    window.addEventListener("focus", markActivity, { passive: true });
 
-        // Only sign out based on REAL inactivity time (foreground or background),
-        // and only after 2 consecutive ticks past threshold.
-        if (idleFor >= IDLE_MS) {
-          if (!pendingSignoutRef.current) {
-            pendingSignoutRef.current = now;
-            return;
-          }
-          if (now - pendingSignoutRef.current < 5_000) return;
+    // High-frequency signals (throttled)
+    window.addEventListener("mousemove", markActivityThrottled, { passive: true });
+    window.addEventListener("wheel", markActivityThrottled, { passive: true });
+    window.addEventListener("touchmove", markActivityThrottled, { passive: true });
+    window.addEventListener("pointermove", markActivityThrottled, { passive: true });
 
-          triggerIdleSignoutOnce();
-          return;
-        }
+    // Crucial: scroll capture catches scroll in nested containers (scroll doesn't bubble)
+    document.addEventListener("scroll", markActivityThrottled, {
+      passive: true,
+      capture: true,
+    });
 
-        // Reset pending if user is active again
-        pendingSignoutRef.current = 0;
+    document.addEventListener("visibilitychange", onVisibilityChange, { capture: true });
+    window.addEventListener("storage", onStorage);
 
-        // Nearing threshold: confirm session still exists (guards against false positives)
-        if (idleFor >= Math.max(60_000, IDLE_MS - 60_000)) {
-          const stillAuthed = await ensureCustomerSession();
-          if (!stillAuthed) stopIdleLoop();
-        }
-      }, 15_000);
-
-      /* ---------------- Activity listeners (customer side only) ----------------
-         Key fix: capture scroll from ANY scroll container (scroll does not bubble),
-         so active users inside panels/lists never get treated as “idle”.
-      */
-      window.addEventListener("mousedown", markActivity, { passive: true });
-      window.addEventListener("keydown", markActivity, { passive: true });
-      window.addEventListener("touchstart", markActivity, { passive: true });
-      window.addEventListener("pointerdown", markActivity, { passive: true });
-      window.addEventListener("focus", markActivity, { passive: true });
-
-      // High-frequency signals (throttled)
-      window.addEventListener("mousemove", markActivityThrottled, { passive: true });
-      window.addEventListener("wheel", markActivityThrottled, { passive: true });
-      window.addEventListener("touchmove", markActivityThrottled, { passive: true });
-      window.addEventListener("pointermove", markActivityThrottled, { passive: true });
-
-      // Crucial: scroll capture on document catches scroll in nested containers
-      document.addEventListener("scroll", markActivityThrottled, {
-        passive: true,
-        capture: true,
-      });
-
-      document.addEventListener("visibilitychange", onVisibilityChange, { capture: true });
-      window.addEventListener("storage", onStorage);
+    // Prime session detection shortly after mount (hydration-safe)
+    (async () => {
+      await ensureCustomerSession(Date.now());
     })();
 
     return () => {

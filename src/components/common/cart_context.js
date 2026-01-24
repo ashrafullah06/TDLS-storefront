@@ -1,4 +1,4 @@
-// FILE: src/components/common/cart_context.js
+// src/components/common/cart_context.js
 "use client";
 
 import {
@@ -12,23 +12,35 @@ import {
 } from "react";
 
 /**
- * IMPORTANT FIX (Customer-specific carts):
- * - The previous implementation used a single, global localStorage key (tdlc_cart_v1).
- *   That makes carts bleed across different customers on the same browser/device (logout/login,
- *   different accounts, guest vs logged-in).
+ * CART CONTEXT — TDLS/TDLC
  *
- * NEW BEHAVIOR:
- * - Logged-in customers persist cart in localStorage under:  tdlc_cart_v1:u:<userId>
- * - Guests persist cart in sessionStorage under:             tdlc_cart_v1:g:<guestSid>
- *   (sessionStorage + session cookie means a new visitor starts empty; no cross-guest bleed)
+ * Hard requirements implemented:
+ * 1) Customer-specific scoped persistence (user -> localStorage, guest -> sessionStorage).
+ * 2) Same item added from different pages must MERGE (qty increments) using stable identity.
+ * 3) Already-added item info must NEVER change when adding from another page/source.
+ *    - Incoming payloads may ONLY fill missing/placeholder fields.
+ *    - No overwrites of existing “good” display/identity fields.
+ * 4) React keys must be stable: lineId/id never changes once created.
+ * 5) All lines have consistent display fields (title/productName/name/thumbnail/size/color/fit).
  *
- * - We still keep server sync (/api/cart, /api/cart/sync) unchanged; we only scope local persistence.
- * - We also migrate the legacy global key once (best-effort) into the first resolved scope.
+ * Additional fixes in this version:
+ * A) Prevent “temporary empty cart” flashes on PDP by hydrating from storage synchronously
+ *    (useState initializer) and never letting late async hydration clobber user mutations.
+ * B) Prevent cart panel auto-open on /product page load by gating open-panel behind
+ *    actual user activation (User Activation API or recent pointer/key gesture).
+ * C) Prevent “image lost” regressions by making ALL thumbnail aliases stable and always populated:
+ *    - thumbnailUrl, thumb, thumbUrl, image, imageUrl
+ *    This protects mixed renderers across pages that may read different fields.
+ * D) Prevent “cart is empty” flash on refresh by synchronously hydrating the last-known
+ *    authenticated user scope (ONLY when an auth cookie is present), before async session fetch.
  */
 
 const STORAGE_KEY_BASE = "tdlc_cart_v1";
 const LEGACY_GLOBAL_KEY = STORAGE_KEY_BASE; // backward compatibility
 const GUEST_SID_COOKIE = "tdlc_sid"; // server already reads this (and aliases) in cart routes
+
+// Last-known logged-in scope pointer (used only when auth cookie exists)
+const LS_LAST_USER_SCOPE_KEY = "tdlc_cart_last_user_scope_v1";
 
 const CartCtx = createContext(null);
 
@@ -48,24 +60,20 @@ function readCookie(name) {
 }
 
 function setCookieSession(name, value) {
-  // session cookie (no Max-Age/Expires): disappears when browser closes
   if (typeof document === "undefined") return;
   const isHttps =
     typeof location !== "undefined" &&
     String(location.protocol || "").toLowerCase() === "https:";
   const secure = isHttps ? "; Secure" : "";
-  // SameSite=Lax to avoid cross-site leakage; Path=/ for global access.
   document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(
     String(value || "")
   )}; Path=/; SameSite=Lax${secure}`;
 }
 
 function getOrCreateGuestSid() {
-  // Prefer an existing cookie value (server uses it)
   const existing =
     readCookie("tdlc_sid") || readCookie("cart_sid") || readCookie("guest_sid");
   if (existing) {
-    // Normalize: always keep canonical cookie name for future reads
     if (!readCookie(GUEST_SID_COOKIE))
       setCookieSession(GUEST_SID_COOKIE, existing);
     return existing;
@@ -80,12 +88,35 @@ function getOrCreateGuestSid() {
   } catch {}
 
   if (!sid) {
-    // Fallback: good-enough entropy for session identifier (not security token)
     sid = `g_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
   }
 
   setCookieSession(GUEST_SID_COOKIE, sid);
   return sid;
+}
+
+function hasLikelyAuthCookie() {
+  // Heuristic: only preload last user scope if an auth session cookie exists.
+  // Supports NextAuth/Auth.js common cookie names.
+  if (typeof document === "undefined") return false;
+  const c = String(document.cookie || "");
+  if (!c) return false;
+
+  const names = [
+    "next-auth.session-token",
+    "__Secure-next-auth.session-token",
+    "authjs.session-token",
+    "__Secure-authjs.session-token",
+    // sometimes custom
+    "session-token",
+    "__Secure-session-token",
+  ];
+
+  for (const n of names) {
+    if (c.includes(`${encodeURIComponent(n)}=`)) return true;
+    if (c.includes(`${n}=`)) return true;
+  }
+  return false;
 }
 
 /* ---------------- storage helpers ---------------- */
@@ -103,33 +134,42 @@ function safeParse(raw) {
 }
 
 /**
- * Read cart payload from a specific Storage (localStorage/sessionStorage).
- * Accepts legacy formats: [] or { items: [] }.
+ * Read cart payload from a specific Storage.
+ * Returns meta.hasKey=false if storage key does not exist (getItem returned null).
+ * This is critical: missing key MUST NOT be treated as "cart cleared".
  */
-function readFromStorage(storage, key) {
+function readFromStorageWithMeta(storage, key) {
   try {
-    if (!storage) return { items: [] };
+    if (!storage) return { items: [], hasKey: false };
+
     const raw = storage.getItem(key);
-    if (!raw) return { items: [] };
+    if (raw === null) return { items: [], hasKey: false };
+    if (!raw) return { items: [], hasKey: true };
 
     const parsed = safeParse(raw);
-    if (Array.isArray(parsed)) return { items: parsed };
-    if (!parsed || typeof parsed !== "object") return { items: [] };
-    if (!Array.isArray(parsed.items)) return { items: [] };
-    return { items: parsed.items };
+    if (Array.isArray(parsed)) return { items: parsed, hasKey: true };
+    if (!parsed || typeof parsed !== "object") return { items: [], hasKey: true };
+    if (!Array.isArray(parsed.items)) return { items: [], hasKey: true };
+    return { items: parsed.items, hasKey: true };
   } catch {
-    return { items: [] };
+    return { items: [], hasKey: false };
   }
 }
 
-function writeToStorage(storage, key, data) {
+function readFromStorage(storage, key) {
+  const r = readFromStorageWithMeta(storage, key);
+  return { items: r.items };
+}
+
+function writeToStorage(storage, key, data, opts = {}) {
+  const { emitEvent = true } = opts || {};
   try {
     if (!storage) return;
     const payload = { items: Array.isArray(data?.items) ? data.items : [] };
     storage.setItem(key, JSON.stringify(payload));
 
-    // notify any listeners (cart page, recommendations, etc.)
-    if (typeof window !== "undefined") {
+    // IMPORTANT: do not spam "cart:changed" on hydration/migration writes.
+    if (emitEvent && typeof window !== "undefined") {
       try {
         window.dispatchEvent(new Event("cart:changed"));
       } catch {}
@@ -139,10 +179,6 @@ function writeToStorage(storage, key, data) {
   }
 }
 
-/**
- * For guests we prefer sessionStorage so carts do not persist across different visitors.
- * If sessionStorage is unavailable (some privacy modes), we fall back to localStorage.
- */
 function guestStorage() {
   try {
     if (typeof window === "undefined") return null;
@@ -164,75 +200,379 @@ function customerStorage() {
   }
 }
 
-/** stable line key: product/variant/color/size + strapiSizeId */
-function makeKey(x = {}) {
-  const sizeRow =
-    x.strapiSizeId ||
-    x.strapi_size_id ||
-    x.sizeStockId ||
-    x.size_stock_id ||
-    x.sizeId ||
-    x.size_id ||
-    "";
+/* ---------------- core helpers ---------------- */
 
-  // tolerant variant identity
-  const variantRaw =
-    x.variantId || x.variant_id || x.vid || (x.variant && x.variant.id) || "";
+function isPlainObject(x) {
+  return x && typeof x === "object" && !Array.isArray(x);
+}
 
-  return [
-    sizeRow,
-    x.productId || x.id || x.slug || "",
-    variantRaw,
-    x.selectedColor || x.color || "",
-    x.selectedSize || x.size || "",
-  ].join("|");
+function s(v) {
+  if (v === undefined || v === null) return "";
+  return String(v);
+}
+
+function clean(v) {
+  return s(v).trim();
+}
+
+function isEmptyValue(v) {
+  return (
+    v === undefined ||
+    v === null ||
+    (typeof v === "string" && v.trim() === "")
+  );
+}
+
+function isPlaceholderTitle(v) {
+  const x = String(v ?? "").trim().toLowerCase();
+  if (!x) return true;
+  return x === "item" || x === "product" || x === "untitled product";
+}
+
+function normColor(v) {
+  const x = clean(v);
+  return x ? x.toLowerCase() : "";
+}
+
+function normSize(v) {
+  const x = clean(v);
+  if (!x) return "";
+  if (/^[a-z]+$/i.test(x)) return x.toUpperCase();
+  return x;
+}
+
+function firstNonEmpty(...vals) {
+  for (const v of vals) {
+    const x = clean(v);
+    if (x) return x;
+  }
+  return "";
+}
+
+function firstNonEmptyNonPlaceholderTitle(...vals) {
+  for (const v of vals) {
+    const x = clean(v);
+    if (!x) continue;
+    if (isPlaceholderTitle(x)) continue;
+    return x;
+  }
+  return "";
+}
+
+function looksLikeLineId(val) {
+  const x = clean(val);
+  if (!x) return false;
+  if (x.includes("|")) return true;
+  if (x.startsWith("l:")) return true;
+  if (x.startsWith("line_")) return true;
+  return false;
+}
+
+/* ---------------- image/url helpers (bulletproof) ---------------- */
+
+function isNonEmptyString(v) {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+function isProbablyImageUrl(u) {
+  if (!isNonEmptyString(u)) return false;
+  const s2 = u.trim();
+  if (!s2) return false;
+  if (s2 === "[object Object]") return false;
+  // allow relative paths, absolute, protocol-relative, data/blob
+  return (
+    s2.startsWith("http://") ||
+    s2.startsWith("https://") ||
+    s2.startsWith("//") ||
+    s2.startsWith("/") ||
+    s2.startsWith("data:") ||
+    s2.startsWith("blob:")
+  );
 }
 
 /**
- * Variant-level identity: used to cap stock **across multiple lines**
- * for the same (size-stock or variant + color + size).
+ * Extract usable image URL from common shapes:
+ * - string
+ * - { url } / { src }
+ * - Strapi: { formats: { thumbnail: { url } } }
+ * - Strapi v4: { data: { attributes: { url, formats... } } }
  */
+function extractImageUrl(val) {
+  if (!val) return "";
+
+  if (typeof val === "string") {
+    const t = val.trim();
+    return isProbablyImageUrl(t) ? t : "";
+  }
+
+  // Some code paths may already store arrays
+  if (Array.isArray(val)) {
+    for (const it of val) {
+      const u = extractImageUrl(it);
+      if (u) return u;
+    }
+    return "";
+  }
+
+  if (!isPlainObject(val)) return "";
+
+  // Direct keys
+  const direct = [
+    val.url,
+    val.src,
+    val.path,
+    val.href,
+    val.secure_url,
+    val.publicUrl,
+    val.publicURL,
+  ];
+  for (const c of direct) {
+    const u = extractImageUrl(c);
+    if (u) return u;
+  }
+
+  // Common media nesting: { image: { url } }, { thumbnail: { url } }
+  const nested = [
+    val.image,
+    val.thumbnail,
+    val.thumb,
+    val.asset,
+    val.file,
+    val.media,
+  ];
+  for (const n of nested) {
+    const u = extractImageUrl(n);
+    if (u) return u;
+  }
+
+  // Strapi formats: prefer thumbnail/small/medium/large then base url
+  if (isPlainObject(val.formats)) {
+    const f = val.formats;
+    const order = ["thumbnail", "small", "medium", "large"];
+    for (const k of order) {
+      if (f[k]) {
+        const u = extractImageUrl(f[k]?.url || f[k]?.src || f[k]);
+        if (u) return u;
+      }
+    }
+  }
+
+  // Strapi v4: data.attributes
+  if (isPlainObject(val.data)) {
+    const u = extractImageUrl(val.data);
+    if (u) return u;
+  }
+  if (isPlainObject(val.attributes)) {
+    const a = val.attributes;
+    const u =
+      extractImageUrl(a.formats) ||
+      extractImageUrl(a.url) ||
+      extractImageUrl(a.src);
+    if (u) return u;
+  }
+
+  return "";
+}
+
+function pickImageUrl(...candidates) {
+  for (const c of candidates) {
+    const u = extractImageUrl(c);
+    if (u) return u;
+  }
+  return "";
+}
+
+/* ---------------- identity derivation ---------------- */
+
+function deriveIdentity(x = {}) {
+  const m = isPlainObject(x.metadata) ? x.metadata : {};
+  const p = isPlainObject(x.product) ? x.product : {};
+  const v = isPlainObject(x.variant) ? x.variant : {};
+
+  const productId = firstNonEmpty(
+    x.productId,
+    x.product_id,
+    x.pid,
+    x.productID,
+    x.__originalId,
+    m.productId,
+    m.product_id,
+    m.pid,
+    p.id,
+    p.productId,
+    !looksLikeLineId(x.id) ? x.id : ""
+  );
+
+  const slug = firstNonEmpty(
+    x.slug,
+    x.productSlug,
+    m.productSlug,
+    m.slug,
+    p.slug
+  );
+
+  const variantId = firstNonEmpty(
+    x.variantId,
+    x.variant_id,
+    x.vid,
+    x.variantID,
+    m.variantId,
+    m.variant_id,
+    m.vid,
+    v.id
+  );
+
+  const strapiSizeId = firstNonEmpty(
+    x.strapiSizeId,
+    x.strapi_size_id,
+    x.sizeStockId,
+    x.size_stock_id,
+    x.sizeId,
+    x.size_id,
+    m.strapiSizeId,
+    m.strapi_size_id,
+    m.sizeStockId,
+    m.size_stock_id,
+    m.sizeId,
+    m.size_id
+  );
+
+  const selectedSize = normSize(
+    firstNonEmpty(
+      x.selectedSize,
+      x.size,
+      x.size_name,
+      x.sizeLabel,
+      m.selectedSize,
+      m.size,
+      m.size_name,
+      m.sizeLabel,
+      v.selectedSize
+    )
+  );
+
+  const selectedColor = normColor(
+    firstNonEmpty(
+      x.selectedColor,
+      x.color,
+      x.colour,
+      x.color_name,
+      m.selectedColor,
+      m.color,
+      m.colour,
+      m.color_name,
+      v.selectedColor
+    )
+  );
+
+  return {
+    productId,
+    slug,
+    variantId,
+    strapiSizeId,
+    selectedSize,
+    selectedColor,
+  };
+}
+
+function makeKeyLooseFromIdentity(id) {
+  return [
+    id.productId || id.slug || "",
+    id.variantId || "",
+    id.selectedColor || "",
+    id.selectedSize || "",
+  ].join("|");
+}
+
+function makeKeyStrictFromIdentity(id) {
+  return [
+    id.productId || id.slug || "",
+    id.variantId || "",
+    id.selectedColor || "",
+    id.selectedSize || "",
+    id.strapiSizeId || "",
+  ].join("|");
+}
+
+function getOrCreateIdentityKeys(line) {
+  const m = isPlainObject(line?.metadata) ? line.metadata : {};
+  const existingLoose = clean(
+    line?.identityKeyLoose || m.identityKeyLoose || m.cartKeyLoose
+  );
+  const existingStrict = clean(
+    line?.identityKeyStrict || m.identityKeyStrict || m.cartKeyStrict
+  );
+
+  if (existingLoose || existingStrict) {
+    return {
+      identityKeyLoose: existingLoose || "",
+      identityKeyStrict: existingStrict || "",
+    };
+  }
+
+  const id = deriveIdentity(line || {});
+  return {
+    identityKeyLoose: makeKeyLooseFromIdentity(id),
+    identityKeyStrict: makeKeyStrictFromIdentity(id),
+  };
+}
+
+function findLineIndex(lines, item) {
+  const incomingId = deriveIdentity(item || {});
+  const incLoose = makeKeyLooseFromIdentity(incomingId);
+  const incStrict = makeKeyStrictFromIdentity(incomingId);
+
+  let idx = lines.findIndex((l) => {
+    const keys = getOrCreateIdentityKeys(l);
+    return (
+      (keys.identityKeyStrict && keys.identityKeyStrict === incStrict) ||
+      (keys.identityKeyLoose && keys.identityKeyLoose === incLoose)
+    );
+  });
+  if (idx >= 0) return idx;
+
+  idx = lines.findIndex((l) => {
+    const lid = deriveIdentity(l || {});
+    return (
+      makeKeyStrictFromIdentity(lid) === incStrict ||
+      makeKeyLooseFromIdentity(lid) === incLoose
+    );
+  });
+
+  return idx;
+}
+
 function makeVariantKey(x = {}) {
-  const sizeRow =
-    x.strapiSizeId ||
-    x.strapi_size_id ||
-    x.sizeStockId ||
-    x.size_stock_id ||
-    x.sizeId ||
-    x.size_id ||
-    "";
-  const prismaVar = x.variantPrismaId || x.prisma_id || x.pid || "";
+  const id = deriveIdentity(x);
 
-  const variantStrapi =
-    x.variantId || x.variant_id || x.vid || (x.variant && x.variant.id) || "";
+  if (id.strapiSizeId) return `ss:${id.strapiSizeId}`;
 
-  const product = x.productId || x.id || x.slug || "";
-  const color = x.selectedColor || x.color || "";
-  const size = x.selectedSize || x.size || "";
-
-  if (sizeRow) return `ss:${String(sizeRow)}`;
-  if (prismaVar || variantStrapi) {
+  const prismaVar = firstNonEmpty(x.variantPrismaId, x.prisma_id, x.pid);
+  if (prismaVar || id.variantId) {
     return [
       "v",
       prismaVar || "",
-      variantStrapi || "",
-      product || "",
-      color || "",
-      size || "",
+      id.variantId || "",
+      id.productId || id.slug || "",
+      id.selectedColor || "",
+      id.selectedSize || "",
     ].join("|");
   }
-  return ["p", product || "", color || "", size || ""].join("|");
+  return [
+    "p",
+    id.productId || id.slug || "",
+    id.selectedColor || "",
+    id.selectedSize || "",
+  ].join("|");
 }
+
+/* ---------------- numeric + stock helpers ---------------- */
 
 function numOrNull(v) {
   const x = Number(v);
   return Number.isFinite(x) ? x : null;
 }
 
-/**
- * Push any numeric stock candidates from an item into `out[]`.
- * Handles both direct numeric fields and nested Strapi sizeStock objects.
- */
 function collectStockCandidatesFromItem(it, out) {
   if (!it || typeof it !== "object") return;
 
@@ -306,10 +646,6 @@ function collectStockCandidatesFromItem(it, out) {
   }
 }
 
-/**
- * Derive a max-available cap from any of the known stock fields on the
- * existing line and the incoming line.
- */
 function effectiveMaxAvailable(existing, incoming) {
   const candidates = [];
   collectStockCandidatesFromItem(existing, candidates);
@@ -319,175 +655,809 @@ function effectiveMaxAvailable(existing, incoming) {
   return Math.max(...positives);
 }
 
+/* ---------------- merge rules ---------------- */
+
+const IMAGE_FIELDS = new Set([
+  "thumbnail",
+  "thumbnailUrl",
+  "thumb",
+  "thumbUrl",
+  "image",
+  "imageUrl",
+]);
+
+const STABLE_FIELDS = new Set([
+  // identity
+  "productId",
+  "slug",
+  "variantId",
+  "strapiSizeId",
+  "selectedSize",
+  "selectedColor",
+  "size",
+  "color",
+
+  // display
+  "title",
+  "productName",
+  "name",
+  "thumbnail",
+  "thumbnailUrl",
+  "thumb",
+  "thumbUrl",
+  "image",
+  "imageUrl",
+
+  "variantTitle",
+  "fit",
+
+  // identifiers
+  "sku",
+  "barcode",
+  "ean",
+  "ean13",
+
+  // pricing
+  "price",
+  "unitPrice",
+  "originalUnitPrice",
+  "compareAtPrice",
+  "mrp",
+
+  // identity keys must be sticky
+  "identityKeyLoose",
+  "identityKeyStrict",
+
+  // line id must be sticky
+  "lineId",
+  "id",
+]);
+
+function isEffectivelyEmptyForField(field, value) {
+  // Critical: prevent "[object Object]" and media objects from being treated as "good" values.
+  if (IMAGE_FIELDS.has(field)) {
+    const u = extractImageUrl(value);
+    return !u;
+  }
+
+  if (isEmptyValue(value)) return true;
+
+  if (
+    (field === "title" ||
+      field === "productName" ||
+      field === "name" ||
+      field === "variantTitle") &&
+    isPlaceholderTitle(value)
+  )
+    return true;
+
+  return false;
+}
+
+function normalizeFieldValueForMerge(field, value) {
+  if (IMAGE_FIELDS.has(field)) {
+    const u = extractImageUrl(value);
+    return u || ""; // empty => treated as empty by isEffectivelyEmptyForField
+  }
+  return value;
+}
+
+function mergeMetadataPreserveStable(prevMeta, incMeta) {
+  const out = { ...(isPlainObject(prevMeta) ? prevMeta : {}) };
+  const inc = isPlainObject(incMeta) ? incMeta : {};
+
+  for (const k of Object.keys(inc)) {
+    let incV = inc[k];
+    const prevV = out[k];
+
+    incV = normalizeFieldValueForMerge(k, incV);
+
+    const isTitleLike =
+      k === "title" ||
+      k === "productName" ||
+      k === "name" ||
+      k === "variantTitle";
+
+    if (
+      isTitleLike &&
+      !isEffectivelyEmptyForField(k, prevV) &&
+      isEffectivelyEmptyForField(k, incV)
+    ) {
+      continue;
+    }
+
+    if (isEffectivelyEmptyForField(k, incV)) continue;
+
+    if (
+      !isEffectivelyEmptyForField(k, prevV) &&
+      (k === "productId" ||
+        k === "productSlug" ||
+        k === "variantId" ||
+        k === "selectedSize" ||
+        k === "selectedColor" ||
+        k === "size" ||
+        k === "color" ||
+        k === "thumbnail" ||
+        k === "thumbnailUrl" ||
+        k === "thumb" ||
+        k === "thumbUrl" ||
+        k === "image" ||
+        k === "imageUrl" ||
+        k === "identityKeyLoose" ||
+        k === "identityKeyStrict" ||
+        k === "clientLineId")
+    ) {
+      continue;
+    }
+
+    if (isPlainObject(prevV) && isPlainObject(incV)) {
+      out[k] = mergeMetadataPreserveStable(prevV, incV);
+      continue;
+    }
+
+    if (Array.isArray(incV)) {
+      if (incV.length) out[k] = incV;
+      continue;
+    }
+
+    out[k] = incV;
+  }
+
+  return out;
+}
+
+function mergePreserveStable(prev, incoming) {
+  if (!prev) return incoming || {};
+  if (!incoming) return prev || {};
+
+  const out = { ...prev };
+
+  for (const k of Object.keys(incoming)) {
+    let incV = incoming[k];
+    const prevV = prev[k];
+
+    incV = normalizeFieldValueForMerge(k, incV);
+
+    if (isEffectivelyEmptyForField(k, incV)) continue;
+
+    if (k === "metadata" && isPlainObject(prevV) && isPlainObject(incV)) {
+      out[k] = mergeMetadataPreserveStable(prevV, incV);
+      continue;
+    }
+
+    if (STABLE_FIELDS.has(k)) {
+      if (!isEffectivelyEmptyForField(k, prevV)) continue;
+      out[k] = incV;
+      continue;
+    }
+
+    if (isPlainObject(prevV) && isPlainObject(incV)) {
+      out[k] = mergePreserveStable(prevV, incV);
+      continue;
+    }
+
+    if (Array.isArray(incV)) {
+      if (incV.length) out[k] = incV;
+      continue;
+    }
+
+    out[k] = incV;
+  }
+
+  return out;
+}
+
+/* ---------------- display + line stabilization ---------------- */
+
+function backfillDisplayFields(line) {
+  if (!line || typeof line !== "object") return line;
+
+  const m = isPlainObject(line.metadata) ? line.metadata : {};
+  const p = isPlainObject(line.product) ? line.product : {};
+  const v = isPlainObject(line.variant) ? line.variant : {};
+
+  const id = deriveIdentity({ ...line, metadata: m, product: p, variant: v });
+
+  const bestTitle = firstNonEmptyNonPlaceholderTitle(
+    line.title,
+    line.productName,
+    line.name,
+    m.productName,
+    m.title,
+    m.name,
+    p.name,
+    p.title,
+    v.title,
+    v.name
+  );
+
+  const fit = firstNonEmpty(
+    line.fit,
+    line.fitName,
+    m.fit,
+    m.fitName,
+    v.fit,
+    v.fitName,
+    p.fit,
+    p.fitName
+  );
+
+  // Bulletproof thumb selection across all known shapes
+  const bestThumb = pickImageUrl(
+    // top-level variants
+    line.thumbnail,
+    line.thumbnailUrl,
+    line.thumbUrl,
+    line.thumb,
+    line.image,
+    line.imageUrl,
+    line.images,
+    // metadata variants
+    m.thumbnail,
+    m.thumbnailUrl,
+    m.thumbUrl,
+    m.thumb,
+    m.image,
+    m.imageUrl,
+    m.images,
+    // product/variant common
+    p.thumbnail,
+    p.image,
+    p.images,
+    v.thumbnail,
+    v.image,
+    v.images
+  );
+
+  const stableTitle = !isEffectivelyEmptyForField("title", line.title)
+    ? clean(line.title)
+    : bestTitle
+    ? bestTitle
+    : "Untitled product";
+
+  const stableProductName = !isEffectivelyEmptyForField(
+    "productName",
+    line.productName
+  )
+    ? clean(line.productName)
+    : stableTitle;
+
+  const stableName = !isEffectivelyEmptyForField("name", line.name)
+    ? clean(line.name)
+    : stableTitle;
+
+  // Keep existing thumbnail ONLY if it is a valid usable URL
+  const existingThumb = pickImageUrl(
+    line.thumbnail,
+    line.thumbnailUrl,
+    line.thumbUrl,
+    line.thumb,
+    line.image,
+    line.imageUrl
+  );
+
+  const patched = {
+    ...line,
+
+    productId: !isEmptyValue(line.productId) ? line.productId : id.productId || null,
+    slug: !isEmptyValue(line.slug) ? line.slug : id.slug || null,
+    variantId: !isEmptyValue(line.variantId) ? line.variantId : id.variantId || null,
+    strapiSizeId: !isEmptyValue(line.strapiSizeId)
+      ? line.strapiSizeId
+      : id.strapiSizeId || null,
+
+    selectedSize: !isEmptyValue(line.selectedSize)
+      ? line.selectedSize
+      : id.selectedSize || null,
+    selectedColor: !isEmptyValue(line.selectedColor)
+      ? line.selectedColor
+      : id.selectedColor || null,
+
+    size: !isEmptyValue(line.size)
+      ? line.size
+      : firstNonEmpty(id.selectedSize, m.size, m.selectedSize),
+    color: !isEmptyValue(line.color)
+      ? line.color
+      : firstNonEmpty(id.selectedColor, m.color, m.selectedColor),
+
+    fit: !isEmptyValue(line.fit) ? line.fit : fit || null,
+
+    title: stableTitle,
+    productName: stableProductName,
+    name: stableName,
+
+    variantTitle: !isEffectivelyEmptyForField("variantTitle", line.variantTitle)
+      ? clean(line.variantTitle)
+      : firstNonEmptyNonPlaceholderTitle(
+          (line.variant && (line.variant.title || line.variant.name)) || "",
+          m.variantTitle,
+          m.variant_name
+        ) || null,
+
+    thumbnail: existingThumb || bestThumb || null,
+  };
+
+  // Ensure ALL aliases are consistent and valid
+  const finalThumb = pickImageUrl(
+    patched.thumbnail,
+    patched.thumbnailUrl,
+    patched.thumbUrl,
+    patched.thumb,
+    patched.image,
+    patched.imageUrl,
+    bestThumb
+  );
+
+  if (finalThumb) {
+    patched.thumbnail = finalThumb;
+    if (isEffectivelyEmptyForField("thumbnailUrl", patched.thumbnailUrl))
+      patched.thumbnailUrl = finalThumb;
+    if (isEffectivelyEmptyForField("thumbUrl", patched.thumbUrl)) patched.thumbUrl = finalThumb;
+    if (isEffectivelyEmptyForField("thumb", patched.thumb)) patched.thumb = finalThumb;
+    if (isEffectivelyEmptyForField("image", patched.image)) patched.image = finalThumb;
+    if (isEffectivelyEmptyForField("imageUrl", patched.imageUrl)) patched.imageUrl = finalThumb;
+  } else {
+    // never store "[object Object]" etc
+    patched.thumbnail = null;
+    if (patched.thumbnailUrl === "[object Object]") patched.thumbnailUrl = null;
+    if (patched.thumbUrl === "[object Object]") patched.thumbUrl = null;
+    if (patched.thumb === "[object Object]") patched.thumb = null;
+    if (patched.image === "[object Object]") patched.image = null;
+    if (patched.imageUrl === "[object Object]") patched.imageUrl = null;
+  }
+
+  const q = Number(patched.quantity || patched.qty || 1) || 1;
+  patched.quantity = Math.max(1, q);
+
+  const keys = getOrCreateIdentityKeys(patched);
+  if (isEffectivelyEmptyForField("identityKeyLoose", patched.identityKeyLoose))
+    patched.identityKeyLoose = keys.identityKeyLoose;
+  if (isEffectivelyEmptyForField("identityKeyStrict", patched.identityKeyStrict))
+    patched.identityKeyStrict = keys.identityKeyStrict;
+
+  // Persist into metadata without downgrading
+  const nextMeta = mergeMetadataPreserveStable(
+    {
+      productId: patched.productId,
+      productSlug: patched.slug,
+      variantId: patched.variantId,
+      selectedSize: patched.selectedSize,
+      selectedColor: patched.selectedColor,
+      size: patched.size,
+      color: patched.color,
+      fit: patched.fit,
+
+      title: patched.title,
+      productName: patched.productName,
+      name: patched.name,
+      variantTitle: patched.variantTitle,
+
+      thumbnail: patched.thumbnail,
+      thumbnailUrl: patched.thumbnailUrl || patched.thumbnail,
+      thumb: patched.thumb || patched.thumbnail,
+      thumbUrl: patched.thumbUrl || patched.thumbnail,
+      image: patched.image || patched.thumbnail,
+      imageUrl: patched.imageUrl || patched.thumbnail,
+
+      identityKeyLoose: patched.identityKeyLoose,
+      identityKeyStrict: patched.identityKeyStrict,
+    },
+    m
+  );
+
+  patched.metadata = nextMeta;
+
+  return patched;
+}
+
+function ensureLineIdAndUniqueId(line) {
+  const patched = backfillDisplayFields(line);
+
+  const m = isPlainObject(patched.metadata) ? patched.metadata : {};
+
+  const existingLineId = firstNonEmpty(
+    patched.lineId,
+    m.clientLineId,
+    looksLikeLineId(patched.id) ? patched.id : ""
+  );
+
+  const keys = getOrCreateIdentityKeys(patched);
+  const identityLoose = firstNonEmpty(
+    patched.identityKeyLoose,
+    m.identityKeyLoose,
+    m.cartKeyLoose,
+    keys.identityKeyLoose
+  );
+
+  const generated =
+    identityLoose && identityLoose !== "|||"
+      ? `l:${identityLoose}`
+      : `line_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const lineId = existingLineId || generated;
+
+  const out = {
+    ...patched,
+    lineId,
+    id: lineId,
+    identityKeyLoose: identityLoose || "",
+    identityKeyStrict: firstNonEmpty(
+      patched.identityKeyStrict,
+      m.identityKeyStrict,
+      m.cartKeyStrict,
+      keys.identityKeyStrict
+    ),
+  };
+
+  if (!isEmptyValue(patched.__originalId)) {
+    out.__originalId = patched.__originalId;
+  } else if (
+    !isEmptyValue(line?.id) &&
+    !looksLikeLineId(line.id) &&
+    String(line.id) !== String(lineId)
+  ) {
+    out.__originalId = line.id;
+  }
+
+  // Ensure thumbnail aliases are always present post-id assignment too
+  const best = pickImageUrl(
+    out.thumbnail,
+    out.thumbnailUrl,
+    out.thumbUrl,
+    out.thumb,
+    out.image,
+    out.imageUrl,
+    out.images,
+    out.metadata &&
+      (out.metadata.thumbnail ||
+        out.metadata.thumbnailUrl ||
+        out.metadata.thumbUrl ||
+        out.metadata.thumb ||
+        out.metadata.image ||
+        out.metadata.imageUrl ||
+        out.metadata.images)
+  );
+
+  if (best) {
+    out.thumbnail = best;
+    if (isEffectivelyEmptyForField("thumbnailUrl", out.thumbnailUrl)) out.thumbnailUrl = best;
+    if (isEffectivelyEmptyForField("thumbUrl", out.thumbUrl)) out.thumbUrl = best;
+    if (isEffectivelyEmptyForField("thumb", out.thumb)) out.thumb = best;
+    if (isEffectivelyEmptyForField("image", out.image)) out.image = best;
+    if (isEffectivelyEmptyForField("imageUrl", out.imageUrl)) out.imageUrl = best;
+  }
+
+  // Store clientLineId in metadata for server roundtrips
+  out.metadata = mergeMetadataPreserveStable(
+    { ...(isPlainObject(out.metadata) ? out.metadata : {}), clientLineId: lineId },
+    {}
+  );
+
+  return out;
+}
+
+function stabilizeLines(lines) {
+  const arr = Array.isArray(lines) ? lines : [];
+  const normalized = arr.map((l) => ensureLineIdAndUniqueId(l));
+
+  const byKey = new Map();
+
+  for (const line of normalized) {
+    const keys = getOrCreateIdentityKeys(line);
+    const k = firstNonEmpty(keys.identityKeyStrict, keys.identityKeyLoose, line.lineId);
+
+    if (!byKey.has(k)) {
+      byKey.set(k, line);
+      continue;
+    }
+
+    const prev = byKey.get(k);
+    const prevQty = Number(prev.quantity || 1) || 1;
+    const addQty = Number(line.quantity || 1) || 1;
+
+    const cap = effectiveMaxAvailable(prev, line);
+    let nextQty = prevQty + addQty;
+    if (cap != null) nextQty = Math.min(nextQty, cap);
+
+    const merged = ensureLineIdAndUniqueId(mergePreserveStable(prev, line));
+
+    byKey.set(
+      k,
+      ensureLineIdAndUniqueId({
+        ...merged,
+        quantity: Math.max(1, nextQty),
+        maxAvailable: cap ?? merged.maxAvailable ?? null,
+        stock: cap ?? merged.stock ?? null,
+      })
+    );
+  }
+
+  return Array.from(byKey.values());
+}
+
 /**
- * Normalize a cart line into the shape needed by /api/cart/sync.
- * Also forwards rich metadata (fabric, GSM, fit, SKU, barcode, thumbnail, etc.)
+ * Server reconciliation:
+ * - Never drop local-only lines.
+ * - Never overwrite stable identity/display fields already set.
+ * - Allow server to update non-stable fields (e.g., quantity/price) when provided.
  */
+function reconcileServerWithLocal(localLines, serverLines) {
+  const local = Array.isArray(localLines) ? localLines : [];
+  const server = Array.isArray(serverLines) ? serverLines : [];
+
+  // If server returns empty but we already have local lines, do NOT clear.
+  if (!server.length && local.length) return stabilizeLines(local);
+
+  const localByKey = new Map();
+  for (const l of local) {
+    const ll = ensureLineIdAndUniqueId(l);
+    const keys = getOrCreateIdentityKeys(ll);
+    const k = firstNonEmpty(keys.identityKeyStrict, keys.identityKeyLoose, ll.lineId);
+    localByKey.set(k, ll);
+  }
+
+  const out = [];
+  const seen = new Set();
+
+  for (const sLine of server) {
+    const ss = ensureLineIdAndUniqueId(sLine);
+    const skeys = getOrCreateIdentityKeys(ss);
+    const k = firstNonEmpty(skeys.identityKeyStrict, skeys.identityKeyLoose, ss.lineId);
+
+    const l = localByKey.get(k);
+
+    // Base local (locks stable fields), then apply server (qty/price/etc).
+    const merged = l ? ensureLineIdAndUniqueId(mergePreserveStable(l, ss)) : ss;
+
+    out.push(merged);
+    seen.add(k);
+  }
+
+  for (const l of local) {
+    const ll = ensureLineIdAndUniqueId(l);
+    const keys = getOrCreateIdentityKeys(ll);
+    const k = firstNonEmpty(keys.identityKeyStrict, keys.identityKeyLoose, ll.lineId);
+    if (seen.has(k)) continue;
+    out.push(ll);
+  }
+
+  return stabilizeLines(out);
+}
+
+/* ---------------- early merge helper (static, used in initializer) ---------------- */
+
+function mergeLinesAdditiveStatic(baseLines, incomingLines) {
+  const base = stabilizeLines(baseLines);
+  const inc = stabilizeLines(incomingLines);
+  if (!inc.length) return base;
+
+  const next = [...base];
+
+  for (const line of inc) {
+    if (!line) continue;
+
+    const idx = findLineIndex(next, line);
+    if (idx >= 0) {
+      const prevLine = next[idx];
+      const prevQty = Number(prevLine.quantity || 1) || 1;
+      const addQty = Number(line.quantity || 1) || 1;
+
+      const cap = effectiveMaxAvailable(prevLine, line);
+      let nextQty = prevQty + addQty;
+      if (cap != null) nextQty = Math.min(nextQty, cap);
+
+      const merged = ensureLineIdAndUniqueId(
+        mergePreserveStable(prevLine, ensureLineIdAndUniqueId(line))
+      );
+
+      next[idx] = ensureLineIdAndUniqueId({
+        ...merged,
+        maxAvailable: cap ?? merged.maxAvailable ?? null,
+        stock: cap ?? merged.stock ?? null,
+        quantity: Math.max(1, nextQty || 1),
+      });
+    } else {
+      next.push(ensureLineIdAndUniqueId(line));
+    }
+  }
+
+  return stabilizeLines(next);
+}
+
+/* ---------------- sync normalization ---------------- */
+
 function normalizeLineForSync(it = {}) {
   if (!it || typeof it !== "object") return null;
 
-  const quantity = Number(it.quantity || it.qty || 1) || 1;
-  const price = Number(it.price || it.unitPrice || 0) || 0;
+  const line = ensureLineIdAndUniqueId(it);
 
-  const productId =
-    it.productId ??
-    it.product_id ??
-    it.pid ??
-    it.id ??
-    (it.product && it.product.id) ??
-    null;
+  const quantity = Number(line.quantity || line.qty || 1) || 1;
+  const price = Number(line.price || line.unitPrice || 0) || 0;
 
-  const slug = it.slug ?? it.productSlug ?? (it.product && it.product.slug) ?? null;
-
-  const variantId =
-    it.variantId ?? it.variant_id ?? it.vid ?? (it.variant && it.variant.id) ?? null;
-
-  const selectedSize = it.selectedSize ?? it.size ?? it.size_name ?? it.sizeLabel ?? null;
-
-  const selectedColor = it.selectedColor ?? it.color ?? it.colour ?? it.color_name ?? null;
-
-  const strapiSizeId =
-    it.strapiSizeId ??
-    it.strapi_size_id ??
-    it.sizeStockId ??
-    it.size_stock_id ??
-    it.sizeId ??
-    it.size_id ??
-    null;
+  const id = deriveIdentity(line);
 
   const fabric =
-    it.fabric ??
-    it.fabricName ??
-    (it.variant && (it.variant.fabric || it.variant.fabricName)) ??
-    (it.product && (it.product.fabric || it.product.fabricName)) ??
+    line.fabric ??
+    line.fabricName ??
+    (line.variant && (line.variant.fabric || line.variant.fabricName)) ??
+    (line.product && (line.product.fabric || line.product.fabricName)) ??
+    (line.metadata && (line.metadata.fabric || line.metadata.fabricName)) ??
     null;
 
   const gsm =
-    it.gsm ??
-    it.gsmValue ??
-    (it.variant && (it.variant.gsm || it.variant.gsmValue)) ??
-    (it.product && (it.product.gsm || it.product.gsmValue)) ??
+    line.gsm ??
+    line.gsmValue ??
+    (line.variant && (line.variant.gsm || line.variant.gsmValue)) ??
+    (line.product && (line.product.gsm || line.product.gsmValue)) ??
+    (line.metadata && (line.metadata.gsm || line.metadata.gsmValue)) ??
     null;
 
   const fit =
-    it.fit ??
-    it.fitName ??
-    (it.variant && (it.variant.fit || it.variant.fitName)) ??
-    (it.product && (it.product.fit || it.product.fitName)) ??
+    line.fit ??
+    line.fitName ??
+    (line.variant && (line.variant.fit || line.variant.fitName)) ??
+    (line.product && (line.product.fit || line.product.fitName)) ??
+    (line.metadata && (line.metadata.fit || line.metadata.fitName)) ??
     null;
 
   const sku =
-    it.sku ??
-    (it.variant && (it.variant.sku || it.variant.skuCode || it.variant.sku_code)) ??
-    (it.product && (it.product.sku || it.product.skuCode || it.product.sku_code)) ??
+    line.sku ??
+    (line.variant &&
+      (line.variant.sku || line.variant.skuCode || line.variant.sku_code)) ??
+    (line.product &&
+      (line.product.sku || line.product.skuCode || line.product.sku_code)) ??
+    (line.metadata &&
+      (line.metadata.sku || line.metadata.skuCode || line.metadata.sku_code)) ??
     null;
 
   const barcode =
-    it.barcode ??
-    it.bar_code ??
-    it.ean13 ??
-    it.ean ??
-    (it.variant &&
-      (it.variant.barcode ||
-        it.variant.barCode ||
-        it.variant.ean13 ||
-        it.variant.ean ||
-        it.variant.barcodeEan13 ||
-        it.variant.barcode_ean13)) ??
-    (it.product &&
-      (it.product.barcode ||
-        it.product.barCode ||
-        it.product.ean13 ||
-        it.product.ean ||
-        it.product.barcodeEan13 ||
-        it.product.barcode_ean13)) ??
+    line.barcode ??
+    line.bar_code ??
+    line.ean13 ??
+    line.ean ??
+    (line.variant &&
+      (line.variant.barcode ||
+        line.variant.barCode ||
+        line.variant.ean13 ||
+        line.variant.ean ||
+        line.variant.barcodeEan13 ||
+        line.variant.barcode_ean13)) ??
+    (line.product &&
+      (line.product.barcode ||
+        line.product.barCode ||
+        line.product.ean13 ||
+        line.product.ean ||
+        line.product.barcodeEan13 ||
+        line.product.barcode_ean13)) ??
+    (line.metadata &&
+      (line.metadata.barcode ||
+        line.metadata.barCode ||
+        line.metadata.ean13 ||
+        line.metadata.ean)) ??
     null;
 
   const originalUnitPrice =
-    it.originalUnitPrice ??
-    it.compareAtPrice ??
-    it.mrp ??
-    (it.metadata && (it.metadata.originalUnitPrice || it.metadata.compareAt || it.metadata.mrp)) ??
+    line.originalUnitPrice ??
+    line.compareAtPrice ??
+    line.mrp ??
+    (line.metadata &&
+      (line.metadata.originalUnitPrice ||
+        line.metadata.compareAt ||
+        line.metadata.mrp)) ??
     null;
 
-  const thumbnail =
-    it.thumbnail ??
-    it.thumbnailUrl ??
-    it.thumbUrl ??
-    it.thumb ??
-    (it.image && (it.image.url || it.image.src)) ??
-    (Array.isArray(it.images) && it.images[0]
-      ? it.images[0].url || it.images[0].src || null
-      : null) ??
-    (it.product && it.product.thumbnail && (it.product.thumbnail.url || it.product.thumbnail.src)) ??
-    null;
+  // Bulletproof: never send "[object Object]" to server
+  const thumbnail = pickImageUrl(
+    line.thumbnail,
+    line.thumbnailUrl,
+    line.thumbUrl,
+    line.thumb,
+    line.image,
+    line.imageUrl,
+    line.images,
+    line.metadata &&
+      (line.metadata.thumbnail ||
+        line.metadata.thumbnailUrl ||
+        line.metadata.thumbUrl ||
+        line.metadata.thumb ||
+        line.metadata.image ||
+        line.metadata.imageUrl ||
+        line.metadata.images)
+  );
 
   const productName =
-    it.productName ?? it.title ?? it.name ?? (it.product && (it.product.name || it.product.title)) ?? null;
+    firstNonEmptyNonPlaceholderTitle(
+      line.productName,
+      line.title,
+      line.name,
+      line.metadata &&
+        (line.metadata.productName || line.metadata.title || line.metadata.name)
+    ) || null;
 
-  const variantTitle = it.variantTitle ?? (it.variant && (it.variant.title || it.variant.name)) ?? null;
+  const title =
+    productName ||
+    (isPlaceholderTitle(line.title) ? null : clean(line.title)) ||
+    null;
 
-  const metadata = {
-    productId,
-    pid: productId,
-    productSlug: slug,
-    variantId,
-    vid: variantId,
+  const variantTitle =
+    firstNonEmptyNonPlaceholderTitle(
+      line.variantTitle,
+      line.variant && (line.variant.title || line.variant.name),
+      line.metadata && line.metadata.variantTitle
+    ) || null;
 
-    size: selectedSize,
-    size_name: selectedSize,
-    selectedSize,
+  const metadata = mergeMetadataPreserveStable(
+    {
+      productId: id.productId || null,
+      pid: id.productId || null,
+      productSlug: id.slug || null,
+      slug: id.slug || null,
+      variantId: id.variantId || null,
+      vid: id.variantId || null,
 
-    color: selectedColor,
-    colour: selectedColor,
-    color_name: selectedColor,
-    selectedColor,
+      size: id.selectedSize || null,
+      size_name: id.selectedSize || null,
+      selectedSize: id.selectedSize || null,
 
-    fabric,
-    fabricName: fabric,
-    gsm,
-    gsmValue: gsm,
-    fit,
-    fitName: fit,
+      color: id.selectedColor || null,
+      colour: id.selectedColor || null,
+      color_name: id.selectedColor || null,
+      selectedColor: id.selectedColor || null,
 
-    sku,
-    skuCode: sku,
-    barcode,
-    barCode: barcode,
-    ean: it.ean ?? null,
-    ean13: it.ean13 ?? null,
+      fabric,
+      fabricName: fabric,
+      gsm,
+      gsmValue: gsm,
+      fit,
+      fitName: fit,
 
-    originalUnitPrice,
+      sku,
+      skuCode: sku,
+      barcode,
+      barCode: barcode,
+      ean: line.ean ?? null,
+      ean13: line.ean13 ?? null,
 
-    productName,
-    variantTitle,
+      originalUnitPrice,
 
-    thumbnail,
-    thumbnailUrl: thumbnail,
-    thumb: thumbnail,
-    image: thumbnail,
-    imageUrl: thumbnail,
-  };
+      title,
+      productName,
+      name: productName,
+      variantTitle,
+
+      thumbnail: thumbnail || null,
+      thumbnailUrl: thumbnail || null,
+      thumb: thumbnail || null,
+      thumbUrl: thumbnail || null,
+      image: thumbnail || null,
+      imageUrl: thumbnail || null,
+
+      clientLineId: line.lineId,
+      identityKeyLoose: line.identityKeyLoose || null,
+      identityKeyStrict: line.identityKeyStrict || null,
+    },
+    isPlainObject(line.metadata) ? line.metadata : {}
+  );
 
   return {
-    productId,
-    slug,
-    variantId,
+    productId: id.productId ? String(id.productId) : null,
+    slug: id.slug || null,
+    variantId: id.variantId ? String(id.variantId) : null,
 
-    selectedColor,
-    selectedSize,
+    selectedColor: id.selectedColor || null,
+    selectedSize: id.selectedSize || null,
 
-    strapiSizeId,
+    strapiSizeId: id.strapiSizeId ? String(id.strapiSizeId) : null,
 
-    quantity,
+    quantity: Math.max(1, quantity),
     price,
-    currency: (it.currency || "BDT").toUpperCase(),
+    currency: (line.currency || "BDT").toUpperCase(),
 
-    stock_quantity: it.stock_quantity ?? it.stockQuantity ?? null,
-    sizeStock: it.sizeStock ?? it.size_stock ?? null,
-    maxAvailable: it.maxAvailable ?? null,
-    stock: it.stock ?? null,
-    strapiStockQty: it.strapiStockQty ?? it.strapi_stock_qty ?? null,
+    stock_quantity: line.stock_quantity ?? line.stockQuantity ?? null,
+    sizeStock: line.sizeStock ?? line.size_stock ?? null,
+    maxAvailable: line.maxAvailable ?? null,
+    stock: line.stock ?? null,
+    strapiStockQty: line.strapiStockQty ?? line.strapi_stock_qty ?? null,
 
     metadata,
   };
@@ -496,63 +1466,163 @@ function normalizeLineForSync(it = {}) {
 /* ---------------- provider ---------------- */
 
 export function CartProvider({ children }) {
-  const [ready, setReady] = useState(false);
+  // "ready" should mean: storage hydration is complete (synchronous on client).
+  const [ready, setReady] = useState(() =>
+    typeof window !== "undefined" ? true : false
+  );
 
-  // Scope: "g:<sid>" (guest) OR "u:<id>" (logged-in)
-  const [scope, setScope] = useState("g:boot");
+  // Track if user mutated cart since mount, so late hydration cannot clobber state.
+  const mutatedSinceMountRef = useRef(false);
+
+  // Track last user gesture to gate cart-panel auto open.
+  const lastUserGestureRef = useRef(0);
+
+  // Prevent first persist write from firing "cart:changed" on initial mount.
+  const didInitialPersistRef = useRef(false);
+
+  // Initial scope + initial items: hydrate synchronously (prevents empty flash).
+  const [{ scope: initialScope, items: initialItems }] = useState(() => {
+    if (typeof window === "undefined") return { scope: "g:boot", items: [] };
+
+    const guestSid = getOrCreateGuestSid();
+    const guestScope = `g:${guestSid}`;
+
+    const gStore = guestStorage();
+    const gRead = readFromStorageWithMeta(gStore, scopedKey(guestScope));
+    const guestItems = stabilizeLines(gRead.items || []);
+
+    // if auth cookie exists, and we have a last-known user scope, hydrate it NOW
+    let chosenScope = guestScope;
+    let mergedItems = guestItems;
+
+    try {
+      const authCookiePresent = hasLikelyAuthCookie();
+      if (authCookiePresent) {
+        const lastUserScope = clean(
+          customerStorage()?.getItem(LS_LAST_USER_SCOPE_KEY) || ""
+        );
+        if (lastUserScope && lastUserScope.startsWith("u:")) {
+          const uStore = customerStorage();
+          const uRead = readFromStorageWithMeta(uStore, scopedKey(lastUserScope));
+          const userItems = stabilizeLines(uRead.items || []);
+
+          if (userItems.length) {
+            chosenScope = lastUserScope;
+            mergedItems = mergeLinesAdditiveStatic(userItems, guestItems);
+          }
+        }
+      }
+    } catch {
+      // ignore; fall back to guest-only hydration
+    }
+
+    return { scope: chosenScope, items: mergedItems };
+  });
+
+  const [scope, setScope] = useState(initialScope || "g:boot");
   const scopeRef = useRef(scope);
   useEffect(() => {
     scopeRef.current = scope;
   }, [scope]);
 
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState(() => stabilizeLines(initialItems || []));
 
   const saveTimer = useRef(null);
   const syncTimer = useRef(null);
-
-  // keeps last synced JSON payload to avoid repeated calls
   const lastSyncPayloadRef = useRef("");
 
-  /**
-   * Resolve session (customer) and decide scope.
-   * We intentionally do NOT import next-auth/react to avoid changing bundle shape;
-   * using the NextAuth session endpoint keeps this file standalone.
-   */
+  // Gesture capture (for browsers where navigator.userActivation is unavailable/unreliable)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const mark = () => {
+      try {
+        lastUserGestureRef.current =
+          typeof performance !== "undefined" && performance.now
+            ? performance.now()
+            : Date.now();
+      } catch {
+        lastUserGestureRef.current = Date.now();
+      }
+    };
+
+    window.addEventListener("pointerdown", mark, { capture: true, passive: true });
+    window.addEventListener("keydown", mark, { capture: true });
+    window.addEventListener("touchstart", mark, { capture: true, passive: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", mark, { capture: true });
+      window.removeEventListener("keydown", mark, { capture: true });
+      window.removeEventListener("touchstart", mark, { capture: true });
+    };
+  }, []);
+
+  function isLikelyUserActivation() {
+    // Prefer UA signal when available.
+    try {
+      if (typeof navigator !== "undefined" && navigator.userActivation) {
+        if (navigator.userActivation.isActive) return true;
+      }
+    } catch {}
+
+    // Require at least one real recorded gesture before using the delta heuristic.
+    const last = Number(lastUserGestureRef.current || 0) || 0;
+    if (last <= 0) return false;
+
+    try {
+      const now =
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : Date.now();
+      return now - last <= 1500;
+    } catch {
+      return false;
+    }
+  }
+
+  function mergeLinesAdditive(baseLines, incomingLines) {
+    return mergeLinesAdditiveStatic(baseLines, incomingLines);
+  }
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     let cancelled = false;
 
     (async () => {
-      // Always ensure a guest SID cookie exists (session cookie)
       const guestSid = getOrCreateGuestSid();
       const guestScope = `g:${guestSid}`;
 
-      // Default to guest scope immediately (so UI works fast)
-      if (!cancelled) setScope(guestScope);
+      if (!cancelled) {
+        // If we booted into u:* from last-known scope, do not forcibly overwrite to guest.
+        setScope((prev) => (prev && prev.startsWith("u:") ? prev : guestScope));
+      }
 
-      // Load from guest storage quickly
+      // Ensure guest storage contains legacy if present (only if guest scope is missing/empty)
       const gStore = guestStorage();
-      const gData = readFromStorage(gStore, scopedKey(guestScope));
+      const gKey = scopedKey(guestScope);
+      const gRead = readFromStorageWithMeta(gStore, gKey);
 
-      // If scoped guest storage is empty, try migrating legacy global key into guest scope
-      if ((!gData.items || !gData.items.length) && typeof window !== "undefined") {
+      if ((!gRead.items || !gRead.items.length) && typeof window !== "undefined") {
         const legacy = readFromStorage(customerStorage(), LEGACY_GLOBAL_KEY);
         if (Array.isArray(legacy.items) && legacy.items.length) {
-          writeToStorage(gStore, scopedKey(guestScope), { items: legacy.items });
-          // best-effort clear legacy global key so it doesn't bleed again
+          // silent migration write (do not emit cart:changed on load)
+          writeToStorage(gStore, gKey, { items: legacy.items }, { emitEvent: false });
           try {
             customerStorage()?.removeItem(LEGACY_GLOBAL_KEY);
           } catch {}
         }
       }
 
-      if (!cancelled) {
-        const afterLegacy = readFromStorage(gStore, scopedKey(guestScope));
-        if (Array.isArray(afterLegacy.items)) setItems(afterLegacy.items);
+      // IMPORTANT: Do NOT clobber current items if user already mutated since mount.
+      if (!cancelled && !mutatedSinceMountRef.current) {
+        const afterLegacy = readFromStorageWithMeta(gStore, gKey);
+        if (afterLegacy.hasKey) {
+          setItems((prev) => reconcileServerWithLocal(prev, afterLegacy.items || []));
+        }
       }
 
-      // Now check if customer session exists (logged-in)
+      // Logged-in session scope resolution
       try {
         const res = await fetch("/api/auth/session", {
           method: "GET",
@@ -564,32 +1634,51 @@ export function CartProvider({ children }) {
         const userId = sess?.user?.id ? String(sess.user.id) : "";
         if (!cancelled && userId) {
           const userScope = `u:${userId}`;
+
+          // persist last-known user scope pointer for next refresh preload
+          try {
+            customerStorage()?.setItem(LS_LAST_USER_SCOPE_KEY, userScope);
+          } catch {}
+
           setScope(userScope);
 
-          // Migrate guest items into user cart storage (merge, no data loss)
           const uStore = customerStorage();
           const gStore2 = guestStorage();
 
-          const guestLines = readFromStorage(gStore2, scopedKey(guestScope)).items || [];
-          const userLines = readFromStorage(uStore, scopedKey(userScope)).items || [];
+          const guestLines =
+            readFromStorageWithMeta(gStore2, scopedKey(guestScope)).items || [];
+          const userLines =
+            readFromStorageWithMeta(uStore, scopedKey(userScope)).items || [];
 
-          const merged = mergeLines(userLines, guestLines);
-          setItems(merged);
+          // Merge on top of current in-memory items too (prevents PDP race).
+          setItems((prev) => {
+            const prevStable = stabilizeLines(prev || []);
+            const mergedUser = mergeLinesAdditive(userLines, guestLines);
+            const merged = mergeLinesAdditive(mergedUser, prevStable);
+            return stabilizeLines(merged);
+          });
 
-          writeToStorage(uStore, scopedKey(userScope), { items: merged });
+          // Persist merged into user scope (SILENT)
+          const mergedNow = mergeLinesAdditive(userLines, guestLines);
+          writeToStorage(uStore, scopedKey(userScope), { items: mergedNow }, { emitEvent: false });
 
-          // Clear guest scope so next guest starts empty
+          // Clear guest scope so next guest starts empty (best-effort)
           try {
             gStore2?.removeItem(scopedKey(guestScope));
           } catch {}
+        } else {
+          // if no session, remove the last-known pointer so we don't preload user cart without auth
+          try {
+            customerStorage()?.removeItem(LS_LAST_USER_SCOPE_KEY);
+          } catch {}
         }
       } catch {
-        // If session fetch fails, remain in guest scope.
+        // remain guest
       }
 
       if (!cancelled) setReady(true);
 
-      // 2) Server canonical cart hydration (per cookie/user)
+      // Server hydration (canonical) - must not clear local on empty responses
       try {
         const res = await fetch("/api/cart", {
           method: "GET",
@@ -599,50 +1688,42 @@ export function CartProvider({ children }) {
 
         const data = await res.json().catch(() => null);
         if (!cancelled && res.ok && data && Array.isArray(data.items)) {
-          setItems((prev) => {
-            try {
-              const prevJson = JSON.stringify(prev || []);
-              const nextJson = JSON.stringify(data.items || []);
-              if (prevJson === nextJson) return prev;
-            } catch {}
-            return data.items;
-          });
+          setItems((prev) => reconcileServerWithLocal(prev, data.items));
 
-          // Persist to the current scope storage
           const sc = scopeRef.current || guestScope;
           const store = sc.startsWith("u:") ? customerStorage() : guestStorage();
-          writeToStorage(store, scopedKey(sc), { items: data.items });
+          const localNowMeta = readFromStorageWithMeta(store, scopedKey(sc));
+
+          const reconciled = reconcileServerWithLocal(
+            localNowMeta.items || [],
+            data.items
+          );
+
+          // SILENT reconcile write (do not trigger cart panel on load)
+          writeToStorage(store, scopedKey(sc), { items: reconciled }, { emitEvent: false });
         }
       } catch {
-        // ignore; stay on local cart
+        // ignore
       }
     })();
 
-    // storage listeners (same-tab + other tabs)
     const onStorage = (e) => {
       if (cancelled) return;
 
       const sc = scopeRef.current;
       const key = scopedKey(sc);
 
-      // For real StorageEvent, only react to changes of our active key
       if (e && e.type === "storage") {
         if (e.key && e.key !== key) return;
       }
 
       const store = sc.startsWith("u:") ? customerStorage() : guestStorage();
-      const data = readFromStorage(store, key);
+      const dataMeta = readFromStorageWithMeta(store, key);
 
-      if (!Array.isArray(data.items)) return;
+      // CRITICAL: missing key is NOT an "empty cart" signal; ignore it.
+      if (!dataMeta.hasKey) return;
 
-      setItems((prev) => {
-        try {
-          const prevJson = JSON.stringify(prev || []);
-          const nextJson = JSON.stringify(data.items || []);
-          if (prevJson === nextJson) return prev;
-        } catch {}
-        return data.items;
-      });
+      setItems((prev) => reconcileServerWithLocal(prev, dataMeta.items || []));
     };
 
     const onCartChanged = () => onStorage({ type: "cart:changed" });
@@ -655,81 +1736,51 @@ export function CartProvider({ children }) {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("cart:changed", onCartChanged);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // persist (debounced) whenever items change
+  // persist (debounced)
   useEffect(() => {
     if (!ready) return;
+
+    // Skip the first persist unless user actually mutated the cart.
+    if (!didInitialPersistRef.current) {
+      didInitialPersistRef.current = true;
+      if (!mutatedSinceMountRef.current) return;
+    }
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
 
     saveTimer.current = setTimeout(() => {
       const sc = scopeRef.current;
       const store = sc.startsWith("u:") ? customerStorage() : guestStorage();
-      writeToStorage(store, scopedKey(sc), { items });
+      writeToStorage(store, scopedKey(sc), { items: stabilizeLines(items) }, { emitEvent: true });
     }, 80);
   }, [items, ready]);
 
-  /* ---------- line merge helper ---------- */
-
-  function mergeLines(baseLines, incomingLines) {
-    const base = Array.isArray(baseLines) ? [...baseLines] : [];
-    const inc = Array.isArray(incomingLines) ? incomingLines : [];
-    if (!inc.length) return base;
-
-    for (const line of inc) {
-      if (!line) continue;
-      const lk = makeKey(line);
-      const idx = base.findIndex((x) => makeKey(x) === lk);
-
-      if (idx >= 0) {
-        const prevLine = base[idx];
-        const prevQty = Number(prevLine.quantity || prevLine.qty || 0) || 0;
-        const addQty = Number(line.quantity || line.qty || 0) || 0;
-
-        // Respect stock cap if present
-        const cap = effectiveMaxAvailable(prevLine, line);
-        let nextQty = prevQty + addQty;
-        if (cap != null) nextQty = Math.min(nextQty, cap);
-
-        base[idx] = {
-          ...prevLine,
-          ...line,
-          maxAvailable: cap ?? prevLine.maxAvailable ?? line.maxAvailable ?? null,
-          stock: cap ?? prevLine.stock ?? line.stock ?? null,
-          quantity: Math.max(1, nextQty || 1),
-        };
-      } else {
-        base.push(line);
-      }
-    }
-
-    return base;
-  }
-
-  /* ---------- core mutators (functional) ---------- */
+  /* ---------- core mutators ---------- */
 
   const addItem = useCallback((item) => {
+    mutatedSinceMountRef.current = true;
+
     setItems((prev) => {
       if (!item) return prev;
 
-      const next = [...prev];
+      const next = stabilizeLines(prev);
+      const incoming = ensureLineIdAndUniqueId(item);
 
-      const lineKey = makeKey(item);
-      const variantKey = makeVariantKey(item);
+      const variantKey = makeVariantKey(incoming);
+      const incomingQty = Number(incoming.quantity || 1) || 1;
 
-      const incomingQty = Number(item.quantity || 1) || 1;
-
-      // Compute existing total qty for this variant across all lines
       let existingVariantQty = 0;
       let variantCapFromExisting = null;
 
       next.forEach((line) => {
         if (makeVariantKey(line) !== variantKey) return;
-        const q = Number(line.quantity || line.qty || 0) || 0;
+        const q = Number(line.quantity || 0) || 0;
         existingVariantQty += q;
 
-        const capForLine = effectiveMaxAvailable(line, item);
+        const capForLine = effectiveMaxAvailable(line, incoming);
         if (capForLine != null) {
           variantCapFromExisting =
             variantCapFromExisting == null
@@ -738,7 +1789,7 @@ export function CartProvider({ children }) {
         }
       });
 
-      const capFromIncoming = effectiveMaxAvailable(null, item);
+      const capFromIncoming = effectiveMaxAvailable(null, incoming);
       const max =
         variantCapFromExisting != null
           ? variantCapFromExisting
@@ -756,89 +1807,131 @@ export function CartProvider({ children }) {
 
       if (allowedQty <= 0) return next;
 
-      const idx = next.findIndex((x) => makeKey(x) === lineKey);
+      const idx = findLineIndex(next, incoming);
 
       if (idx >= 0) {
         const prevLine = next[idx];
-        const prevQty = Number(prevLine.quantity || prevLine.qty || 0) || 0;
+        const prevQty = Number(prevLine.quantity || 0) || 0;
         const finalQty = prevQty + allowedQty;
 
-        next[idx] = {
-          ...prevLine,
-          ...item,
-          maxAvailable: max ?? prevLine.maxAvailable ?? item.maxAvailable ?? null,
-          stock: max ?? prevLine.stock ?? item.stock ?? null,
+        const cap = effectiveMaxAvailable(prevLine, incoming) ?? max;
+
+        const merged = ensureLineIdAndUniqueId(
+          mergePreserveStable(prevLine, incoming)
+        );
+
+        next[idx] = ensureLineIdAndUniqueId({
+          ...merged,
+          maxAvailable: cap ?? merged.maxAvailable ?? null,
+          stock: cap ?? merged.stock ?? null,
           quantity: Math.max(1, finalQty),
-        };
-        return next;
+        });
+
+        return stabilizeLines(next);
       }
 
       let q = allowedQty;
       if (max != null) q = Math.min(q, max);
 
-      next.push({
-        ...item,
-        maxAvailable: max ?? item.maxAvailable ?? null,
-        stock: max ?? item.stock ?? null,
-        quantity: Math.max(1, q),
-      });
-      return next;
+      next.push(
+        ensureLineIdAndUniqueId({
+          ...incoming,
+          quantity: Math.max(1, q),
+          maxAvailable: max ?? incoming.maxAvailable ?? null,
+          stock: max ?? incoming.stock ?? null,
+        })
+      );
+
+      return stabilizeLines(next);
     });
 
-    // CENTRAL TRIGGER: any Add to Cart opens the global cart panel
+    // Only open cart panel when add-to-cart is triggered by an actual user action.
     if (typeof window !== "undefined") {
-      try {
-        window.dispatchEvent(new Event("cart:open-panel"));
-      } catch {}
+      if (isLikelyUserActivation()) {
+        try {
+          window.dispatchEvent(new Event("cart:open-panel"));
+        } catch {}
+        try {
+          window.__TDLC_OPEN_CART_PANEL__?.({ reason: "add-to-cart" });
+        } catch {}
+      }
     }
   }, []);
 
   const removeItem = useCallback((matcher) => {
+    mutatedSinceMountRef.current = true;
+
     setItems((prev) => {
+      const next = stabilizeLines(prev);
+
       if (matcher && typeof matcher === "object") {
-        const mk = makeKey(matcher);
-        return prev.filter((x) => makeKey(x) !== mk);
+        const mi = ensureLineIdAndUniqueId(matcher);
+        const mkeys = getOrCreateIdentityKeys(mi);
+        const mk = firstNonEmpty(
+          mkeys.identityKeyStrict,
+          mkeys.identityKeyLoose,
+          mi.lineId
+        );
+
+        return next.filter((x) => {
+          const xi = ensureLineIdAndUniqueId(x);
+          const xkeys = getOrCreateIdentityKeys(xi);
+          const xk = firstNonEmpty(
+            xkeys.identityKeyStrict,
+            xkeys.identityKeyLoose,
+            xi.lineId
+          );
+          return xk !== mk;
+        });
       }
-      return prev.filter(
+
+      const m = String(matcher ?? "");
+      if (!m) return next;
+
+      return next.filter(
         (x) =>
-          x.id !== matcher &&
-          x.variantId !== matcher &&
-          x.slug !== matcher &&
-          x.productId !== matcher
+          String(x.lineId || "") !== m &&
+          String(x.id || "") !== m &&
+          String(x.variantId || "") !== m &&
+          String(x.slug || "") !== m &&
+          String(x.productId || "") !== m
       );
     });
   }, []);
 
   const updateQuantity = useCallback((matcher, quantity) => {
+    mutatedSinceMountRef.current = true;
+
     const desired = Math.max(1, Number(quantity || 1) || 1);
 
     setItems((prev) => {
-      if (!prev.length) return prev;
-
-      const next = [...prev];
+      const next = stabilizeLines(prev);
+      if (!next.length) return next;
 
       let targetIndex = -1;
+
       if (typeof matcher === "number") {
         targetIndex = matcher;
       } else if (matcher && typeof matcher === "object") {
-        const mk = makeKey(matcher);
-        targetIndex = next.findIndex((x) => makeKey(x) === mk);
+        targetIndex = findLineIndex(next, matcher);
       } else {
+        const m = String(matcher ?? "");
+        if (!m) return next;
         targetIndex = next.findIndex(
           (x) =>
-            x.id === matcher ||
-            x.variantId === matcher ||
-            x.slug === matcher ||
-            x.productId === matcher
+            String(x.lineId || "") === m ||
+            String(x.id || "") === m ||
+            String(x.variantId || "") === m ||
+            String(x.slug || "") === m ||
+            String(x.productId || "") === m
         );
       }
 
-      if (targetIndex < 0 || targetIndex >= next.length) return prev;
+      if (targetIndex < 0 || targetIndex >= next.length) return next;
 
       const targetLine = next[targetIndex];
       const variantKey = makeVariantKey(targetLine);
 
-      // compute total qty for this variant on OTHER lines
       let otherQty = 0;
       let capFromLines = effectiveMaxAvailable(targetLine, null);
 
@@ -846,7 +1939,7 @@ export function CartProvider({ children }) {
         if (idx === targetIndex) return;
         if (makeVariantKey(line) !== variantKey) return;
 
-        const q = Number(line.quantity || line.qty || 0) || 0;
+        const q = Number(line.quantity || 0) || 0;
         otherQty += q;
 
         const c = effectiveMaxAvailable(line, targetLine);
@@ -863,33 +1956,37 @@ export function CartProvider({ children }) {
 
       if (cap != null) {
         const maxForThisLine = cap - otherQty;
-        if (maxForThisLine <= 0) return prev;
+        if (maxForThisLine <= 0) return next;
         if (finalQty > maxForThisLine) finalQty = maxForThisLine;
       }
 
-      next[targetIndex] = {
+      next[targetIndex] = ensureLineIdAndUniqueId({
         ...targetLine,
         quantity: Math.max(1, finalQty),
         maxAvailable: cap ?? targetLine.maxAvailable ?? null,
         stock: cap ?? targetLine.stock ?? null,
-      };
+      });
 
-      return next;
+      return stabilizeLines(next);
     });
   }, []);
 
-  const clear = useCallback(() => setItems([]), []);
+  const clear = useCallback(() => {
+    mutatedSinceMountRef.current = true;
+    setItems([]);
+  }, []);
 
-  /* ---------- server sync (soft, non-fatal) ---------- */
+  /* ---------- server sync ---------- */
 
   const syncToServer = useCallback(async (lines) => {
     if (typeof fetch === "undefined") return;
 
-    const normalized = Array.isArray(lines)
-      ? lines.map(normalizeLineForSync).filter(Boolean)
+    const stableLines = stabilizeLines(lines);
+
+    const normalized = Array.isArray(stableLines)
+      ? stableLines.map(normalizeLineForSync).filter(Boolean)
       : [];
 
-    // If normalized is empty, clear server cart (no ghosts)
     if (!normalized.length) {
       try {
         await fetch("/api/cart", {
@@ -903,6 +2000,34 @@ export function CartProvider({ children }) {
       lastSyncPayloadRef.current = "";
       return;
     }
+
+    normalized.sort((a, b) => {
+      const ak =
+        (a?.metadata?.identityKeyStrict || a?.metadata?.identityKeyLoose || "") +
+        "|" +
+        (a?.metadata?.productId || "") +
+        "|" +
+        (a?.variantId || "") +
+        "|" +
+        (a?.selectedColor || "") +
+        "|" +
+        (a?.selectedSize || "") +
+        "|" +
+        (a?.strapiSizeId || "");
+      const bk =
+        (b?.metadata?.identityKeyStrict || b?.metadata?.identityKeyLoose || "") +
+        "|" +
+        (b?.metadata?.productId || "") +
+        "|" +
+        (b?.variantId || "") +
+        "|" +
+        (b?.selectedColor || "") +
+        "|" +
+        (b?.selectedSize || "") +
+        "|" +
+        (b?.strapiSizeId || "");
+      return ak.localeCompare(bk);
+    });
 
     const currency = (normalized[0].currency || "BDT").toUpperCase();
     const payload = { items: normalized, currency };
@@ -934,7 +2059,6 @@ export function CartProvider({ children }) {
     }
   }, []);
 
-  // Debounce sync whenever items change (including empty -> clears server cart)
   useEffect(() => {
     if (!ready) return;
 
@@ -979,7 +2103,8 @@ export function CartProvider({ children }) {
 
         case "REMOVE": {
           if (typeof action.idx === "number") {
-            setItems((prev) => prev.filter((_, i) => i !== action.idx));
+            mutatedSinceMountRef.current = true;
+            setItems((prev) => stabilizeLines(prev).filter((_, i) => i !== action.idx));
             return;
           }
           if (action.matcher != null) {
@@ -1024,13 +2149,11 @@ export function CartProvider({ children }) {
 
   const value = useMemo(
     () => ({
-      // core
       ready,
-      items,
+      items: stabilizeLines(items),
       itemCount,
       subtotal,
 
-      // simple API
       add: addItem,
       addItem,
       remove: removeItem,
@@ -1038,15 +2161,13 @@ export function CartProvider({ children }) {
       updateQuantity,
       clear,
 
-      // legacy shape
       cart: {
-        items,
+        items: stabilizeLines(items),
         itemCount,
         subtotal,
       },
       dispatch,
 
-      // debug (non-UI)
       cartScope: scope,
     }),
     [
