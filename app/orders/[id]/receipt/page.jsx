@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import Script from "next/script";
+import { cookies } from "next/headers";
 
 import CartClearOnReceipt from "@/components/checkout/cart-clear-on-receipt";
 import ReceiptPrintButton from "@/components/checkout/receipt-print-button";
@@ -138,6 +139,103 @@ function getOrderSnapshot(order) {
     md.snapshot ||
     md
   );
+}
+
+/**
+ * Guest-order detection MUST be order/snapshot driven.
+ * Because your current DB can attach guest checkouts to a User row,
+ * relying on `!order.user.id` is not safe.
+ */
+function inferGuestOrder(order, snap) {
+  // 1) Explicit order-level flags (if present in your schema now or later)
+  const orderMode = String(
+    firstNonEmpty(
+      order?.checkoutMode,
+      order?.checkout_mode,
+      order?.customerMode,
+      order?.customer_mode,
+      order?.customerType,
+      order?.customer_type,
+      order?.authMode,
+      order?.auth_mode
+    )
+  )
+    .trim()
+    .toUpperCase();
+
+  const orderGuestBool =
+    Boolean(order?.isGuest) ||
+    Boolean(order?.guest) ||
+    Boolean(order?.guestMode) ||
+    Boolean(order?.guest_mode) ||
+    orderMode === "GUEST" ||
+    orderMode === "GUEST_MODE" ||
+    orderMode === "GUEST_CHECKOUT";
+
+  if (orderGuestBool) return true;
+
+  // 2) Snapshot/metadata flags (most reliable for checkout-mode truth)
+  const snapMode = String(
+    firstNonEmpty(
+      snap?.checkoutMode,
+      snap?.checkout_mode,
+      snap?.customerMode,
+      snap?.customer_mode,
+      snap?.mode,
+      snap?.authMode,
+      snap?.auth_mode,
+      snap?.userMode,
+      snap?.user_mode,
+      snap?.identityMode,
+      snap?.identity_mode
+    )
+  )
+    .trim()
+    .toUpperCase();
+
+  const snapGuestBool =
+    Boolean(snap?.isGuest) ||
+    Boolean(snap?.guest) ||
+    Boolean(snap?.guestMode) ||
+    Boolean(snap?.guest_mode) ||
+    snapMode === "GUEST" ||
+    snapMode === "GUEST_MODE" ||
+    snapMode === "GUEST_CHECKOUT";
+
+  if (snapGuestBool) return true;
+
+  // 3) Fallback: only if the order truly has no attached userId (classic guest)
+  // Prisma returns scalar fields by default, so order.userId is available if it exists in your model.
+  if (!order?.userId && !order?.user?.id) return true;
+
+  // Otherwise treat as account-mode order.
+  return false;
+}
+
+/**
+ * Viewer session detection (server-side).
+ * We ONLY show "My Orders" when the viewer is actually logged-in in this browser.
+ * This guarantees guest checkout never sees the CTA even if the DB attached the order to a User row.
+ */
+function viewerHasCustomerSessionCookie() {
+  const c = cookies();
+
+  // Cover NextAuth/Auth.js common cookie keys in production (secure) and dev (non-secure).
+  const keys = [
+    "next-auth.session-token",
+    "__Secure-next-auth.session-token",
+    "authjs.session-token",
+    "__Secure-authjs.session-token",
+  ];
+
+  for (const k of keys) {
+    try {
+      if (c.get(k)?.value) return true;
+    } catch {
+      // ignore
+    }
+  }
+  return false;
 }
 
 function getMirroredTotals(order, snap) {
@@ -459,6 +557,7 @@ export default async function ReceiptPage({ params }) {
   const order = await prisma.order.findUnique({
     where: { id },
     include: {
+      // Keep original safe select; we do NOT rely on user.id for guest detection anymore.
       user: { select: { id: true, name: true, email: true, phone: true } },
       shippingAddress: true,
       billingAddress: true,
@@ -480,11 +579,14 @@ export default async function ReceiptPage({ params }) {
 
   if (!order) return notFound();
 
-  // ✅ Fix: determine guest mode reliably (no user id => guest)
-  const isGuest = !order?.user?.id;
-
   const orderSnap = getOrderSnapshot(order);
   const snapIdx = buildSnapshotIndex(orderSnap);
+
+  // ✅ Fix: determine guest checkout reliably (order/snapshot driven)
+  const isGuestOrder = inferGuestOrder(order, orderSnap);
+
+  // ✅ Fix: also gate "My Orders" by viewer's actual logged-in session cookie (guest browsers won't have it)
+  const viewerHasSession = viewerHasCustomerSessionCookie();
 
   const currency = String(firstNonEmpty(orderSnap?.currency, orderSnap?.cartSnapshot?.currency, order.currency, "BDT"));
   const orderItems = groupOrderItems(order.items || [], snapIdx);
@@ -546,6 +648,9 @@ export default async function ReceiptPage({ params }) {
   downloadParams.set("filename", pdfName);
 
   const invoicePdfHref = `/api/orders/${encodeURIComponent(order.id)}/invoice.pdf?${downloadParams.toString()}`;
+
+  // ✅ Final gating: show only when viewer is logged-in AND the order is not guest checkout
+  const showMyOrdersCta = viewerHasSession && !isGuestOrder;
 
   return (
     <>
@@ -845,8 +950,8 @@ export default async function ReceiptPage({ params }) {
 
                 <ReceiptPrintButton className="btn" />
 
-                {/* ✅ Only show for logged-in customers (not guest) */}
-                {!isGuest && (
+                {/* ✅ Only show when viewer is logged-in AND order is NOT guest checkout */}
+                {showMyOrdersCta && (
                   <Link href="/customer/dashboard" className="btn alt">
                     My Orders
                   </Link>

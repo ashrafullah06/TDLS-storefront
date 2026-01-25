@@ -19,6 +19,17 @@ const BOTTOM_SAFE = 96; // keep clear from bottomfloatingbar (mobile too)
 
 const AUTO_CLOSE_MS_DEFAULT = 3500;
 
+/**
+ * UI-only stabilization window:
+ * When cart context is briefly inconsistent during cross-page add-to-cart (common on first-time
+ * scope/hydration reconciliation), we keep a merged "best known" display for a short window.
+ * This prevents: (1) showing only the newly added item for a moment, then (2) showing the old cart
+ * without the newly added line.
+ *
+ * IMPORTANT: This does NOT change cart state. It only stabilizes what the drawer displays.
+ */
+const DISPLAY_STABILIZE_WINDOW_MS = 1400;
+
 function money(n) {
   const v = Number(n ?? 0);
   if (!Number.isFinite(v)) return "৳0";
@@ -34,17 +45,35 @@ function money(n) {
  * - Guest should not "remember" after tab close.
  * - Clear any legacy guest persistence/cookies when user starts checkout.
  * - Checkout page will handle mode selection modal, not this drawer.
+ *
+ * NOTE (mismatch fix):
+ * Checkout now uses these session/local keys:
+ * - "tdlc_guest_checkout_session_v1"
+ * - "tdlc_checkout_mode_session_v1"
+ * - "tdlc_checkout_profile_override_v1"
+ *
+ * We clear BOTH legacy keys and the current canonical keys.
  */
 function clearGuestCheckoutState() {
-  // Remove any stale guest drafts from older implementations
+  // Canonical/current keys (checkout-page.js / checkout.addressbook.js aligned)
+  try {
+    sessionStorage.removeItem("tdlc_guest_checkout_session_v1");
+  } catch {}
+  try {
+    sessionStorage.removeItem("tdlc_checkout_mode_session_v1");
+  } catch {}
+  // Some older builds used local overrides; safe to remove for guest flow only
+  try {
+    localStorage.removeItem("tdlc_checkout_profile_override_v1");
+  } catch {}
+
+  // Legacy / older implementations (keep for backward compatibility)
   try {
     sessionStorage.removeItem("TDLC_GUEST_CHECKOUT_V1");
   } catch {}
   try {
     sessionStorage.removeItem("TDLC_CHECKOUT_GUEST_DRAFT");
   } catch {}
-
-  // Also clear any previously stored checkout mode markers
   try {
     sessionStorage.removeItem("TDLC_CHECKOUT_MODE");
   } catch {}
@@ -56,6 +85,119 @@ function clearGuestCheckoutState() {
   try {
     document.cookie = "tdlc_guest_checkout=; Path=/; Max-Age=0; SameSite=Lax";
   } catch {}
+}
+
+/* ---------------- cart-context compatibility helpers (non-breaking) ---------------- */
+
+function getCartItemsFromCtx(cartCtx) {
+  if (!cartCtx) return [];
+  if (Array.isArray(cartCtx.items)) return cartCtx.items;
+  if (Array.isArray(cartCtx.lines)) return cartCtx.lines; // ✅ compatibility: some builds expose "lines"
+  if (Array.isArray(cartCtx.cart?.items)) return cartCtx.cart.items; // legacy shape support
+  if (Array.isArray(cartCtx.cart?.lines)) return cartCtx.cart.lines; // legacy alt
+  return [];
+}
+
+function getMeta(it) {
+  return it && typeof it.metadata === "object" ? it.metadata : {};
+}
+
+function getQty(it) {
+  const q = Number(it?.quantity ?? it?.qty ?? 0);
+  return Number.isFinite(q) ? q : 0;
+}
+
+function getUnitPrice(it) {
+  const n = Number(it?.unitPrice ?? it?.price ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function getStableKey(it, idx) {
+  // CartContext guarantees stable lineId/id once created; prefer those.
+  const md = getMeta(it);
+  return (
+    it?.lineId ||
+    it?.id ||
+    md?.lineId ||
+    md?.id ||
+    it?.cartLineId ||
+    it?.cart_line_id ||
+    `cart-item-${idx}`
+  );
+}
+
+function getTitle(it) {
+  const md = getMeta(it);
+  return (
+    it?.title ||
+    it?.name ||
+    it?.productName ||
+    it?.product_name ||
+    md?.title ||
+    md?.name ||
+    md?.productName ||
+    "Untitled product"
+  );
+}
+
+function getThumb(it) {
+  const md = getMeta(it);
+  const src =
+    it?.thumbnail ||
+    it?.image ||
+    it?.thumbnailUrl ||
+    it?.imageUrl ||
+    md?.thumbnail ||
+    md?.image ||
+    md?.thumbnailUrl ||
+    md?.imageUrl ||
+    "";
+  return typeof src === "string" ? src : "";
+}
+
+function getSize(it) {
+  const md = getMeta(it);
+  return it?.selectedSize || it?.size || md?.selectedSize || md?.size || "";
+}
+
+function getColor(it) {
+  const md = getMeta(it);
+  return it?.selectedColor || it?.color || md?.selectedColor || md?.color || "";
+}
+
+function getFit(it) {
+  const md = getMeta(it);
+  return it?.fit || it?.selectedFit || md?.fit || md?.selectedFit || "";
+}
+
+/* ---------------- UI-only merge helpers (display stabilization) ---------------- */
+
+function buildKeyMap(lines) {
+  const map = new Map();
+  const arr = Array.isArray(lines) ? lines : [];
+  arr.forEach((it, idx) => {
+    const k = getStableKey(it, idx);
+    if (!map.has(k)) map.set(k, it);
+  });
+  return map;
+}
+
+function mergeDisplayLists(primary, secondary) {
+  // Keep order of primary first; append items from secondary that are missing in primary.
+  const p = Array.isArray(primary) ? primary : [];
+  const s = Array.isArray(secondary) ? secondary : [];
+
+  if (!p.length) return s.slice();
+  if (!s.length) return p.slice();
+
+  const pMap = buildKeyMap(p);
+
+  const out = p.slice();
+  s.forEach((it, idx) => {
+    const k = getStableKey(it, idx);
+    if (!pMap.has(k)) out.push(it);
+  });
+  return out;
 }
 
 export default function CartPanel() {
@@ -91,9 +233,11 @@ export default function CartPanel() {
   const imageCacheRef = useRef(new Map()); // key => url
   const titleCacheRef = useRef(new Map()); // optional: keep title stable if later payload is partial
 
-  const close = useCallback(() => {
-    setOpen(false);
-  }, []);
+  // UI-only stabilization (fix for one-time cross-page add-to-cart mismatch flashes)
+  const lastKnownStableCartRef = useRef([]); // updated when not loading
+  const stabilizeUntilRef = useRef(0);
+  const stabilizeSeedRef = useRef([]); // cart snapshot captured at the start of stabilization window
+  const stabilizeOpenAtRef = useRef(0);
 
   const clearAutoCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
@@ -101,6 +245,11 @@ export default function CartPanel() {
       closeTimerRef.current = null;
     }
   }, []);
+
+  const close = useCallback(() => {
+    clearAutoCloseTimer();
+    setOpen(false);
+  }, [clearAutoCloseTimer]);
 
   const setInteractingSafe = useCallback((v) => {
     interactingRef.current = !!v;
@@ -129,7 +278,9 @@ export default function CartPanel() {
       if (hovered) return;
       if (interactingRef.current) return;
 
-      const ms = Number(msMaybe ?? autoCloseMsRef.current ?? AUTO_CLOSE_MS_DEFAULT);
+      const ms = Number(
+        msMaybe ?? autoCloseMsRef.current ?? AUTO_CLOSE_MS_DEFAULT
+      );
       if (!Number.isFinite(ms) || ms <= 0) return;
 
       closeTimerRef.current = setTimeout(() => {
@@ -144,6 +295,13 @@ export default function CartPanel() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Do not render cart panel on /admin routes (customer/admin fully decoupled)
+  // (Keeps admin UX clean; prevents stray overlays/panels on admin screens.)
+  const isAdminRoute = useMemo(() => {
+    const p = String(pathname || "");
+    return p === "/admin" || p.startsWith("/admin/");
+  }, [pathname]);
 
   // device breakpoint (drawer on desktop, bottom-sheet on mobile)
   useEffect(() => {
@@ -162,14 +320,36 @@ export default function CartPanel() {
     };
   }, []);
 
+  // cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        if (interactingClearRef.current)
+          clearTimeout(interactingClearRef.current);
+      } catch {}
+      try {
+        if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      } catch {}
+    };
+  }, []);
+
+  // Close panel on route change (prevents ghost overlay/panel carryover across pages)
+  useEffect(() => {
+    if (!open) return;
+    close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+
   // Listen for global "cart:open-panel" (and provide a stable programmatic hook to avoid missed events)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const handleOpen = (evt) => {
-      // support optional detail overrides without breaking existing emitters
-      // detail: { autoCloseMs?: number, allowAutoClose?: boolean, reason?: string }
-      const detail = evt?.detail || {};
+    const handleOpen = (evtOrDetail) => {
+      // support both:
+      // 1) dispatched event: CustomEvent("cart:open-panel", { detail: {...} })
+      // 2) direct call: window.__TDLC_OPEN_CART_PANEL__({ ... })  (legacy)
+      // 3) direct call: window.__TDLS_OPEN_CART_PANEL__({ ... })  (current naming)
+      const detail = evtOrDetail?.detail || evtOrDetail || {};
       const ms = Number(detail.autoCloseMs);
       if (Number.isFinite(ms) && ms > 0) autoCloseMsRef.current = ms;
       else autoCloseMsRef.current = AUTO_CLOSE_MS_DEFAULT;
@@ -181,28 +361,48 @@ export default function CartPanel() {
       }
 
       lastOpenReasonRef.current = detail.reason || "event";
-      lastActiveElRef.current = document.activeElement;
+      lastActiveElRef.current =
+        typeof document !== "undefined" ? document.activeElement : null;
+
+      // Start a short UI stabilization window (display only; no state mutation).
+      stabilizeOpenAtRef.current = Date.now();
+      stabilizeUntilRef.current =
+        stabilizeOpenAtRef.current + DISPLAY_STABILIZE_WINDOW_MS;
+      stabilizeSeedRef.current = Array.isArray(lastKnownStableCartRef.current)
+        ? lastKnownStableCartRef.current
+        : [];
 
       setOpen(true);
       setHovered(false);
       setInteractingSafe(false);
     };
 
-    window.addEventListener("cart:open-panel", handleOpen);
+    const handleOpenEvent = (evt) => handleOpen(evt);
 
-    // Expose a stable, idempotent hook for any component (QuickView/ProductCard/PDP)
-    // so mobile production can’t “miss” the event due to timing/unmounted listeners.
-    // Usage from anywhere on client:
+    window.addEventListener("cart:open-panel", handleOpenEvent);
+
+    // Expose stable hooks for any component (QuickView/ProductCard/PDP)
+    // Legacy:
     //   window.__TDLC_OPEN_CART_PANEL__?.({ reason:"add-to-cart", autoCloseMs:3500 })
+    // Current:
+    //   window.__TDLS_OPEN_CART_PANEL__?.({ reason:"add-to-cart", autoCloseMs:3500 })
     try {
       window.__TDLC_OPEN_CART_PANEL__ = handleOpen;
     } catch {}
+    try {
+      window.__TDLS_OPEN_CART_PANEL__ = handleOpen;
+    } catch {}
 
     return () => {
-      window.removeEventListener("cart:open-panel", handleOpen);
+      window.removeEventListener("cart:open-panel", handleOpenEvent);
       try {
         if (window.__TDLC_OPEN_CART_PANEL__ === handleOpen) {
           delete window.__TDLC_OPEN_CART_PANEL__;
+        }
+      } catch {}
+      try {
+        if (window.__TDLS_OPEN_CART_PANEL__ === handleOpen) {
+          delete window.__TDLS_OPEN_CART_PANEL__;
         }
       } catch {}
     };
@@ -264,24 +464,68 @@ export default function CartPanel() {
   }, [open]);
 
   // ───────────────── derive cart data from context ─────────────────
-  const items = Array.isArray(cartCtx?.items) ? cartCtx.items : [];
+  const items = useMemo(() => getCartItemsFromCtx(cartCtx), [cartCtx]);
+
   const totals = cartCtx?.totals || cartCtx?.serverTotals || {};
-  const loading = !!cartCtx?.loading;
+  const loading = !!(
+    cartCtx?.loading ||
+    cartCtx?.isLoading ||
+    cartCtx?.hydrating ||
+    cartCtx?.isHydrating
+  );
+
+  // Track last-known stable cart for UI stabilization (display only)
+  useEffect(() => {
+    if (loading) return;
+    lastKnownStableCartRef.current = Array.isArray(items) ? items : [];
+  }, [items, loading]);
 
   const subtotal = useMemo(() => {
     if (totals?.subtotal != null) return Number(totals.subtotal);
-    return items.reduce(
-      (sum, it) => sum + Number(it.quantity || 0) * Number(it.unitPrice ?? it.price ?? 0),
-      0
-    );
-  }, [items, totals]);
+    if (typeof cartCtx?.subtotal === "number") return Number(cartCtx.subtotal);
+    return items.reduce((sum, it) => sum + getQty(it) * getUnitPrice(it), 0);
+  }, [items, totals, cartCtx]);
 
   const itemCount = items.length;
-  const totalQty = items.reduce((sum, it) => sum + Number(it.quantity || 0), 0);
+  const totalQty = useMemo(
+    () => items.reduce((sum, it) => sum + getQty(it), 0),
+    [items]
+  );
   const empty = !loading && itemCount === 0;
 
+  // ✅ UI stabilization display list
+  const displayItems = useMemo(() => {
+    const current = Array.isArray(items) ? items : [];
+    if (!open) return current;
+
+    const now = Date.now();
+    const until = Number(stabilizeUntilRef.current || 0) || 0;
+    const inWindow = now <= until;
+
+    if (!inWindow) return current;
+
+    // Only stabilize aggressively if this open is likely due to add-to-cart.
+    const r = String(lastOpenReasonRef.current || "");
+    const likelyAdd =
+      r === "qty" ||
+      r === "event" ||
+      r === "add-to-cart" ||
+      r.includes("add");
+
+    if (!likelyAdd) return current;
+
+    const seed = Array.isArray(stabilizeSeedRef.current)
+      ? stabilizeSeedRef.current
+      : [];
+
+    const merged = mergeDisplayLists(current, seed);
+
+    if (!current.length && seed.length) return seed.slice();
+
+    return merged;
+  }, [items, open]);
+
   // Detect add-to-cart across ALL pages even if some emitters fail to dispatch the open event.
-  // This is the “single rule” to open reliably: when totalQty increases, open the panel.
   const prevQtyRef = useRef(0);
   const hydratedRef = useRef(false);
 
@@ -299,10 +543,7 @@ export default function CartPanel() {
 
     if (!Number.isFinite(prev) || !Number.isFinite(curr)) return;
 
-    // If quantity increased, it is an add-to-cart action: open and auto-close (mobile + desktop).
     if (curr > prev) {
-      // Suppress auto-opening while on cart/checkout pages (prevents annoying re-open loops)
-      // Does not change UI; it prevents an edge-case bug.
       const p = String(pathname || "");
       const suppress = p.startsWith("/cart") || p.startsWith("/checkout");
       if (!suppress) {
@@ -310,7 +551,15 @@ export default function CartPanel() {
         allowAutoCloseRef.current = true;
         autoCloseMsRef.current = AUTO_CLOSE_MS_DEFAULT;
 
-        lastActiveElRef.current = typeof document !== "undefined" ? document.activeElement : null;
+        stabilizeOpenAtRef.current = Date.now();
+        stabilizeUntilRef.current =
+          stabilizeOpenAtRef.current + DISPLAY_STABILIZE_WINDOW_MS;
+        stabilizeSeedRef.current = Array.isArray(lastKnownStableCartRef.current)
+          ? lastKnownStableCartRef.current
+          : [];
+
+        lastActiveElRef.current =
+          typeof document !== "undefined" ? document.activeElement : null;
         setOpen(true);
         setHovered(false);
         setInteractingSafe(false);
@@ -318,8 +567,7 @@ export default function CartPanel() {
     }
   }, [totalQty, pathname, setInteractingSafe]);
 
-  // Auto-close behavior must match desktop on mobile as per your requirement.
-  // We schedule auto-close whenever panel opens or interaction/hover ends.
+  // Auto-close scheduling
   useEffect(() => {
     if (!open) {
       clearAutoCloseTimer();
@@ -331,7 +579,6 @@ export default function CartPanel() {
 
   useEffect(() => {
     if (!open) return;
-    // if user starts hovering/interacting, timer should stop; when it ends, restart
     if (hovered || interacting) {
       clearAutoCloseTimer();
       return;
@@ -342,7 +589,6 @@ export default function CartPanel() {
   const onCheckout = () => {
     if (empty) return;
 
-    // Ensure guest state never "sticks" from older sessions/tabs
     clearGuestCheckoutState();
 
     close();
@@ -375,11 +621,7 @@ export default function CartPanel() {
     const dx = t.clientX - touchStartRef.current.x;
     const dy = t.clientY - touchStartRef.current.y;
 
-    // mark as moved if meaningful
     if (Math.abs(dx) > 8 || Math.abs(dy) > 8) touchMovedRef.current = true;
-
-    // NOTE: Do not call preventDefault here; it causes passive-listener issues in production
-    // and can break scrolling on some mobile browsers.
   };
 
   const onTouchEnd = (e) => {
@@ -393,15 +635,12 @@ export default function CartPanel() {
     const dy = changed.clientY - touchStartRef.current.y;
     const dt = Math.max(1, Date.now() - touchStartRef.current.t);
 
-    // velocity heuristic
     const vy = dy / dt;
     const vx = dx / dt;
 
     if (isMobile) {
-      // bottom sheet: drag down to close
       if (dy > 90 || (dy > 50 && vy > 0.9)) close();
     } else {
-      // side drawer: drag right to close
       if (dx > 90 || (dx > 50 && vx > 0.9)) close();
     }
   };
@@ -421,7 +660,6 @@ export default function CartPanel() {
           if (e.target === e.currentTarget) close();
         }}
         onClick={(e) => {
-          // Safari iOS sometimes prefers click to pointerdown for reliability
           if (e.target === e.currentTarget) close();
         }}
       />
@@ -437,7 +675,6 @@ export default function CartPanel() {
         }}
         onMouseLeave={() => {
           setHovered(false);
-          // timer restarts via effect when hovered=false
         }}
         onPointerDown={() => bumpInteracting()}
         onPointerMove={() => bumpInteracting()}
@@ -452,7 +689,7 @@ export default function CartPanel() {
         {/* Header */}
         <div className="tdlcCartHeader">
           <div className="tdlcCartBrandRow">
-            <span className="tdlcBadge">TDLC · CART</span>
+            <span className="tdlcBadge">TDLS · CART</span>
             <button
               ref={closeBtnRef}
               type="button"
@@ -467,7 +704,11 @@ export default function CartPanel() {
           <div className="tdlcCartTitleRow">
             <div className="tdlcCartTitle">Your Cart</div>
             <div className="tdlcCartMeta">
-              {empty ? "No items added yet." : `${totalQty} item${totalQty === 1 ? "" : "s"} · ${money(subtotal)}`}
+              {empty
+                ? "No items added yet."
+                : `${totalQty} item${totalQty === 1 ? "" : "s"} · ${money(
+                    subtotal
+                  )}`}
             </div>
           </div>
 
@@ -476,7 +717,11 @@ export default function CartPanel() {
         </div>
 
         {/* Body */}
-        <div className="tdlcCartBody" onPointerDown={() => bumpInteracting()} onScroll={() => bumpInteracting()}>
+        <div
+          className="tdlcCartBody"
+          onPointerDown={() => bumpInteracting()}
+          onScroll={() => bumpInteracting()}
+        >
           {loading ? (
             <div className="tdlcStateBlock">
               <div className="tdlcStateTitle">Updating cart…</div>
@@ -485,35 +730,53 @@ export default function CartPanel() {
           ) : empty ? (
             <div className="tdlcStateBlock">
               <div className="tdlcStateTitle">Your cart is empty</div>
-              <div className="tdlcStateSub">Add your first TDLC piece and come back here.</div>
+              <div className="tdlcStateSub">
+                Add your first TDLS piece and come back here.
+              </div>
 
               <div className="tdlcInlineActions">
-                <button type="button" className="tdlcGhostBtn" onClick={onContinueShopping}>
+                <button
+                  type="button"
+                  className="tdlcGhostBtn"
+                  onClick={onContinueShopping}
+                >
                   Continue Shopping
                 </button>
               </div>
             </div>
           ) : (
             <ul className="tdlcItemList">
-              {items.map((it, idx) => {
-                const qty = Number(it.quantity || 0);
-                const unit = Number(it.unitPrice ?? it.price ?? 0);
+              {displayItems.map((it, idx) => {
+                const qty = getQty(it);
+                const unit = getUnitPrice(it);
                 const line = qty * unit;
 
-                const key = it.id || it.lineId || `cart-item-${idx}`;
-                const rawImg = it.thumbnail || it.image || "";
-                const rawTitle = it.title || "";
+                const key = getStableKey(it, idx);
+                const rawImg = getThumb(it);
+                const rawTitle = getTitle(it);
 
                 // Cache image/title when present; if later payload is partial, keep last known good values.
                 if (rawImg) imageCacheRef.current.set(key, rawImg);
                 if (rawTitle) titleCacheRef.current.set(key, rawTitle);
 
                 const stableImg = rawImg || imageCacheRef.current.get(key) || "";
-                const stableTitle = rawTitle || titleCacheRef.current.get(key) || "Untitled product";
+                const stableTitle =
+                  rawTitle ||
+                  titleCacheRef.current.get(key) ||
+                  "Untitled product";
+
+                const size = getSize(it);
+                const color = getColor(it);
+                const fit = getFit(it);
 
                 return (
                   <li key={key} className="tdlcItem">
                     <div className="tdlcThumb">
+                      {/* ✅ mismatch fix: fallback sits BEHIND the image (only visible if image fails/hidden) */}
+                      <div className="tdlcThumbFallback tdlcThumbFallbackOverlay">
+                        TDLS
+                      </div>
+
                       {stableImg ? (
                         <img
                           src={stableImg}
@@ -521,18 +784,14 @@ export default function CartPanel() {
                           className="tdlcThumbImg"
                           loading="lazy"
                           onError={(e) => {
-                            // If a URL fails, do not poison cache; show fallback
+                            // If a URL fails, do not poison cache; hide the image so fallback shows.
                             try {
                               const img = e.currentTarget;
                               img.style.display = "none";
                             } catch {}
                           }}
                         />
-                      ) : (
-                        <div className="tdlcThumbFallback">TDLC</div>
-                      )}
-                      {/* if image fails and gets hidden, keep fallback visible */}
-                      {!stableImg ? null : <div className="tdlcThumbFallback tdlcThumbFallbackOverlay">TDLC</div>}
+                      ) : null}
                     </div>
 
                     <div className="tdlcItemInfo">
@@ -541,19 +800,19 @@ export default function CartPanel() {
                       </div>
 
                       <div className="tdlcItemMeta">
-                        {it.size ? (
+                        {size ? (
                           <span>
-                            Size: <b>{it.size}</b>
+                            Size: <b>{size}</b>
                           </span>
                         ) : null}
-                        {it.color ? (
+                        {color ? (
                           <span>
-                            Color: <b>{it.color}</b>
+                            Color: <b>{color}</b>
                           </span>
                         ) : null}
-                        {it.fit ? (
+                        {fit ? (
                           <span>
-                            Fit: <b>{it.fit}</b>
+                            Fit: <b>{fit}</b>
                           </span>
                         ) : null}
                       </div>
@@ -579,19 +838,32 @@ export default function CartPanel() {
             <div className="tdlcTotalsLabel">Subtotal</div>
             <div className="tdlcTotalsValue">{money(subtotal)}</div>
           </div>
-          <div className="tdlcTotalsHint">Taxes & shipping will be calculated on checkout.</div>
+          <div className="tdlcTotalsHint">
+            Taxes & shipping will be calculated on checkout.
+          </div>
 
           <div className="tdlcCtaRow">
-            <button type="button" onClick={onViewCart} className="tdlcOutlineBtn">
+            <button
+              type="button"
+              onClick={onViewCart}
+              className="tdlcOutlineBtn"
+            >
               View Cart
             </button>
 
-            <button type="button" onClick={onCheckout} disabled={empty || loading} className="tdlcPrimaryBtn">
+            <button
+              type="button"
+              onClick={onCheckout}
+              disabled={empty || loading}
+              className="tdlcPrimaryBtn"
+            >
               Checkout
             </button>
           </div>
 
-          <div className="tdlcFootnote">Secure checkout. Mode selection happens on the checkout page.</div>
+          <div className="tdlcFootnote">
+            Secure checkout. Mode selection happens on the checkout page.
+          </div>
         </div>
 
         {/* styles */}
@@ -600,7 +872,11 @@ export default function CartPanel() {
             position: fixed;
             inset: 0;
             z-index: 11900;
-            background: radial-gradient(circle at 20% 0%, rgba(2, 6, 23, 0.52), rgba(2, 6, 23, 0.62));
+            background: radial-gradient(
+              circle at 20% 0%,
+              rgba(2, 6, 23, 0.52),
+              rgba(2, 6, 23, 0.62)
+            );
             opacity: 0;
             pointer-events: none;
             transition: opacity 220ms ease;
@@ -618,10 +894,16 @@ export default function CartPanel() {
             flex-direction: column;
             overflow: hidden;
             border: 1px solid rgba(224, 228, 242, 0.75);
-            background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(240, 244, 255, 0.98));
+            background: linear-gradient(
+              145deg,
+              rgba(255, 255, 255, 0.92),
+              rgba(240, 244, 255, 0.98)
+            );
             backdrop-filter: blur(14px);
-            box-shadow: 0 28px 80px rgba(15, 33, 71, 0.34), 0 0 0 1px rgba(226, 232, 240, 0.65);
-            transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 240ms ease;
+            box-shadow: 0 28px 80px rgba(15, 33, 71, 0.34),
+              0 0 0 1px rgba(226, 232, 240, 0.65);
+            transition: transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1),
+              opacity 240ms ease;
             opacity: 0;
             pointer-events: none;
             overscroll-behavior: contain;
@@ -634,7 +916,9 @@ export default function CartPanel() {
             bottom: var(--tdlc-bottom-safe);
             width: min(420px, calc(100vw - 36px));
             border-radius: 26px;
-            max-height: calc(100vh - (var(--tdlc-top-safe) + var(--tdlc-bottom-safe)));
+            max-height: calc(
+              100vh - (var(--tdlc-top-safe) + var(--tdlc-bottom-safe))
+            );
             transform: translateX(110%);
           }
           .tdlcCartPanel[data-variant="side"][data-state="open"] {
@@ -645,13 +929,14 @@ export default function CartPanel() {
 
           /* Bottom sheet variant (mobile) */
           .tdlcCartPanel[data-variant="sheet"] {
-            --tdlc-sheet-bottom: calc(var(--tdlc-bottom-safe) + env(safe-area-inset-bottom));
+            --tdlc-sheet-bottom: calc(
+              var(--tdlc-bottom-safe) + env(safe-area-inset-bottom)
+            );
             left: 0;
             right: 0;
             bottom: var(--tdlc-sheet-bottom);
             top: auto;
             width: 100%;
-            /* IMPORTANT: 100vh first, then 100dvh overrides when supported */
             height: min(82vh, calc(100vh - var(--tdlc-sheet-bottom) - 10px));
             height: min(82vh, calc(100dvh - var(--tdlc-sheet-bottom) - 10px));
             border-radius: 26px 26px 0 0;
@@ -673,7 +958,11 @@ export default function CartPanel() {
           .tdlcCartHeader {
             position: relative;
             padding: 14px 16px 12px;
-            background: radial-gradient(circle at top left, rgba(229, 231, 255, 0.95), rgba(248, 250, 252, 0.98));
+            background: radial-gradient(
+              circle at top left,
+              rgba(229, 231, 255, 0.95),
+              rgba(248, 250, 252, 0.98)
+            );
             border-bottom: 1px solid rgba(224, 228, 242, 0.95);
           }
 
@@ -711,7 +1000,8 @@ export default function CartPanel() {
             font-weight: 900;
             cursor: pointer;
             box-shadow: 0 12px 26px rgba(2, 6, 23, 0.12);
-            transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+            transition: transform 120ms ease, box-shadow 120ms ease,
+              border-color 120ms ease;
           }
           .tdlcCloseBtn:hover {
             transform: translateY(-1px);
@@ -777,7 +1067,11 @@ export default function CartPanel() {
             padding: 18px 12px;
             border: 1px solid rgba(224, 228, 242, 0.9);
             border-radius: 20px;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 246, 255, 0.98));
+            background: linear-gradient(
+              135deg,
+              rgba(255, 255, 255, 0.98),
+              rgba(239, 246, 255, 0.98)
+            );
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
           }
           .tdlcStateTitle {
@@ -816,9 +1110,14 @@ export default function CartPanel() {
             padding: 10px;
             border-radius: 20px;
             border: 1px solid rgba(148, 163, 184, 0.35);
-            background: linear-gradient(140deg, rgba(249, 250, 251, 1), rgba(239, 246, 255, 1));
+            background: linear-gradient(
+              140deg,
+              rgba(249, 250, 251, 1),
+              rgba(239, 246, 255, 1)
+            );
             box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
-            transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+            transition: transform 140ms ease, box-shadow 140ms ease,
+              border-color 140ms ease;
           }
           .tdlcItem:hover {
             transform: translateY(-1px);
@@ -840,6 +1139,8 @@ export default function CartPanel() {
             height: 100%;
             object-fit: cover;
             display: block;
+            position: relative;
+            z-index: 1;
           }
           .tdlcThumbFallback {
             width: 100%;
@@ -851,12 +1152,13 @@ export default function CartPanel() {
             letter-spacing: 0.18em;
             color: rgba(15, 33, 71, 0.65);
           }
-          /* Overlay fallback (only visible when image element is hidden by onError) */
+          /* ✅ fallback behind image (only shows if image is missing/hidden) */
           .tdlcThumbFallbackOverlay {
             position: absolute;
             inset: 0;
             background: transparent;
             pointer-events: none;
+            z-index: 0;
           }
 
           .tdlcItemInfo {
@@ -916,14 +1218,23 @@ export default function CartPanel() {
           .tdlcCartFooter {
             padding: 12px 14px 14px;
             border-top: 1px solid rgba(224, 228, 242, 0.85);
-            background: radial-gradient(circle at top left, #020617, #020617 45%, #111827 100%);
+            background: radial-gradient(
+              circle at top left,
+              #020617,
+              #020617 45%,
+              #111827 100%
+            );
             color: #e5e7eb;
           }
           .tdlcFooterLine {
             height: 3px;
             border-radius: 999px;
             margin-bottom: 10px;
-            background: linear-gradient(90deg, rgba(250, 204, 21, 0.85), rgba(166, 124, 55, 0.7));
+            background: linear-gradient(
+              90deg,
+              rgba(250, 204, 21, 0.85),
+              rgba(166, 124, 55, 0.7)
+            );
             box-shadow: 0 0 14px rgba(250, 204, 21, 0.45);
           }
 
@@ -993,7 +1304,8 @@ export default function CartPanel() {
             text-transform: uppercase;
             cursor: pointer;
             box-shadow: 0 14px 34px rgba(250, 204, 21, 0.46);
-            transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+            transition: transform 120ms ease, box-shadow 120ms ease,
+              opacity 120ms ease;
           }
           .tdlcPrimaryBtn:hover {
             transform: translateY(-1px);
@@ -1095,5 +1407,7 @@ export default function CartPanel() {
   );
 
   if (!mounted) return null;
+  if (isAdminRoute) return null; // ✅ keep customer/admin decoupled
+
   return createPortal(content, document.body);
 }

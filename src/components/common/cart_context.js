@@ -33,6 +33,20 @@ import {
  *    This protects mixed renderers across pages that may read different fields.
  * D) Prevent “cart is empty” flash on refresh by synchronously hydrating the last-known
  *    authenticated user scope (ONLY when an auth cookie is present), before async session fetch.
+ *
+ * ✅ NEW (ghosting elimination):
+ * E) Prevent self-trigger loops: this provider writes storage then emits "cart:changed".
+ *    Previously it also listened to "cart:changed" and re-set state in the same tab, which can
+ *    cause flicker/ghosting. We now emit a CustomEvent token and ignore our own event.
+ * F) Scope switching is atomic: scopeRef is updated synchronously inside setScopeSafe().
+ *
+ * ✅ NEW (this patch):
+ * G) Eliminate render-churn: do NOT re-stabilize items on every render.
+ *    Items are stabilized at write boundaries (mutators/hydration). This prevents continuous
+ *    persist/sync loops and UI flicker caused by new object identities each render.
+ * H) Auth scope guard: if the auth cookie disappears (logout), immediately fall back to guest scope
+ *    and rehydrate guest cart. If auth cookie appears (login) and we have last-known user scope,
+ *    promote to user scope and merge guest cart safely.
  */
 
 const STORAGE_KEY_BASE = "tdlc_cart_v1";
@@ -161,18 +175,31 @@ function readFromStorage(storage, key) {
   return { items: r.items };
 }
 
+/**
+ * Emit a cart:changed event with a token, so this provider can ignore its own emissions
+ * (prevents self-trigger loops that cause ghosting).
+ */
+function emitCartChanged(detail) {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent("cart:changed", { detail }));
+  } catch {
+    try {
+      window.dispatchEvent(new Event("cart:changed"));
+    } catch {}
+  }
+}
+
 function writeToStorage(storage, key, data, opts = {}) {
-  const { emitEvent = true } = opts || {};
+  const { emitEvent = true, eventDetail = null } = opts || {};
   try {
     if (!storage) return;
     const payload = { items: Array.isArray(data?.items) ? data.items : [] };
     storage.setItem(key, JSON.stringify(payload));
 
     // IMPORTANT: do not spam "cart:changed" on hydration/migration writes.
-    if (emitEvent && typeof window !== "undefined") {
-      try {
-        window.dispatchEvent(new Event("cart:changed"));
-      } catch {}
+    if (emitEvent) {
+      emitCartChanged(eventDetail || null);
     }
   } catch {
     // ignore
@@ -279,7 +306,6 @@ function isProbablyImageUrl(u) {
   const s2 = u.trim();
   if (!s2) return false;
   if (s2 === "[object Object]") return false;
-  // allow relative paths, absolute, protocol-relative, data/blob
   return (
     s2.startsWith("http://") ||
     s2.startsWith("https://") ||
@@ -290,13 +316,6 @@ function isProbablyImageUrl(u) {
   );
 }
 
-/**
- * Extract usable image URL from common shapes:
- * - string
- * - { url } / { src }
- * - Strapi: { formats: { thumbnail: { url } } }
- * - Strapi v4: { data: { attributes: { url, formats... } } }
- */
 function extractImageUrl(val) {
   if (!val) return "";
 
@@ -305,7 +324,6 @@ function extractImageUrl(val) {
     return isProbablyImageUrl(t) ? t : "";
   }
 
-  // Some code paths may already store arrays
   if (Array.isArray(val)) {
     for (const it of val) {
       const u = extractImageUrl(it);
@@ -316,7 +334,6 @@ function extractImageUrl(val) {
 
   if (!isPlainObject(val)) return "";
 
-  // Direct keys
   const direct = [
     val.url,
     val.src,
@@ -331,7 +348,6 @@ function extractImageUrl(val) {
     if (u) return u;
   }
 
-  // Common media nesting: { image: { url } }, { thumbnail: { url } }
   const nested = [
     val.image,
     val.thumbnail,
@@ -345,7 +361,6 @@ function extractImageUrl(val) {
     if (u) return u;
   }
 
-  // Strapi formats: prefer thumbnail/small/medium/large then base url
   if (isPlainObject(val.formats)) {
     const f = val.formats;
     const order = ["thumbnail", "small", "medium", "large"];
@@ -357,7 +372,6 @@ function extractImageUrl(val) {
     }
   }
 
-  // Strapi v4: data.attributes
   if (isPlainObject(val.data)) {
     const u = extractImageUrl(val.data);
     if (u) return u;
@@ -714,13 +728,13 @@ const STABLE_FIELDS = new Set([
 ]);
 
 function isEffectivelyEmptyForField(field, value) {
-  // Critical: prevent "[object Object]" and media objects from being treated as "good" values.
   if (IMAGE_FIELDS.has(field)) {
     const u = extractImageUrl(value);
     return !u;
   }
 
-  if (isEmptyValue(value)) return true;
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string" && value.trim() === "") return true;
 
   if (
     (field === "title" ||
@@ -737,7 +751,7 @@ function isEffectivelyEmptyForField(field, value) {
 function normalizeFieldValueForMerge(field, value) {
   if (IMAGE_FIELDS.has(field)) {
     const u = extractImageUrl(value);
-    return u || ""; // empty => treated as empty by isEffectivelyEmptyForField
+    return u || "";
   }
   return value;
 }
@@ -882,9 +896,7 @@ function backfillDisplayFields(line) {
     p.fitName
   );
 
-  // Bulletproof thumb selection across all known shapes
   const bestThumb = pickImageUrl(
-    // top-level variants
     line.thumbnail,
     line.thumbnailUrl,
     line.thumbUrl,
@@ -892,7 +904,6 @@ function backfillDisplayFields(line) {
     line.image,
     line.imageUrl,
     line.images,
-    // metadata variants
     m.thumbnail,
     m.thumbnailUrl,
     m.thumbUrl,
@@ -900,7 +911,6 @@ function backfillDisplayFields(line) {
     m.image,
     m.imageUrl,
     m.images,
-    // product/variant common
     p.thumbnail,
     p.image,
     p.images,
@@ -926,7 +936,6 @@ function backfillDisplayFields(line) {
     ? clean(line.name)
     : stableTitle;
 
-  // Keep existing thumbnail ONLY if it is a valid usable URL
   const existingThumb = pickImageUrl(
     line.thumbnail,
     line.thumbnailUrl,
@@ -977,7 +986,6 @@ function backfillDisplayFields(line) {
     thumbnail: existingThumb || bestThumb || null,
   };
 
-  // Ensure ALL aliases are consistent and valid
   const finalThumb = pickImageUrl(
     patched.thumbnail,
     patched.thumbnailUrl,
@@ -997,7 +1005,6 @@ function backfillDisplayFields(line) {
     if (isEffectivelyEmptyForField("image", patched.image)) patched.image = finalThumb;
     if (isEffectivelyEmptyForField("imageUrl", patched.imageUrl)) patched.imageUrl = finalThumb;
   } else {
-    // never store "[object Object]" etc
     patched.thumbnail = null;
     if (patched.thumbnailUrl === "[object Object]") patched.thumbnailUrl = null;
     if (patched.thumbUrl === "[object Object]") patched.thumbUrl = null;
@@ -1015,7 +1022,6 @@ function backfillDisplayFields(line) {
   if (isEffectivelyEmptyForField("identityKeyStrict", patched.identityKeyStrict))
     patched.identityKeyStrict = keys.identityKeyStrict;
 
-  // Persist into metadata without downgrading
   const nextMeta = mergeMetadataPreserveStable(
     {
       productId: patched.productId,
@@ -1099,7 +1105,6 @@ function ensureLineIdAndUniqueId(line) {
     out.__originalId = line.id;
   }
 
-  // Ensure thumbnail aliases are always present post-id assignment too
   const best = pickImageUrl(
     out.thumbnail,
     out.thumbnailUrl,
@@ -1127,7 +1132,6 @@ function ensureLineIdAndUniqueId(line) {
     if (isEffectivelyEmptyForField("imageUrl", out.imageUrl)) out.imageUrl = best;
   }
 
-  // Store clientLineId in metadata for server roundtrips
   out.metadata = mergeMetadataPreserveStable(
     { ...(isPlainObject(out.metadata) ? out.metadata : {}), clientLineId: lineId },
     {}
@@ -1185,7 +1189,6 @@ function reconcileServerWithLocal(localLines, serverLines) {
   const local = Array.isArray(localLines) ? localLines : [];
   const server = Array.isArray(serverLines) ? serverLines : [];
 
-  // If server returns empty but we already have local lines, do NOT clear.
   if (!server.length && local.length) return stabilizeLines(local);
 
   const localByKey = new Map();
@@ -1206,7 +1209,6 @@ function reconcileServerWithLocal(localLines, serverLines) {
 
     const l = localByKey.get(k);
 
-    // Base local (locks stable fields), then apply server (qty/price/etc).
     const merged = l ? ensureLineIdAndUniqueId(mergePreserveStable(l, ss)) : ss;
 
     out.push(merged);
@@ -1346,7 +1348,6 @@ function normalizeLineForSync(it = {}) {
         line.metadata.mrp)) ??
     null;
 
-  // Bulletproof: never send "[object Object]" to server
   const thumbnail = pickImageUrl(
     line.thumbnail,
     line.thumbnailUrl,
@@ -1466,21 +1467,15 @@ function normalizeLineForSync(it = {}) {
 /* ---------------- provider ---------------- */
 
 export function CartProvider({ children }) {
-  // "ready" should mean: storage hydration is complete (synchronous on client).
   const [ready, setReady] = useState(() =>
     typeof window !== "undefined" ? true : false
   );
 
-  // Track if user mutated cart since mount, so late hydration cannot clobber state.
   const mutatedSinceMountRef = useRef(false);
-
-  // Track last user gesture to gate cart-panel auto open.
   const lastUserGestureRef = useRef(0);
-
-  // Prevent first persist write from firing "cart:changed" on initial mount.
   const didInitialPersistRef = useRef(false);
+  const selfEventTokenRef = useRef("");
 
-  // Initial scope + initial items: hydrate synchronously (prevents empty flash).
   const [{ scope: initialScope, items: initialItems }] = useState(() => {
     if (typeof window === "undefined") return { scope: "g:boot", items: [] };
 
@@ -1491,7 +1486,6 @@ export function CartProvider({ children }) {
     const gRead = readFromStorageWithMeta(gStore, scopedKey(guestScope));
     const guestItems = stabilizeLines(gRead.items || []);
 
-    // if auth cookie exists, and we have a last-known user scope, hydrate it NOW
     let chosenScope = guestScope;
     let mergedItems = guestItems;
 
@@ -1512,26 +1506,42 @@ export function CartProvider({ children }) {
           }
         }
       }
-    } catch {
-      // ignore; fall back to guest-only hydration
-    }
+    } catch {}
 
     return { scope: chosenScope, items: mergedItems };
   });
 
   const [scope, setScope] = useState(initialScope || "g:boot");
   const scopeRef = useRef(scope);
+
+  const setScopeSafe = useCallback((nextOrFn) => {
+    setScope((prev) => {
+      const next = typeof nextOrFn === "function" ? nextOrFn(prev) : nextOrFn;
+      scopeRef.current = next;
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     scopeRef.current = scope;
   }, [scope]);
 
   const [items, setItems] = useState(() => stabilizeLines(initialItems || []));
 
+  /**
+   * ✅ IMPORTANT:
+   * Do NOT call stabilizeLines() here again.
+   * items state is stabilized at every mutation/hydration boundary.
+   * Re-stabilizing per-render creates new object identities and can cause
+   * repeated persist/sync activity (ghosting/flicker).
+   */
+  const stabilizedItems = useMemo(() => items || [], [items]);
+
   const saveTimer = useRef(null);
   const syncTimer = useRef(null);
   const lastSyncPayloadRef = useRef("");
 
-  // Gesture capture (for browsers where navigator.userActivation is unavailable/unreliable)
+  // Gesture capture
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -1558,14 +1568,12 @@ export function CartProvider({ children }) {
   }, []);
 
   function isLikelyUserActivation() {
-    // Prefer UA signal when available.
     try {
       if (typeof navigator !== "undefined" && navigator.userActivation) {
         if (navigator.userActivation.isActive) return true;
       }
     } catch {}
 
-    // Require at least one real recorded gesture before using the delta heuristic.
     const last = Number(lastUserGestureRef.current || 0) || 0;
     if (last <= 0) return false;
 
@@ -1584,6 +1592,98 @@ export function CartProvider({ children }) {
     return mergeLinesAdditiveStatic(baseLines, incomingLines);
   }
 
+  /**
+   * ✅ Auth scope guard:
+   * - If auth cookie disappears while scope is u:*, immediately fall back to guest scope
+   *   and hydrate guest cart.
+   * - If auth cookie appears while scope is g:* and lastUserScope exists, promote to that
+   *   user scope and safely merge guest cart.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const computeGuestScope = () => {
+      const guestSid = getOrCreateGuestSid();
+      return `g:${guestSid}`;
+    };
+
+    const guard = () => {
+      const sc = scopeRef.current || "";
+      const auth = hasLikelyAuthCookie();
+
+      // Logged out while still in user scope → immediately fall back to guest
+      if (sc.startsWith("u:") && !auth) {
+        const gScope = computeGuestScope();
+        setScopeSafe(gScope);
+
+        const gStore = guestStorage();
+        const gMeta = readFromStorageWithMeta(gStore, scopedKey(gScope));
+
+        setItems(() => stabilizeLines(gMeta.hasKey ? gMeta.items || [] : []));
+
+        try {
+          customerStorage()?.removeItem(LS_LAST_USER_SCOPE_KEY);
+        } catch {}
+
+        lastSyncPayloadRef.current = "";
+        return;
+      }
+
+      // Logged in while in guest scope and we have last-known user scope → promote & merge
+      if (sc.startsWith("g:") && auth) {
+        const lastUserScope = clean(
+          customerStorage()?.getItem(LS_LAST_USER_SCOPE_KEY) || ""
+        );
+        if (!lastUserScope || !lastUserScope.startsWith("u:")) return;
+
+        const gScope = sc || computeGuestScope();
+        const gStore = guestStorage();
+        const uStore = customerStorage();
+
+        const gLines = readFromStorageWithMeta(gStore, scopedKey(gScope)).items || [];
+        const uLines = readFromStorageWithMeta(uStore, scopedKey(lastUserScope)).items || [];
+
+        // Promote scope first (atomic), then merge safely
+        setScopeSafe(lastUserScope);
+
+        setItems((prev) => {
+          const prevStable = stabilizeLines(prev || []);
+          const mergedUser = mergeLinesAdditive(uLines, gLines);
+          const merged = mergeLinesAdditive(mergedUser, prevStable);
+          return stabilizeLines(merged);
+        });
+
+        // Persist merged into user scope (silent)
+        const mergedNow = mergeLinesAdditive(uLines, gLines);
+        writeToStorage(uStore, scopedKey(lastUserScope), { items: mergedNow }, { emitEvent: false });
+
+        // Clear guest scope (best-effort)
+        try {
+          gStore?.removeItem(scopedKey(gScope));
+        } catch {}
+
+        lastSyncPayloadRef.current = "";
+      }
+    };
+
+    // Run once immediately
+    guard();
+
+    const onVis = () => {
+      if (document.visibilityState === "visible") guard();
+    };
+
+    window.addEventListener("focus", guard);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("tdls:auth-changed", guard);
+
+    return () => {
+      window.removeEventListener("focus", guard);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("tdls:auth-changed", guard);
+    };
+  }, [setScopeSafe]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -1594,11 +1694,9 @@ export function CartProvider({ children }) {
       const guestScope = `g:${guestSid}`;
 
       if (!cancelled) {
-        // If we booted into u:* from last-known scope, do not forcibly overwrite to guest.
-        setScope((prev) => (prev && prev.startsWith("u:") ? prev : guestScope));
+        setScopeSafe((prev) => (prev && prev.startsWith("u:") ? prev : guestScope));
       }
 
-      // Ensure guest storage contains legacy if present (only if guest scope is missing/empty)
       const gStore = guestStorage();
       const gKey = scopedKey(guestScope);
       const gRead = readFromStorageWithMeta(gStore, gKey);
@@ -1606,7 +1704,6 @@ export function CartProvider({ children }) {
       if ((!gRead.items || !gRead.items.length) && typeof window !== "undefined") {
         const legacy = readFromStorage(customerStorage(), LEGACY_GLOBAL_KEY);
         if (Array.isArray(legacy.items) && legacy.items.length) {
-          // silent migration write (do not emit cart:changed on load)
           writeToStorage(gStore, gKey, { items: legacy.items }, { emitEvent: false });
           try {
             customerStorage()?.removeItem(LEGACY_GLOBAL_KEY);
@@ -1614,7 +1711,6 @@ export function CartProvider({ children }) {
         }
       }
 
-      // IMPORTANT: Do NOT clobber current items if user already mutated since mount.
       if (!cancelled && !mutatedSinceMountRef.current) {
         const afterLegacy = readFromStorageWithMeta(gStore, gKey);
         if (afterLegacy.hasKey) {
@@ -1622,7 +1718,6 @@ export function CartProvider({ children }) {
         }
       }
 
-      // Logged-in session scope resolution
       try {
         const res = await fetch("/api/auth/session", {
           method: "GET",
@@ -1635,12 +1730,11 @@ export function CartProvider({ children }) {
         if (!cancelled && userId) {
           const userScope = `u:${userId}`;
 
-          // persist last-known user scope pointer for next refresh preload
           try {
             customerStorage()?.setItem(LS_LAST_USER_SCOPE_KEY, userScope);
           } catch {}
 
-          setScope(userScope);
+          setScopeSafe(userScope);
 
           const uStore = customerStorage();
           const gStore2 = guestStorage();
@@ -1650,7 +1744,6 @@ export function CartProvider({ children }) {
           const userLines =
             readFromStorageWithMeta(uStore, scopedKey(userScope)).items || [];
 
-          // Merge on top of current in-memory items too (prevents PDP race).
           setItems((prev) => {
             const prevStable = stabilizeLines(prev || []);
             const mergedUser = mergeLinesAdditive(userLines, guestLines);
@@ -1658,27 +1751,21 @@ export function CartProvider({ children }) {
             return stabilizeLines(merged);
           });
 
-          // Persist merged into user scope (SILENT)
           const mergedNow = mergeLinesAdditive(userLines, guestLines);
           writeToStorage(uStore, scopedKey(userScope), { items: mergedNow }, { emitEvent: false });
 
-          // Clear guest scope so next guest starts empty (best-effort)
           try {
             gStore2?.removeItem(scopedKey(guestScope));
           } catch {}
         } else {
-          // if no session, remove the last-known pointer so we don't preload user cart without auth
           try {
             customerStorage()?.removeItem(LS_LAST_USER_SCOPE_KEY);
           } catch {}
         }
-      } catch {
-        // remain guest
-      }
+      } catch {}
 
       if (!cancelled) setReady(true);
 
-      // Server hydration (canonical) - must not clear local on empty responses
       try {
         const res = await fetch("/api/cart", {
           method: "GET",
@@ -1699,12 +1786,9 @@ export function CartProvider({ children }) {
             data.items
           );
 
-          // SILENT reconcile write (do not trigger cart panel on load)
           writeToStorage(store, scopedKey(sc), { items: reconciled }, { emitEvent: false });
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     })();
 
     const onStorage = (e) => {
@@ -1720,13 +1804,18 @@ export function CartProvider({ children }) {
       const store = sc.startsWith("u:") ? customerStorage() : guestStorage();
       const dataMeta = readFromStorageWithMeta(store, key);
 
-      // CRITICAL: missing key is NOT an "empty cart" signal; ignore it.
       if (!dataMeta.hasKey) return;
 
       setItems((prev) => reconcileServerWithLocal(prev, dataMeta.items || []));
     };
 
-    const onCartChanged = () => onStorage({ type: "cart:changed" });
+    const onCartChanged = (e) => {
+      const d = e && typeof e === "object" ? e.detail : null;
+      if (d && d.__source === "cart_context" && d.__token) {
+        if (d.__token === selfEventTokenRef.current) return;
+      }
+      onStorage({ type: "cart:changed" });
+    };
 
     window.addEventListener("storage", onStorage);
     window.addEventListener("cart:changed", onCartChanged);
@@ -1737,13 +1826,12 @@ export function CartProvider({ children }) {
       window.removeEventListener("cart:changed", onCartChanged);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [setScopeSafe]);
 
   // persist (debounced)
   useEffect(() => {
     if (!ready) return;
 
-    // Skip the first persist unless user actually mutated the cart.
     if (!didInitialPersistRef.current) {
       didInitialPersistRef.current = true;
       if (!mutatedSinceMountRef.current) return;
@@ -1754,9 +1842,21 @@ export function CartProvider({ children }) {
     saveTimer.current = setTimeout(() => {
       const sc = scopeRef.current;
       const store = sc.startsWith("u:") ? customerStorage() : guestStorage();
-      writeToStorage(store, scopedKey(sc), { items: stabilizeLines(items) }, { emitEvent: true });
+
+      const token = `w_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      selfEventTokenRef.current = token;
+
+      writeToStorage(
+        store,
+        scopedKey(sc),
+        { items: stabilizedItems },
+        {
+          emitEvent: true,
+          eventDetail: { __source: "cart_context", __token: token, scope: sc },
+        }
+      );
     }, 80);
-  }, [items, ready]);
+  }, [stabilizedItems, ready]);
 
   /* ---------- core mutators ---------- */
 
@@ -1845,7 +1945,6 @@ export function CartProvider({ children }) {
       return stabilizeLines(next);
     });
 
-    // Only open cart panel when add-to-cart is triggered by an actual user action.
     if (typeof window !== "undefined") {
       if (isLikelyUserActivation()) {
         try {
@@ -1873,28 +1972,32 @@ export function CartProvider({ children }) {
           mi.lineId
         );
 
-        return next.filter((x) => {
-          const xi = ensureLineIdAndUniqueId(x);
-          const xkeys = getOrCreateIdentityKeys(xi);
-          const xk = firstNonEmpty(
-            xkeys.identityKeyStrict,
-            xkeys.identityKeyLoose,
-            xi.lineId
-          );
-          return xk !== mk;
-        });
+        return stabilizeLines(
+          next.filter((x) => {
+            const xi = ensureLineIdAndUniqueId(x);
+            const xkeys = getOrCreateIdentityKeys(xi);
+            const xk = firstNonEmpty(
+              xkeys.identityKeyStrict,
+              xkeys.identityKeyLoose,
+              xi.lineId
+            );
+            return xk !== mk;
+          })
+        );
       }
 
       const m = String(matcher ?? "");
       if (!m) return next;
 
-      return next.filter(
-        (x) =>
-          String(x.lineId || "") !== m &&
-          String(x.id || "") !== m &&
-          String(x.variantId || "") !== m &&
-          String(x.slug || "") !== m &&
-          String(x.productId || "") !== m
+      return stabilizeLines(
+        next.filter(
+          (x) =>
+            String(x.lineId || "") !== m &&
+            String(x.id || "") !== m &&
+            String(x.variantId || "") !== m &&
+            String(x.slug || "") !== m &&
+            String(x.productId || "") !== m
+        )
       );
     });
   }, []);
@@ -2065,13 +2168,13 @@ export function CartProvider({ children }) {
     if (syncTimer.current) clearTimeout(syncTimer.current);
 
     syncTimer.current = setTimeout(() => {
-      syncToServer(items);
+      syncToServer(stabilizedItems);
     }, 250);
 
     return () => {
       if (syncTimer.current) clearTimeout(syncTimer.current);
     };
-  }, [items, ready, syncToServer]);
+  }, [stabilizedItems, ready, syncToServer]);
 
   /* ---------- reducer-style dispatch (compat) ---------- */
 
@@ -2104,7 +2207,7 @@ export function CartProvider({ children }) {
         case "REMOVE": {
           if (typeof action.idx === "number") {
             mutatedSinceMountRef.current = true;
-            setItems((prev) => stabilizeLines(prev).filter((_, i) => i !== action.idx));
+            setItems((prev) => stabilizeLines(stabilizeLines(prev).filter((_, i) => i !== action.idx)));
             return;
           }
           if (action.matcher != null) {
@@ -2130,27 +2233,27 @@ export function CartProvider({ children }) {
 
   const itemCount = useMemo(
     () =>
-      items.reduce(
+      stabilizedItems.reduce(
         (sum, it) => sum + (Number(it.quantity || it.qty || 1) || 1),
         0
       ),
-    [items]
+    [stabilizedItems]
   );
 
   const subtotal = useMemo(
     () =>
-      items.reduce((sum, it) => {
+      stabilizedItems.reduce((sum, it) => {
         const price = Number(it.price || it.unitPrice || 0) || 0;
         const qty = Number(it.quantity || it.qty || 1) || 1;
         return sum + price * qty;
       }, 0),
-    [items]
+    [stabilizedItems]
   );
 
   const value = useMemo(
     () => ({
       ready,
-      items: stabilizeLines(items),
+      items: stabilizedItems,
       itemCount,
       subtotal,
 
@@ -2162,7 +2265,7 @@ export function CartProvider({ children }) {
       clear,
 
       cart: {
-        items: stabilizeLines(items),
+        items: stabilizedItems,
         itemCount,
         subtotal,
       },
@@ -2172,7 +2275,7 @@ export function CartProvider({ children }) {
     }),
     [
       ready,
-      items,
+      stabilizedItems,
       itemCount,
       subtotal,
       addItem,

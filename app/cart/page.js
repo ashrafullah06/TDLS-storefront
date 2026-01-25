@@ -111,17 +111,26 @@ function imageFromItem(it) {
 
   const md = it.metadata && typeof it.metadata === "object" ? it.metadata : {};
 
-  const src =
-    it.image ||
-    it.thumbnail ||
-    it.thumbnailUrl ||
-    md.image ||
-    md.imageUrl ||
-    md.thumbnail ||
-    md.thumbnailUrl ||
-    "";
+  const candidates = [
+    it.thumbnail,
+    it.thumbnailUrl,
+    it.thumbUrl,
+    it.thumb,
+    it.image,
+    it.imageUrl,
 
-  return typeof src === "string" ? src : "";
+    md.thumbnail,
+    md.thumbnailUrl,
+    md.thumbUrl,
+    md.thumb,
+    md.image,
+    md.imageUrl,
+  ];
+
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return "";
 }
 
 /* ---------------- page ---------------- */
@@ -133,6 +142,8 @@ export default function CartPage() {
   const [syncing, setSyncing] = useState(false);
   const [recent, setRecent] = useState([]);
   const [canGoBack, setCanGoBack] = useState(false);
+
+  const isReady = Boolean(ctx?.ready);
 
   // Detect if there is any history to go back to
   useEffect(() => {
@@ -150,11 +161,12 @@ export default function CartPage() {
   }, [ctx]);
 
   // Total quantity (not just number of lines)
-  const totalItems = useMemo(
-    () =>
-      items.reduce((sum, it) => sum + Number(it?.quantity ?? it?.qty ?? 1), 0),
-    [items]
-  );
+  const totalItems = useMemo(() => {
+    return items.reduce((sum, it) => {
+      const q = Number(it?.quantity ?? it?.qty ?? 1);
+      return sum + (Number.isFinite(q) && q > 0 ? q : 1);
+    }, 0);
+  }, [items]);
 
   // Unique product count (by productId / metadata.productId / slug / id)
   const uniqueProductsCount = useMemo(() => {
@@ -176,7 +188,9 @@ export default function CartPage() {
     return items.reduce((sum, it) => {
       const price = Number(it?.price || it?.unitPrice || 0);
       const qty = Number(it?.quantity ?? it?.qty ?? 1);
-      return sum + price * qty;
+      const p = Number.isFinite(price) ? price : 0;
+      const q = Number.isFinite(qty) && qty > 0 ? qty : 1;
+      return sum + p * q;
     }, 0);
   }, [ctx, items]);
 
@@ -241,7 +255,7 @@ export default function CartPage() {
     }
   }, [ctx]);
 
-  /* ---------- preflight sync before checkout (DB authority) ---------- */
+  /* ---------- preflight sync before checkout (aligned to cart_context identity) ---------- */
 
   const syncAndGo = async () => {
     if (!items.length) {
@@ -251,9 +265,14 @@ export default function CartPage() {
 
     setSyncing(true);
     try {
-      // build safe, clamped payload using provider items
+      // Build payload aligned with cart_context identity keys so server cannot mismatch lines.
       const safeLines = [];
+
       for (const x of items) {
+        if (!x || typeof x !== "object") continue;
+
+        const md = x.metadata && typeof x.metadata === "object" ? x.metadata : {};
+
         let q = Number(x.quantity ?? x.qty ?? 1);
         if (!Number.isFinite(q) || q <= 0) continue;
 
@@ -261,16 +280,52 @@ export default function CartPage() {
         if (max != null && q > max) q = max;
         if (q <= 0) continue;
 
+        const productId = x.productId || md.productId || x.__originalId || null;
+        const slug = x.slug || md.slug || md.productSlug || null;
+        const variantId = x.variantId || md.variantId || md.vid || null;
+        const strapiSizeId = x.strapiSizeId || md.strapiSizeId || md.sizeStockId || null;
+
+        const selectedColor = x.selectedColor || x.color || md.selectedColor || md.color || null;
+        const selectedSize = x.selectedSize || x.size || md.selectedSize || md.size || null;
+
+        const lineId = x.lineId || x.id || md.clientLineId || null;
+
+        const identityKeyLoose =
+          x.identityKeyLoose || md.identityKeyLoose || md.cartKeyLoose || null;
+        const identityKeyStrict =
+          x.identityKeyStrict || md.identityKeyStrict || md.cartKeyStrict || null;
+
+        const thumb = imageFromItem(x);
+
         safeLines.push({
-          productId: x.productId || x.id || null,
-          slug: x.slug || null,
-          variantId: x.variantId || null,
-          selectedColor: x.selectedColor || x.color || null,
-          selectedSize: x.selectedSize || x.size || null,
-          quantity: q,
-          price: Number(x.price || x.unitPrice || 0),
+          // identity
+          productId: productId != null ? String(productId) : null,
+          slug: slug || null,
+          variantId: variantId != null ? String(variantId) : null,
+          strapiSizeId: strapiSizeId != null ? String(strapiSizeId) : null,
+
+          selectedColor: selectedColor || null,
+          selectedSize: selectedSize || null,
+
+          // qty/pricing
+          quantity: Math.max(1, Math.floor(q)),
+          price: Number(x.price || x.unitPrice || 0) || 0,
           currency: (x.currency || currencyCode).toUpperCase(),
-          name: x.name || x.title || null,
+
+          // metadata: preserve server reconciliation compatibility
+          metadata: {
+            ...(md || {}),
+            clientLineId: lineId || md.clientLineId || null,
+            identityKeyLoose: identityKeyLoose || md.identityKeyLoose || null,
+            identityKeyStrict: identityKeyStrict || md.identityKeyStrict || null,
+            thumbnail: thumb || md.thumbnail || md.image || null,
+            thumbnailUrl: thumb || md.thumbnailUrl || md.imageUrl || null,
+            image: thumb || md.image || null,
+            imageUrl: thumb || md.imageUrl || null,
+          },
+
+          // UI-friendly name (non-authoritative)
+          name: x.name || x.title || md.productName || md.title || null,
         });
       }
 
@@ -285,13 +340,15 @@ export default function CartPage() {
         items: safeLines,
       };
 
-      // Best-effort sync to DB; never block checkout hard
+      // Best-effort sync to DB; never block checkout hard.
+      // (This payload is now identity-consistent with cart_context, preventing mismatches.)
       try {
         await fetch("/api/cart/sync", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload),
           credentials: "include",
+          cache: "no-store",
         }).catch(() => {});
       } catch {
         // ignore – soft fail
@@ -312,8 +369,10 @@ export default function CartPage() {
   useEffect(() => {
     setRecent(readRecent());
     const onAny = () => setRecent(readRecent());
-    window.addEventListener("storage", onAny);
-    return () => window.removeEventListener("storage", onAny);
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", onAny);
+      return () => window.removeEventListener("storage", onAny);
+    }
   }, []);
 
   /* ---------- styles (desktop preserved; mobile adaptive via CSS overrides) ---------- */
@@ -477,7 +536,12 @@ export default function CartPage() {
       fontSize: 13,
       color: "#0f2147",
     },
-    price: { fontWeight: 900, color: "#0f2147", fontSize: 14, whiteSpace: "nowrap" },
+    price: {
+      fontWeight: 900,
+      color: "#0f2147",
+      fontSize: 14,
+      whiteSpace: "nowrap",
+    },
     remove: {
       height: 34,
       width: 34,
@@ -496,13 +560,15 @@ export default function CartPage() {
       display: "flex",
       flexDirection: "column",
       gap: 14,
-      background: "radial-gradient(circle at top,#0f172a,#020617 55%,#020617 100%)",
+      background:
+        "radial-gradient(circle at top,#0f172a,#020617 55%,#020617 100%)",
       color: "#e5e7eb",
     },
     summaryCardInner: {
       padding: 16,
       borderRadius: 14,
-      background: "linear-gradient(135deg,rgba(15,23,42,.95),rgba(15,23,42,.9))",
+      background:
+        "linear-gradient(135deg,rgba(15,23,42,.95),rgba(15,23,42,.9))",
       border: "1px solid rgba(55,65,81,0.9)",
       display: "flex",
       flexDirection: "column",
@@ -529,7 +595,12 @@ export default function CartPage() {
       fontSize: 11,
       fontWeight: 800,
     },
-    total: { fontWeight: 900, fontSize: 18, color: "#f9fafb", whiteSpace: "nowrap" },
+    total: {
+      fontWeight: 900,
+      fontSize: 18,
+      color: "#f9fafb",
+      whiteSpace: "nowrap",
+    },
     primary: {
       width: "100%",
       padding: "12px 16px",
@@ -567,8 +638,18 @@ export default function CartPage() {
       borderRadius: 18,
       boxShadow: "0 18px 50px rgba(8,21,64,.10)",
     },
-    emptyTitle: { fontWeight: 900, fontSize: 24, color: "#0f2147", marginBottom: 8 },
-    emptyText: { color: "#6b7280", marginBottom: 18, fontSize: 13, lineHeight: 1.4 },
+    emptyTitle: {
+      fontWeight: 900,
+      fontSize: 24,
+      color: "#0f2147",
+      marginBottom: 8,
+    },
+    emptyText: {
+      color: "#6b7280",
+      marginBottom: 18,
+      fontSize: 13,
+      lineHeight: 1.4,
+    },
     recentWrap: { marginTop: 28 },
     recentGrid: {
       display: "grid",
@@ -616,9 +697,12 @@ export default function CartPage() {
                 Your Shopping Bag
               </h1>
               <div className="tdls-cart-subtitle" style={S.subtitle}>
-                {totalItems > 0 ? (
+                {!isReady ? (
+                  "Loading your bag…"
+                ) : totalItems > 0 ? (
                   <>
-                    {uniqueProductsCount} product{uniqueProductsCount === 1 ? "" : "s"} · {totalItems} item
+                    {uniqueProductsCount} product
+                    {uniqueProductsCount === 1 ? "" : "s"} · {totalItems} item
                     {totalItems === 1 ? "" : "s"} in your bag
                   </>
                 ) : (
@@ -629,12 +713,21 @@ export default function CartPage() {
           </div>
 
           <div className="tdls-cart-pill" style={S.pillCount}>
-            {uniqueProductsCount} PRODUCT{uniqueProductsCount === 1 ? "" : "S"} · {totalItems} ITEM
-            {totalItems === 1 ? "" : "S"}
+            {uniqueProductsCount} PRODUCT{uniqueProductsCount === 1 ? "" : "S"} ·{" "}
+            {totalItems} ITEM{totalItems === 1 ? "" : "S"}
           </div>
         </div>
 
-        {items.length === 0 ? (
+        {!isReady ? (
+          <div className="tdls-cart-empty" style={S.emptyWrap}>
+            <div className="tdls-cart-empty-title" style={S.emptyTitle}>
+              Loading…
+            </div>
+            <div className="tdls-cart-empty-text" style={S.emptyText}>
+              Preparing your shopping bag.
+            </div>
+          </div>
+        ) : items.length === 0 ? (
           <div className="tdls-cart-empty" style={S.emptyWrap}>
             <div className="tdls-cart-empty-title" style={S.emptyTitle}>
               Your cart is empty.
@@ -642,7 +735,11 @@ export default function CartPage() {
             <div className="tdls-cart-empty-text" style={S.emptyText}>
               Discover your next favourite piece from THE DNA LAB CLOTHING.
             </div>
-            <button className="tdls-cart-primary" style={S.primary} onClick={goShop}>
+            <button
+              className="tdls-cart-primary"
+              style={S.primary}
+              onClick={goShop}
+            >
               Start shopping
             </button>
           </div>
@@ -658,17 +755,18 @@ export default function CartPage() {
                 <div />
               </div>
 
-              {items.map((it, i) => {
+              {items.map((it) => {
                 const colorLabel = it.selectedColor || it.color || null;
                 const sizeLabel = it.selectedSize || it.size || null;
                 const imgSrc = imageFromItem(it);
-                const qty = Number(it.quantity ?? it.qty ?? 1);
+                const qty = Number(it.quantity ?? it.qty ?? 1) || 1;
+
+                // ✅ Stable key aligned with cart_context: lineId/id never changes once created
+                const stableKey = String(it.lineId || it.id || it.productId || it.slug || "");
 
                 return (
                   <div
-                    key={`${it.productId || it.id || "p"}-${it.variantId || it.vid || "v"}-${colorLabel || "x"}-${
-                      sizeLabel || "x"
-                    }-${i}`}
+                    key={stableKey}
                     className="tdls-cart-row"
                     style={S.row}
                   >
@@ -677,7 +775,11 @@ export default function CartPage() {
                         <img
                           src={imgSrc}
                           alt={it.name || it.title || "Product"}
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                          }}
                         />
                       ) : (
                         <div
@@ -778,7 +880,9 @@ export default function CartPage() {
                     <span style={S.totalLabel}>Subtotal</span>
                     <span style={S.total}>{money(subtotal)}</span>
                   </div>
-                  <div style={S.smallHint}>Shipping &amp; taxes are calculated at checkout.</div>
+                  <div style={S.smallHint}>
+                    Shipping &amp; taxes are calculated at checkout.
+                  </div>
                 </div>
 
                 <button
@@ -795,7 +899,11 @@ export default function CartPage() {
                   {syncing ? "Preparing checkout…" : "Proceed to Checkout"}
                 </button>
 
-                <button className="tdls-cart-ghost" style={S.ghost} onClick={goShop}>
+                <button
+                  className="tdls-cart-ghost"
+                  style={S.ghost}
+                  onClick={goShop}
+                >
                   Continue Shopping
                 </button>
                 <button
@@ -814,14 +922,29 @@ export default function CartPage() {
         {/* Recently viewed */}
         {recent.length > 0 && (
           <section className="tdls-cart-recent" style={S.recentWrap}>
-            <h2 style={{ ...S.title, fontSize: 22, marginTop: 6, marginBottom: 12 }}>
+            <h2
+              style={{
+                ...S.title,
+                fontSize: 22,
+                marginTop: 6,
+                marginBottom: 12,
+              }}
+            >
               Recently Viewed &amp; Related
             </h2>
             <div className="tdls-cart-recentgrid" style={S.recentGrid}>
               {recent.map((r, i) => (
-                <article key={(r.slug || r.id || i) + "-rv"} style={S.recentCard} className="tdls-cart-recentcard">
+                <article
+                  key={(r.slug || r.id || i) + "-rv"}
+                  style={S.recentCard}
+                  className="tdls-cart-recentcard"
+                >
                   {r.image ? (
-                    <img src={r.image} alt={r.name || "Product"} style={S.recentImg} />
+                    <img
+                      src={r.image}
+                      alt={r.name || "Product"}
+                      style={S.recentImg}
+                    />
                   ) : (
                     <div
                       style={{
@@ -831,15 +954,26 @@ export default function CartPage() {
                     />
                   )}
                   <div style={S.recentBody}>
-                    <div style={{ fontWeight: 800, color: "#0f2147", fontSize: 13, lineHeight: 1.25 }}>
+                    <div
+                      style={{
+                        fontWeight: 800,
+                        color: "#0f2147",
+                        fontSize: 13,
+                        lineHeight: 1.25,
+                      }}
+                    >
                       {r.name || r.title || "Product"}
                     </div>
                     <div style={{ color: "#6b7280", fontSize: 13 }}>
-                      {r.price != null ? money(Number(r.price || r.base_price || 0)) : "—"}
+                      {r.price != null
+                        ? money(Number(r.price || r.base_price || 0))
+                        : "—"}
                     </div>
                     <button
                       type="button"
-                      onClick={() => router.push(r.slug ? `/product/${r.slug}` : "/product")}
+                      onClick={() =>
+                        router.push(r.slug ? `/product/${r.slug}` : "/product")
+                      }
                       className="tdls-cart-viewbtn"
                       style={{
                         padding: "10px 12px",
