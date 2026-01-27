@@ -1,4 +1,4 @@
-// FILE: src/components/common/nav_searchbar.jsx
+//✅ FULL FILE: src/components/common/nav_searchbar.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -435,7 +435,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
 
     const yieldToMain = () =>
       new Promise((resolve) => {
-        // keep UI responsive while crawling
         if (typeof window === "undefined") return resolve();
         if (typeof window.requestIdleCallback === "function") {
           window.requestIdleCallback(() => resolve(), { timeout: 120 });
@@ -530,7 +529,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
         });
         if (!res.ok) return null;
         const ct = (res.headers.get("content-type") || "").toLowerCase();
-        // Accept XML or text/* where platforms return text/plain
         if (!ct.includes("xml") && !ct.includes("text/")) return null;
         return (await res.text()) || null;
       }, 1000);
@@ -543,31 +541,23 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
         const parseErrors = doc.getElementsByTagName("parsererror");
         if (parseErrors && parseErrors.length) return urls;
 
-        // urlset
         const urlLocs = Array.from(doc.getElementsByTagName("url"))
           .map((u) => u.getElementsByTagName("loc")?.[0]?.textContent || "")
           .map((s) => String(s || "").trim())
           .filter(Boolean);
 
-        // sitemapindex
         const sitemapLocs = Array.from(doc.getElementsByTagName("sitemap"))
           .map((u) => u.getElementsByTagName("loc")?.[0]?.textContent || "")
           .map((s) => String(s || "").trim())
           .filter(Boolean);
 
-        if (sitemapLocs.length) {
-          return { kind: "index", locs: sitemapLocs };
-        }
-        if (urlLocs.length) {
-          return { kind: "urlset", locs: urlLocs };
-        }
+        if (sitemapLocs.length) return { kind: "index", locs: sitemapLocs };
+        if (urlLocs.length) return { kind: "urlset", locs: urlLocs };
 
-        // fallback: any <loc>
         const anyLocs = Array.from(doc.getElementsByTagName("loc"))
           .map((n) => (n.textContent || "").trim())
           .filter(Boolean);
 
-        // if it looks like index (many sitemaps), treat as index
         const looksIndex = anyLocs.some((x) => /sitemap/i.test(x));
         return { kind: looksIndex ? "index" : "urlset", locs: anyLocs };
       } catch {
@@ -579,7 +569,16 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
       const out = [];
       const seenSitemaps = new Set();
 
-      const startCandidates = ["/sitemap.xml", "/sitemap_index.xml"];
+      // ✅ Hardened: also try known sitemap endpoints directly (no guessing; you already have these)
+      const startCandidates = [
+        "/sitemap.xml",
+        "/sitemap_index.xml",
+        "/server-sitemap.xml",
+        "/sitemap-0.xml",
+        "/sitemap-products.xml",
+        "/sitemap-collections.xml",
+        "/sitemap-blog.xml",
+      ];
 
       const enqueueSitemap = (loc) => {
         const internal = hrefToInternalPath(loc);
@@ -594,9 +593,8 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
 
       const sitemapQueue = [];
       for (const c of startCandidates) {
-        const p = sanitizeInternalHref(c);
-        if (!p) continue;
-        sitemapQueue.push(p);
+        const next = enqueueSitemap(c);
+        if (next) sitemapQueue.push(next);
       }
 
       while (sitemapQueue.length && out.length < SITEMAP_MAX_URLS) {
@@ -617,7 +615,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
           continue;
         }
 
-        // urlset
         for (const loc of locs) {
           const internal = hrefToInternalPath(loc);
           if (!internal) continue;
@@ -636,7 +633,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
       setIsIndexing(true);
       setIndexReady(false);
 
-      // If cache exists and is fresh, use it and stop.
       const cached = readIndexCache();
       if (cached && cached.length) {
         const merged = dedupeIndex(cached);
@@ -648,14 +644,12 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
         return;
       }
 
-      // label+content maps per href
-      const labelMap = new Map(); // href -> Set<labels>
-      const contentMap = new Map(); // href -> extracted signals string
+      const labelMap = new Map();
+      const contentMap = new Map();
 
-      const discovered = new Set(); // href
-      const visited = new Set(); // href (fetched HTML)
+      const discovered = new Set();
+      const visited = new Set();
 
-      // always include pinned pages
       for (const p of SAFE_PINNED_PAGES) {
         const href = sanitizeInternalHref(stripHashAndQuery(p.href));
         if (!href) continue;
@@ -665,7 +659,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
         if (!contentMap.has(href)) contentMap.set(href, "");
       }
 
-      // 1) sitemap breadth (deep)
       const sitemapUrls = await crawlSitemapsDeep().catch(() => []);
       for (const it of sitemapUrls || []) {
         const href = sanitizeInternalHref(stripHashAndQuery(it.href));
@@ -676,7 +669,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
         if (!contentMap.has(href)) contentMap.set(href, "");
       }
 
-      // 2) BFS/queue from seeds + sitemap URLs, but fetch within budget
       const queue = [];
       const push = (p) => {
         const s = sanitizeInternalHref(stripHashAndQuery(p));
@@ -687,10 +679,8 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
       };
 
       for (const seed of CRAWL_SEEDS) push(seed);
-      // add a slice of sitemap pages to seed discovery, but avoid huge queue
       for (const it of (sitemapUrls || []).slice(0, Math.min(300, SITEMAP_MAX_URLS))) push(it.href);
 
-      // crawl loop with limited concurrency
       const inFlight = new Set();
 
       const runOne = async (href) => {
@@ -698,14 +688,12 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
           const html = await fetchHtml(href);
           if (!html) return;
 
-          // page text signals
           const signals = extractSignalsFromHtml(html);
           if (signals) {
             const prev = contentMap.get(href) || "";
             if (!prev || prev.length < signals.length) contentMap.set(href, signals);
           }
 
-          // links
           const links = parseLinksFromHtml(html, href);
           for (const l of links) {
             const nextHref = sanitizeInternalHref(stripHashAndQuery(l.href));
@@ -719,14 +707,11 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
 
             if (!contentMap.has(nextHref)) contentMap.set(nextHref, "");
 
-            // continue crawl within budget
             if (!visited.has(nextHref) && queue.length < CRAWL_MAX_PAGES * 8) {
               queue.push(nextHref);
             }
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
       };
 
       while (alive && visited.size < CRAWL_MAX_PAGES && queue.length) {
@@ -740,14 +725,11 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
           inFlight.add(p);
         }
 
-        // yield so UI stays responsive
         await Promise.race([Promise.allSettled(Array.from(inFlight)), yieldToMain()]).catch(() => {});
       }
 
-      // wait remaining in-flight (briefly)
       await Promise.allSettled(Array.from(inFlight)).catch(() => {});
 
-      // build index
       const crawledPages = [];
       for (const href of discovered) {
         const labels = labelMap.get(href) || new Set();
@@ -774,11 +756,9 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
       setIndexReady(true);
       setIsIndexing(false);
 
-      // persist cache
       writeIndexCache(merged);
     };
 
-    // small tick so spinner is visible on cold start
     const t = setTimeout(() => {
       boot().catch(() => {
         if (!alive) return;
@@ -811,12 +791,10 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
     rankTimerRef.current = setTimeout(() => {
       const pop = popRef.current || {};
 
-      // When empty: show a few top pages (no navigation guesses involved)
       if (!query) {
         const top = pageIndex
           .slice()
           .sort((a, b) => {
-            // prefer pinned at top for empty state
             const ap = a.source === "pinned" ? 1 : 0;
             const bp = b.source === "pinned" ? 1 : 0;
             if (ap !== bp) return bp - ap;
@@ -843,14 +821,13 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
       const pages = scored.slice(0, 12).map((x) => x.it);
 
       if (!pages.length) {
-        // Absolutely no navigation option for this term (by design).
         const info = {
           type: "info",
           label: `No verified page link found for “${query}” in the site’s discovered pages. Use “All Products” and filters/search inside that page. We will not guess a destination.`,
         };
         const safe = dedupeIndex([info, ...SAFE_PINNED_PAGES]);
         setSuggestions(safe);
-        setActiveIdx(-1); // prevent accidental navigation
+        setActiveIdx(-1);
         return;
       }
 
@@ -867,7 +844,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
   const onPickSuggestion = useCallback(
     (item) => {
       if (!item) return;
-
       if (item.type === "info") return;
 
       if (item.type === "page") {
@@ -924,7 +900,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
         role="search"
         aria-label="Page finder"
         onSubmit={(e) => {
-          // ✅ Never navigate on submit unless a PAGE suggestion is explicitly selected.
           e.preventDefault();
           const item = activeIdx >= 0 ? suggestions[activeIdx] : null;
           if (item && item.type === "page" && item.href) onPickSuggestion(item);
@@ -987,7 +962,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
                 setActiveIdx((i) => {
                   const n = suggestions.length;
                   if (!n) return -1;
-                  // Skip info rows when moving selection
                   let next = i < 0 ? 0 : (i + 1) % n;
                   for (let k = 0; k < n; k++) {
                     if (suggestions[next]?.type === "page") return next;
@@ -1008,7 +982,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
                   return -1;
                 });
               } else if (e.key === "Enter") {
-                // ✅ Enter navigates ONLY if a page row is explicitly selected.
                 const item = activeIdx >= 0 ? suggestions[activeIdx] : null;
                 if (item && item.type === "page" && item.href) {
                   e.preventDefault();
@@ -1022,7 +995,6 @@ export default function NavSearchbar({ className = "", placeholder = "Find pages
             autoComplete="off"
           />
 
-          {/* ✅ Loading indicator while crawling/indexing */}
           {isIndexing ? (
             <div
               className="tdls-loading"
