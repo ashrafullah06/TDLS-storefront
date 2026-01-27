@@ -32,14 +32,13 @@ async function fetchJson(url, { headers, revalidateSeconds, timeoutMs }) {
     const res = await fetch(url, {
       method: "GET",
       headers,
-      // Let Next cache on the server/CDN edge according to revalidate
       next: { revalidate: revalidateSeconds },
       signal: controller.signal,
     });
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-    // If Strapi URL is wrong, you often get 200 HTML. Do NOT silently accept.
+    // If STRAPI_URL is wrong, you often get 200 HTML. Do NOT silently accept.
     if (!ct.includes("application/json")) {
       const text = await res.text().catch(() => "");
       return {
@@ -47,7 +46,7 @@ async function fetchJson(url, { headers, revalidateSeconds, timeoutMs }) {
         status: res.status,
         json: null,
         error: `Expected JSON but got "${ct || "unknown"}"`,
-        hint: text ? text.slice(0, 140) : "",
+        hint: text ? text.slice(0, 180) : "",
       };
     }
 
@@ -68,23 +67,23 @@ async function fetchJson(url, { headers, revalidateSeconds, timeoutMs }) {
 }
 
 async function fetchAllProducts({ apiBase, headers, pageSize }) {
-  // IMPORTANT performance win:
-  // Do NOT use populate=* for sitemap; we only need slug + timestamps.
-  // This reduces Strapi payload size dramatically.
   const makeUrl = (page) => {
     const u = new URL(`${apiBase}/api/products`);
+
+    // Strapi v4 pagination
     u.searchParams.set("pagination[page]", String(page));
     u.searchParams.set("pagination[pageSize]", String(pageSize));
 
-    // Minimal fields only (fast)
+    // Minimal fields only (fast + safe)
     u.searchParams.append("fields[0]", "slug");
     u.searchParams.append("fields[1]", "updatedAt");
-    u.searchParams.append("fields[2]", "publishedAt");
+    u.searchParams.append("fields[2]", "createdAt");
 
-    // Published-only (avoid drafts in sitemap)
-    u.searchParams.set("filters[publishedAt][$notNull]", "true");
+    // If Draft/Publish is enabled, this gives live-only.
+    // If Draft/Publish is disabled, Strapi ignores publicationState and still returns items.
+    u.searchParams.set("publicationState", "live");
 
-    // Keep order stable (optional but helps consistency)
+    // Keep order stable
     u.searchParams.set("sort[0]", "updatedAt:desc");
 
     return u.toString();
@@ -112,15 +111,18 @@ async function fetchAllProducts({ apiBase, headers, pageSize }) {
 
   if (pageCount <= 1) return firstItems;
 
-  // Fetch remaining pages with bounded concurrency (fast without overloading Strapi)
+  // Fetch remaining pages with bounded concurrency
   const results = [firstItems];
   let nextPage = 2;
 
-  const workers = Array.from({
-    length: Math.min(CONCURRENCY, pageCount - 1),
-  }).map(async () => {
-    while (nextPage <= pageCount) {
-      const page = nextPage++;
+  const workerCount = Math.min(CONCURRENCY, pageCount - 1);
+
+  const workers = Array.from({ length: workerCount }).map(async () => {
+    while (true) {
+      const page = nextPage;
+      nextPage += 1;
+      if (page > pageCount) break;
+
       const r = await fetchJson(makeUrl(page), {
         headers,
         revalidateSeconds: revalidate,
@@ -132,7 +134,8 @@ async function fetchAllProducts({ apiBase, headers, pageSize }) {
           r?.json?.error?.message ||
           r?.error ||
           `Strapi products fetch failed on page ${page} (${r.status || "?"})`;
-        throw new Error(msg);
+        const hint = r?.hint ? ` | hint: ${r.hint}` : "";
+        throw new Error(`${msg}${hint}`);
       }
 
       const items = Array.isArray(r.json?.data) ? r.json.data : [];
@@ -149,17 +152,14 @@ export async function GET() {
   const api = (process.env.STRAPI_URL || "").replace(/\/+$/, "");
   const token = process.env.STRAPI_API_TOKEN || "";
 
-  if (!api) {
-    return new NextResponse("Missing STRAPI_URL", { status: 500 });
-  }
+  if (!api) return new NextResponse("Missing STRAPI_URL", { status: 500 });
 
   // IMPORTANT: match your real product-detail route base.
-  // Defaulting to "/product" (your pinned “All Products” is "/product").
-  // If your detail route is actually "/products/[slug]", set:
+  // Your “All Products” page is "/product", so default detail base to "/product".
+  // If your actual detail route is "/products/[slug]", set:
   // SITEMAP_PRODUCT_PATH_BASE="/products"
   const productBase = normalizePathBase(process.env.SITEMAP_PRODUCT_PATH_BASE, "/product");
 
-  // Optional tuning via env (safe defaults)
   const envPageSize = clampInt(process.env.SITEMAP_PRODUCTS_PAGE_SIZE, 50, MAX_PAGE_SIZE);
   const pageSize = envPageSize || DEFAULT_PAGE_SIZE;
 
@@ -179,7 +179,7 @@ export async function GET() {
       const slug = a.slug;
       if (!slug) continue;
 
-      const updatedAt = a.updatedAt || a.publishedAt || null;
+      const updatedAt = a.updatedAt || a.createdAt || null;
       const lastmod = updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString();
 
       const loc = `${baseUrl}${productBase}/${encodeURIComponent(String(slug))}`;
