@@ -754,6 +754,12 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
   const [selection, setSelection] = useState({ color: null, size: null });
   const [error, setError] = useState(null); // inline validation message
 
+  // Nudge UX (guidance NOT on CTA)
+  const [nudge, setNudge] = useState({ color: false, size: false });
+  const colorBlockRef = useRef(null);
+  const sizeBlockRef = useRef(null);
+  const nudgeTimerRef = useRef(null);
+
   // Share UI
   const [shareOpen, setShareOpen] = useState(false);
   const [shareToast, setShareToast] = useState(null);
@@ -878,13 +884,52 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
   const tierLabel = tierLabelRaw ? String(tierLabelRaw).trim() : null;
   const tierText = formatTierText(tierLabel, brandTierSlug);
 
+  const clearNudge = useCallback(() => {
+    if (nudgeTimerRef.current) window.clearTimeout(nudgeTimerRef.current);
+    setNudge({ color: false, size: false });
+  }, []);
+
+  const triggerNudge = useCallback((which) => {
+    if (!which) return;
+    if (nudgeTimerRef.current) window.clearTimeout(nudgeTimerRef.current);
+
+    setNudge((prev) => ({
+      color: which === "color" ? true : prev.color,
+      size: which === "size" ? true : prev.size,
+    }));
+
+    nudgeTimerRef.current = window.setTimeout(() => {
+      setNudge({ color: false, size: false });
+    }, 900);
+  }, []);
+
+  const scrollToBlock = useCallback((which) => {
+    const el = which === "color" ? colorBlockRef.current : sizeBlockRef.current;
+    if (!el) return;
+    try {
+      el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    } catch (_) {
+      // very defensive fallback
+      try {
+        el.scrollIntoView();
+      } catch (_) {}
+    }
+  }, []);
+
   // Reset selection whenever product/variants change
   useEffect(() => {
     setSelection({ color: null, size: null });
     setError(null);
     setIdx(0);
     setShareOpen(false);
-  }, [product, variants.length]);
+    clearNudge();
+  }, [product, variants.length, clearNudge]);
+
+  useEffect(() => {
+    return () => {
+      if (nudgeTimerRef.current) window.clearTimeout(nudgeTimerRef.current);
+    };
+  }, []);
 
   // keyboard nav for images
   useEffect(() => {
@@ -911,11 +956,15 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
   /* ---------------- selection + stock guards ---------------- */
   const ensureSelection = () => {
     if (requiresColor && !selection.color) {
-      setError("Please select a color before adding to cart.");
+      setError("Please select a color to continue.");
+      scrollToBlock("color");
+      triggerNudge("color");
       return { ok: false };
     }
     if (requiresSize && !selection.size) {
-      setError("Please select a size before adding to cart.");
+      setError("Please select a size to continue.");
+      scrollToBlock("size");
+      triggerNudge("size");
       return { ok: false };
     }
     return { ok: true };
@@ -931,6 +980,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
 
   const handleAddToCart = () => {
     setError(null); // fresh state
+    clearNudge();
 
     const selCheck = ensureSelection();
     if (!selCheck.ok) return;
@@ -1310,14 +1360,6 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
   const skuForMicro = selectedVariant?.sku || baseSku || null;
   const imageForMicro = images?.[0] || ogImageForShare || null;
 
-  // CTA label upgrade (no feature removal): clearer states
-  const addBtnLabel = useMemo(() => {
-    if (stock != null && stock <= 0) return "Out of stock";
-    if (requiresColor && !selection.color) return "Select color";
-    if (requiresSize && !selection.size) return "Select size";
-    return "Add to Cart";
-  }, [stock, requiresColor, requiresSize, selection.color, selection.size]);
-
   const showFromPrefix = priceRange?.hasRange && !selection.size; // if user hasn't pinned size, show "From"
   const displayPriceText = useMemo(() => {
     if (price == null) return money(currencyCode, price);
@@ -1326,6 +1368,14 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     }
     return money(currencyCode, price);
   }, [price, currencyCode, showFromPrefix, priceRange?.min]);
+
+  const helperHintStyle = {
+    marginTop: 6,
+    fontSize: Math.max(11, Math.round(11 * uiScale)),
+    fontWeight: 700,
+    color: "rgba(15,33,71,0.78)",
+    letterSpacing: ".01em",
+  };
 
   return (
     <article
@@ -1490,8 +1540,20 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
 
         {/* colors – CENTERED */}
         {!!colors.length && (
-          <div style={{ marginTop: 8, textAlign: "center" }}>
+          <div
+            ref={colorBlockRef}
+            className={`tdlsOptBlock ${nudge.color ? "tdlsNudge" : ""}`}
+            style={{ marginTop: 8, textAlign: "center" }}
+          >
             <div style={{ ...UX.sectionLabel, textAlign: "center" }}>Color</div>
+
+            {/* Inline guidance (NOT on CTA) */}
+            {requiresColor && !selection.color ? (
+              <div style={helperHintStyle} aria-live="polite">
+                Choose a color to continue.
+              </div>
+            ) : null}
+
             <div
               className="tdlsPcOptionsRow"
               style={{
@@ -1500,6 +1562,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                 flexWrap: "wrap",
                 justifyContent: "center",
                 maxWidth: "100%",
+                marginTop: requiresColor && !selection.color ? 8 : 0,
               }}
             >
               {colors.map((c) => {
@@ -1521,6 +1584,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                         return { color: nextColor, size: hasSameSize ? sel.size : null };
                       });
                       setError(null);
+                      setNudge((prev) => ({ ...prev, color: false }));
                     }}
                     style={UX.swatchButton(active)}
                     aria-label={c.name}
@@ -1575,8 +1639,20 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
 
         {/* sizes – CENTERED */}
         {!!sizes.length && (
-          <div style={{ marginTop: 6, textAlign: "center" }}>
+          <div
+            ref={sizeBlockRef}
+            className={`tdlsOptBlock ${nudge.size ? "tdlsNudge" : ""}`}
+            style={{ marginTop: 6, textAlign: "center" }}
+          >
             <div style={{ ...UX.sectionLabel, textAlign: "center" }}>Size</div>
+
+            {/* Inline guidance (NOT on CTA) */}
+            {requiresSize && !selection.size ? (
+              <div style={helperHintStyle} aria-live="polite">
+                Choose a size to continue.
+              </div>
+            ) : null}
+
             <div
               className="tdlsPcOptionsRow"
               style={{
@@ -1585,6 +1661,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                 flexWrap: "wrap",
                 justifyContent: "center",
                 maxWidth: "100%",
+                marginTop: requiresSize && !selection.size ? 8 : 0,
               }}
             >
               {sizes.map((s) => {
@@ -1599,6 +1676,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                       if (isOOS) return;
                       setSelection((sel) => ({ ...sel, size: s }));
                       setError(null);
+                      setNudge((prev) => ({ ...prev, size: false }));
                     }}
                     style={UX.chip(active, isOOS)}
                     title={
@@ -1660,10 +1738,10 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
               opacity: stock != null && stock <= 0 ? 0.6 : 1,
               cursor: stock != null && stock <= 0 ? "not-allowed" : "pointer",
             }}
-            aria-label={addBtnLabel}
-            title={addBtnLabel}
+            aria-label="Add to Cart"
+            title={stock != null && stock <= 0 ? "Out of stock" : "Add to Cart"}
           >
-            {addBtnLabel}
+            Add to Cart
           </button>
 
           <button
@@ -1775,6 +1853,30 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         .tdlsPcTitle {
           min-width: 0;
           max-width: 100%;
+        }
+
+        /* Intelligent guidance (nudge highlight) */
+        .tdlsOptBlock {
+          border-radius: 14px;
+        }
+        .tdlsNudge {
+          outline: 2px solid rgba(15, 33, 71, 0.22);
+          box-shadow: 0 0 0 6px rgba(15, 33, 71, 0.06);
+          animation: tdlsNudgePulse 0.9s ease-out 1;
+        }
+        @keyframes tdlsNudgePulse {
+          0% {
+            transform: translateY(0);
+            box-shadow: 0 0 0 0 rgba(15, 33, 71, 0.0);
+          }
+          35% {
+            transform: translateY(-1px);
+            box-shadow: 0 0 0 8px rgba(15, 33, 71, 0.08);
+          }
+          100% {
+            transform: translateY(0);
+            box-shadow: 0 0 0 6px rgba(15, 33, 71, 0.06);
+          }
         }
 
         /* Share panel: premium, compact */
