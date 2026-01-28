@@ -1,8 +1,32 @@
-// app/sitemap-collections.xml/route.js
+// FILE: app/sitemap-collections.xml/route.js
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import { getBaseUrl, toXml } from "@/lib/site";
 
 export const revalidate = 300;
+
+// Strapi fetch tuning
+const DEFAULT_PAGE_SIZE = 500;
+const MAX_PAGE_SIZE = 1000;
+const CONCURRENCY = 4;
+const FETCH_TIMEOUT_MS = 12000;
+
+// Sitemap spec limit (Google/Bing): max 50,000 URLs per sitemap file.
+const MAX_URLS_PER_SITEMAP = 50000;
+
+/* ───────── helpers ───────── */
+
+function clampInt(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  return Math.max(min, Math.min(max, Math.trunc(x)));
+}
+
+function truthyEnv(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
 
 function normalizeStrapiBaseUrl(raw) {
   let s = String(raw || "").trim();
@@ -13,12 +37,72 @@ function normalizeStrapiBaseUrl(raw) {
   return s;
 }
 
-async function fetchJson(url, { headers, revalidateSeconds }) {
+function normalizePathBase(v, fallback) {
+  const raw = String(v || "").trim();
+  let p = raw || fallback;
+  if (!p.startsWith("/")) p = `/${p}`;
+  if (p.length > 1) p = p.replace(/\/+$/, "");
+  return p;
+}
+
+function normalizeEndpointSegment(raw, fallback = "collections") {
+  const s = String(raw || "").trim().replace(/^\/+|\/+$/g, "");
+  if (!s) return fallback;
+  if (!/^[a-z0-9][a-z0-9-_]*$/i.test(s)) return fallback;
+  return s;
+}
+
+function normalizeFieldName(raw, fallback = "slug") {
+  const s = String(raw || "").trim();
+  if (!s) return fallback;
+  if (!/^[a-z0-9_]+$/i.test(s)) return fallback;
+  return s;
+}
+
+// Encode path but preserve slashes (supports nested segments if your slug contains "/")
+function encodePathPreserveSlashes(p) {
+  const s = String(p || "").replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!s) return "";
+  return s
+    .split("/")
+    .filter(Boolean)
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+}
+
+function escapeXml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function toSitemapIndexXml(sitemaps) {
+  const body = sitemaps
+    .map((sm) => {
+      const loc = `<loc>${escapeXml(sm.loc)}</loc>`;
+      const lastmod = sm.lastmod ? `<lastmod>${escapeXml(sm.lastmod)}</lastmod>` : "";
+      return `<sitemap>${loc}${lastmod}</sitemap>`;
+    })
+    .join("");
+
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` +
+    body +
+    `</sitemapindex>`
+  );
+}
+
+async function fetchJson(url, { headers, revalidateSeconds, timeoutMs }) {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 12000);
+  const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, {
+      method: "GET",
       headers,
       next: { revalidate: revalidateSeconds },
       signal: controller.signal,
@@ -26,7 +110,7 @@ async function fetchJson(url, { headers, revalidateSeconds }) {
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-    // If Strapi URL is wrong, you often get 200 HTML. Do NOT silently accept.
+    // Wrong origin / proxy HTML / Vercel error pages: fail loudly.
     if (!ct.includes("application/json")) {
       const text = await res.text().catch(() => "");
       return {
@@ -34,7 +118,7 @@ async function fetchJson(url, { headers, revalidateSeconds }) {
         status: res.status,
         json: null,
         error: `Expected JSON but got "${ct || "unknown"}"`,
-        hint: text ? text.slice(0, 240) : "",
+        hint: text ? text.slice(0, 260) : "",
       };
     }
 
@@ -43,90 +127,380 @@ async function fetchJson(url, { headers, revalidateSeconds }) {
       return { ok: false, status: res.status, json: null, error: "Failed to parse JSON response" };
     }
 
-    if (!Array.isArray(json.data)) {
-      return {
-        ok: false,
-        status: res.status,
-        json: null,
-        error: "Unexpected Strapi JSON shape: missing data[]",
-        hint: JSON.stringify(json).slice(0, 240),
-      };
-    }
-
     return { ok: res.ok, status: res.status, json };
   } finally {
     clearTimeout(t);
   }
 }
 
-export async function GET() {
-  const baseUrl = getBaseUrl();
-  const api = normalizeStrapiBaseUrl(process.env.STRAPI_URL || "");
-  const token = process.env.STRAPI_API_TOKEN || "";
+function buildCollectionsQuery({ page, pageSize, slugField, liveOnly, requirePublishedAt }) {
+  const sp = new URLSearchParams();
 
-  if (!api) return new NextResponse("Missing STRAPI_URL", { status: 500 });
+  sp.set("pagination[page]", String(page));
+  sp.set("pagination[pageSize]", String(pageSize));
 
-  // Keep it minimal: we only need slug + timestamps (no populate=*)
-  const url = new URL(`${api}/api/collections`);
-  url.searchParams.set("pagination[pageSize]", "1000");
-  url.searchParams.append("fields[0]", "slug");
-  url.searchParams.append("fields[1]", "updatedAt");
-  url.searchParams.append("fields[2]", "publishedAt");
-  url.searchParams.set("publicationState", "live");
-  url.searchParams.set("filters[publishedAt][$notNull]", "true");
-  url.searchParams.set("sort[0]", "updatedAt:desc");
+  sp.append("fields[0]", slugField);
+  sp.append("fields[1]", "updatedAt");
+  sp.append("fields[2]", "createdAt");
+  sp.append("fields[3]", "publishedAt");
+
+  if (liveOnly) sp.set("publicationState", "live");
+  if (requirePublishedAt) sp.set("filters[publishedAt][$notNull]", "true");
+
+  sp.set("sort[0]", "updatedAt:desc");
+
+  return sp.toString();
+}
+
+function buildDirectStrapiUrl({ apiBase, endpoint, queryString }) {
+  return `${apiBase}/api/${endpoint}?${queryString}`;
+}
+
+function buildProxyUrl({ siteBase, endpoint, queryString }) {
+  // Your proxy expects: /api/strapi?path=/collections?... (relative to Strapi /api base)
+  const path = `/${endpoint}?${queryString}`;
+  const u = new URL(`${siteBase}/api/strapi`);
+  u.searchParams.set("path", path);
+  return u.toString();
+}
+
+function unwrapProxyPayload(json) {
+  // Your proxy returns: { ok: true, data: <rawStrapiPayload> }
+  if (json && typeof json === "object" && json.ok === true && json.data) return json.data;
+  return json;
+}
+
+function assertStrapiListShape(payload, { endpoint }) {
+  const dataArr = payload?.data;
+  const pag = payload?.meta?.pagination;
+
+  const okData = Array.isArray(dataArr);
+  const okPag = pag && typeof pag === "object";
+
+  if (!okData || !okPag) {
+    const hint = JSON.stringify(payload)?.slice(0, 240) || "";
+    throw new Error(
+      `Unexpected Strapi JSON shape for "${endpoint}": missing data[] or meta.pagination | hint: ${hint}`
+    );
+  }
+}
+
+async function fetchStrapiPage({
+  mode,
+  apiBase,
+  siteBase,
+  endpoint,
+  headers,
+  page,
+  pageSize,
+  slugField,
+  liveOnly,
+  requirePublishedAt,
+}) {
+  const qs = buildCollectionsQuery({
+    page,
+    pageSize,
+    slugField,
+    liveOnly,
+    requirePublishedAt,
+  });
+
+  const url =
+    mode === "proxy"
+      ? buildProxyUrl({ siteBase, endpoint, queryString: qs })
+      : buildDirectStrapiUrl({ apiBase, endpoint, queryString: qs });
+
+  const r = await fetchJson(url, {
+    headers,
+    revalidateSeconds: revalidate,
+    timeoutMs: FETCH_TIMEOUT_MS,
+  });
+
+  if (!r.ok) {
+    const msg =
+      r?.json?.error?.message ||
+      r?.error ||
+      `Strapi collections fetch failed (${r.status || "?"})`;
+    const hint = r?.hint ? ` | hint: ${r.hint}` : "";
+    throw new Error(`${msg}${hint}`);
+  }
+
+  const payload = unwrapProxyPayload(r.json);
+  assertStrapiListShape(payload, { endpoint });
+  return payload;
+}
+
+async function fetchFirstPageMeta(args) {
+  const payload = await fetchStrapiPage({ ...args, page: 1 });
+  const items = payload.data;
+  const meta = payload.meta.pagination;
+
+  const total = clampInt(meta.total, 0, 1_000_000_000) ?? items.length;
+  const pageCount = clampInt(meta.pageCount, 1, 1_000_000) || 1;
+
+  return { items, total, pageCount };
+}
+
+async function fetchCollectionsRange({
+  mode,
+  apiBase,
+  siteBase,
+  endpoint,
+  headers,
+  slugField,
+  pageSize,
+  liveOnly,
+  requirePublishedAt,
+  pageFrom,
+  pageTo,
+}) {
+  if (pageFrom > pageTo) return [];
+
+  const pages = [];
+  for (let p = pageFrom; p <= pageTo; p += 1) pages.push(p);
+
+  const out = [];
+  let idx = 0;
+  const workerCount = Math.min(CONCURRENCY, pages.length);
+
+  const workers = Array.from({ length: workerCount }).map(async () => {
+    while (true) {
+      const i = idx++;
+      if (i >= pages.length) break;
+
+      const page = pages[i];
+      const payload = await fetchStrapiPage({
+        mode,
+        apiBase,
+        siteBase,
+        endpoint,
+        headers,
+        page,
+        pageSize,
+        slugField,
+        liveOnly,
+        requirePublishedAt,
+      });
+
+      out.push(...payload.data);
+    }
+  });
+
+  await Promise.all(workers);
+  return out;
+}
+
+export async function GET(request) {
+  const siteBase = getBaseUrl();
+  const apiBase = normalizeStrapiBaseUrl(process.env.STRAPI_URL || "");
+  const token = (process.env.STRAPI_API_TOKEN || "").trim();
+
+  if (!apiBase) {
+    return new NextResponse("Missing STRAPI_URL", {
+      status: 500,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  // MUST match your real Collections route base.
+  // You referenced: https://www.thednalabstore.com/collections/
+  const collectionsBase = normalizePathBase(
+    process.env.SITEMAP_COLLECTIONS_PATH_BASE,
+    "/collections"
+  );
+
+  // Strapi API ID + slug field (real defaults; override ONLY if your Strapi differs)
+  const endpoint = normalizeEndpointSegment(process.env.STRAPI_COLLECTIONS_ENDPOINT, "collections");
+  const slugField = normalizeFieldName(process.env.STRAPI_COLLECTIONS_SLUG_FIELD, "slug");
+
+  const envPageSize = clampInt(process.env.SITEMAP_COLLECTIONS_PAGE_SIZE, 50, MAX_PAGE_SIZE);
+  const pageSize = envPageSize || DEFAULT_PAGE_SIZE;
+
+  // Live-only switch (publicationState=live)
+  const liveOnly = truthyEnv(process.env.SITEMAP_PUBLICATION_STATE_LIVE);
+
+  // Stronger filter: publishedAt not-null (enable ONLY if you are sure publishedAt exists and is populated)
+  const requirePublishedAt = truthyEnv(process.env.SITEMAP_REQUIRE_PUBLISHED_AT);
+
+  // Optional: fail hard (500) on error; otherwise return a valid empty urlset
+  const strict = truthyEnv(process.env.SITEMAP_STRICT);
+  const strictNonEmpty = truthyEnv(process.env.SITEMAP_STRICT_NONEMPTY);
+
+  // Force proxy mode if you want collections sitemap to go through /api/strapi
+  const forceProxy = truthyEnv(process.env.SITEMAP_USE_STRAPI_PROXY);
 
   const headers = {
     Accept: "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  try {
-    const r = await fetchJson(url.toString(), { headers, revalidateSeconds: revalidate });
+  const modesToTry = forceProxy ? ["proxy"] : ["direct", "proxy"];
 
-    if (!r.ok) {
-      const msg =
-        r?.json?.error?.message ||
-        r?.error ||
-        `Strapi collections fetch failed (${r.status || "?"})`;
-      const hint = r?.hint ? ` | hint: ${r.hint}` : "";
-      throw new Error(`${msg}${hint}`);
+  try {
+    const reqUrl = new URL(request.url);
+    const partParam = clampInt(reqUrl.searchParams.get("part"), 1, 1_000_000);
+
+    let lastError = null;
+
+    for (const mode of modesToTry) {
+      try {
+        const { items: firstItems, total, pageCount } = await fetchFirstPageMeta({
+          mode,
+          apiBase,
+          siteBase,
+          endpoint,
+          headers,
+          slugField,
+          pageSize,
+          liveOnly,
+          requirePublishedAt,
+        });
+
+        // Large catalog behavior: serve an INDEX unless a part is requested
+        if (total > MAX_URLS_PER_SITEMAP && !partParam) {
+          const pagesPerPart = Math.max(1, Math.floor(MAX_URLS_PER_SITEMAP / pageSize));
+          const parts = Math.ceil(pageCount / pagesPerPart);
+
+          const now = new Date().toISOString();
+          const sitemaps = Array.from({ length: parts }).map((_, i) => ({
+            loc: `${siteBase}/sitemap-collections.xml?part=${i + 1}`,
+            lastmod: now,
+          }));
+
+          const indexXml = toSitemapIndexXml(sitemaps);
+
+          return new NextResponse(indexXml, {
+            headers: {
+              "Content-Type": "application/xml; charset=utf-8",
+              "Cache-Control": `public, s-maxage=${revalidate}, stale-while-revalidate=600`,
+              "X-TDLS-Sitemap-Mode": "index",
+              "X-TDLS-Sitemap-Source": mode,
+              "X-TDLS-Sitemap-Endpoint": endpoint,
+              "X-TDLS-Sitemap-Total": String(total),
+              "X-TDLS-Sitemap-Parts": String(parts),
+            },
+          });
+        }
+
+        // Determine which page range to fetch for this sitemap part
+        let parts = 1;
+        let part = 1;
+        let pageFrom = 1;
+        let pageTo = pageCount;
+
+        if (total > MAX_URLS_PER_SITEMAP) {
+          const pagesPerPart = Math.max(1, Math.floor(MAX_URLS_PER_SITEMAP / pageSize));
+          parts = Math.ceil(pageCount / pagesPerPart);
+          part = clampInt(partParam, 1, parts) || 1;
+
+          pageFrom = 1 + (part - 1) * pagesPerPart;
+          pageTo = Math.min(pageCount, pageFrom + pagesPerPart - 1);
+        }
+
+        // Gather items for this part
+        const items = [];
+
+        // Reuse first page data if it falls in range
+        if (pageFrom === 1) items.push(...firstItems);
+
+        // Fetch remaining pages in range
+        const start = Math.max(2, pageFrom);
+        if (start <= pageTo) {
+          const more = await fetchCollectionsRange({
+            mode,
+            apiBase,
+            siteBase,
+            endpoint,
+            headers,
+            slugField,
+            pageSize,
+            liveOnly,
+            requirePublishedAt,
+            pageFrom: start,
+            pageTo,
+          });
+          items.push(...more);
+        }
+
+        // Build URL entries
+        const urls = [];
+        const seen = new Set();
+        let missingSlug = 0;
+
+        for (const c of items) {
+          const a = (c && c.attributes) || {};
+          const raw = a[slugField];
+
+          if (!raw) {
+            missingSlug += 1;
+            continue;
+          }
+
+          const path = encodePathPreserveSlashes(raw);
+          if (!path) {
+            missingSlug += 1;
+            continue;
+          }
+
+          const updatedAt = a.updatedAt || a.publishedAt || a.createdAt || null;
+          const lastmod = updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString();
+
+          const loc = `${siteBase}${collectionsBase}/${path}`;
+          if (seen.has(loc)) continue;
+          seen.add(loc);
+
+          urls.push({ loc, lastmod, changefreq: "weekly", priority: 0.8 });
+        }
+
+        if (strictNonEmpty && total > 0 && urls.length === 0) {
+          throw new Error(
+            `Strict non-empty enabled: Strapi total=${total} but generated 0 URLs. Check endpoint "${endpoint}", slug field "${slugField}", and permissions/publication settings.`
+          );
+        }
+
+        const xml = toXml(urls);
+
+        return new NextResponse(xml, {
+          headers: {
+            "Content-Type": "application/xml; charset=utf-8",
+            "Cache-Control": `public, s-maxage=${revalidate}, stale-while-revalidate=600`,
+            "X-TDLS-Sitemap-Mode": "urlset",
+            "X-TDLS-Sitemap-Source": mode,
+            "X-TDLS-Sitemap-Endpoint": endpoint,
+            "X-TDLS-Sitemap-SlugField": slugField,
+            "X-TDLS-Sitemap-LiveOnly": liveOnly ? "1" : "0",
+            "X-TDLS-Sitemap-RequirePublishedAt": requirePublishedAt ? "1" : "0",
+            "X-TDLS-Sitemap-Part": String(part),
+            "X-TDLS-Sitemap-Parts": String(parts),
+            "X-TDLS-Sitemap-PageFrom": String(pageFrom),
+            "X-TDLS-Sitemap-PageTo": String(pageTo),
+            "X-TDLS-Sitemap-Urls": String(urls.length),
+            "X-TDLS-Sitemap-MissingSlug": String(missingSlug),
+          },
+        });
+      } catch (e) {
+        lastError = e;
+        // try next mode
+      }
     }
 
-    const items = Array.isArray(r.json?.data) ? r.json.data : [];
-
-    const urls = [];
-    const seen = new Set();
-
-    for (const c of items) {
-      const a = (c && c.attributes) || {};
-      const slug = a.slug;
-      if (!slug) continue;
-
-      const updatedAt = a.updatedAt || a.publishedAt || null;
-      const lastmod = updatedAt ? new Date(updatedAt).toISOString() : new Date().toISOString();
-
-      const loc = `${baseUrl}/collections/${encodeURIComponent(String(slug))}`;
-      if (seen.has(loc)) continue;
-      seen.add(loc);
-
-      urls.push({
-        loc,
-        lastmod,
-        changefreq: "weekly",
-        priority: 0.8,
+    throw lastError || new Error("Unknown sitemap failure");
+  } catch (e) {
+    // If not strict, return a valid empty urlset so crawlers don't see a 500.
+    if (!strict) {
+      const xml = toXml([]);
+      return new NextResponse(xml, {
+        headers: {
+          "Content-Type": "application/xml; charset=utf-8",
+          "Cache-Control": `public, s-maxage=${revalidate}, stale-while-revalidate=600`,
+          "X-TDLS-Sitemap-Warn": String(e && e.message ? e.message : e),
+        },
       });
     }
 
-    const xml = toXml(urls);
-
-    return new NextResponse(xml, {
-      headers: {
-        "Content-Type": "application/xml; charset=utf-8",
-        "Cache-Control": `public, s-maxage=${revalidate}, stale-while-revalidate=600`,
-      },
+    return new NextResponse(`Error: ${e && e.message ? e.message : e}`, {
+      status: 500,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
     });
-  } catch (e) {
-    return new NextResponse(`Error: ${e && e.message ? e.message : e}`, { status: 500 });
   }
 }

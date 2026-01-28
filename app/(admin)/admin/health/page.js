@@ -1,11 +1,27 @@
+//app/(admin)/admin/health/page.jsx
 export const dynamic = "force-dynamic";
 
 import React from "react";
 import HealthClient from "@/components/admin/health-client";
 
+export const metadata = {
+  title: "Admin • Health",
+  robots: {
+    index: false,
+    follow: false,
+    nocache: true,
+    googleBot: {
+      index: false,
+      follow: false,
+      noimageindex: true,
+      nocache: true,
+    },
+  },
+};
+
 /**
  * Admin Health page (server component wrapper)
- * Delegates all interactive logic to the client-side HealthClient.
+ * Route: /admin/health
  */
 export default function AdminHealthPage() {
   return (

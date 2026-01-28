@@ -1,4 +1,3 @@
-// src/components/checkout/address-form.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -402,8 +401,7 @@ export default function AddressForm({
         (typeof cur === "string" && cur.trim() === "") ||
         (typeof cur === "number" && !Number.isFinite(cur));
 
-      const incMeaningful =
-        v != null && (!(typeof v === "string") || v.trim() !== "");
+      const incMeaningful = v != null && (!(typeof v === "string") || v.trim() !== "");
 
       if (curEmpty && incMeaningful) next[k] = v;
     }
@@ -446,9 +444,7 @@ export default function AddressForm({
             .trim() === "BILLING"
             ? "BILLING"
             : "SHIPPING",
-        countryIso2: String(p?.countryIso2 || merged?.countryIso2 || "BD")
-          .toUpperCase()
-          .trim(),
+        countryIso2: String(p?.countryIso2 || merged?.countryIso2 || "BD").toUpperCase().trim(),
         makeDefault:
           p?.makeDefault ??
           p?.isDefault ??
@@ -468,8 +464,7 @@ export default function AddressForm({
   // Keep type synced with prop when type selector is not shown.
   useEffect(() => {
     if (showTypeSelector) return;
-    const t =
-      String(addressType || "SHIPPING").toUpperCase().trim() === "BILLING" ? "BILLING" : "SHIPPING";
+    const t = String(addressType || "SHIPPING").toUpperCase().trim() === "BILLING" ? "BILLING" : "SHIPPING";
     setVals((p) => {
       if (String(p.type || "").toUpperCase() === t) return p;
       return { ...p, type: t };
@@ -788,6 +783,9 @@ export default function AddressForm({
       }
     };
 
+    // HARD SAFETY BUFFER (requested): 0.5 inch = 48 CSS px
+    const EXTRA_SAFE_PX = 48;
+
     window.setTimeout(() => {
       try {
         const sp = findScrollParent(el);
@@ -798,8 +796,8 @@ export default function AddressForm({
           const topIn = rect.top - spRect.top;
           const bottomIn = rect.bottom - spRect.top;
 
-          const safeTop = 12;
-          const safeBottom = sp.clientHeight - 12;
+          const safeTop = 12 + EXTRA_SAFE_PX;
+          const safeBottom = sp.clientHeight - 12 - EXTRA_SAFE_PX;
 
           let delta = 0;
           if (topIn < safeTop) delta = topIn - safeTop;
@@ -818,8 +816,8 @@ export default function AddressForm({
         const navbarH = getCssPx("--navbar-h", 96) + vvTop;
         const bottomH = Math.max(getCssPx("--bottom-floating-h", 0), getCssPx("--bottom-safe-pad", 84));
 
-        const safeTop = navbarH + 10;
-        const safeBottom = vvH - bottomH - 10;
+        const safeTop = navbarH + EXTRA_SAFE_PX + 10;
+        const safeBottom = vvH - bottomH - EXTRA_SAFE_PX - 10;
 
         let delta = 0;
         if (rect.top < safeTop) delta = rect.top - safeTop;
@@ -958,9 +956,7 @@ export default function AddressForm({
             <div className="ca-type-row" role="group" aria-label="Address type">
               <button
                 type="button"
-                className={`ca-type-btn${
-                  String(vals.type).toUpperCase() === "SHIPPING" ? " on" : ""
-                }`}
+                className={`ca-type-btn${String(vals.type).toUpperCase() === "SHIPPING" ? " on" : ""}`}
                 onClick={() => setField("type", "SHIPPING")}
               >
                 Shipping
@@ -1140,9 +1136,7 @@ export default function AddressForm({
           aria-expanded={showOptional}
           aria-controls="ca-optional"
         >
-          <span className="t">
-            {showOptional ? "Hide optional address details" : "Add optional address details"}
-          </span>
+          <span className="t">{showOptional ? "Hide optional address details" : "Add optional address details"}</span>
           <span className="i" aria-hidden="true">
             {showOptional ? "▴" : "▾"}
           </span>
@@ -1305,9 +1299,10 @@ export default function AddressForm({
         <style jsx>{`
           /* ---------------------------------------------------------
            * Never hide under Navbar / BottomFloatingBar:
-           * - Safe wrapper adds padding inside scrollable area (optional via useSafePadding).
-           * - Inputs include scroll-margin.
-           * - Focus helper adjusts scroll (window OR nearest scroller).
+           * - HARD 0.5in safety buffer top+bottom (requested)
+           * - Plus existing navbar/bottombar offsets + safe-area insets
+           * - Inputs include scroll-margin
+           * - Focus helper adjusts scroll (window OR nearest scroller)
            * --------------------------------------------------------- */
 
           .ca-safe-wrap {
@@ -1316,15 +1311,17 @@ export default function AddressForm({
           }
 
           .ca-safe-wrap[data-safe="1"] {
-            padding-top: calc(10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            /* HARD SAFETY: 0.5 inch top & bottom */
+            padding-top: calc(0.5in + 10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
             padding-bottom: calc(
-              14px + env(safe-area-inset-bottom) +
+              0.5in + 14px + env(safe-area-inset-bottom) +
                 max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
             );
 
-            scroll-padding-top: calc(10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            /* Keep scrollIntoView behavior consistent when this wrapper is inside a scroller */
+            scroll-padding-top: calc(0.5in + 10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
             scroll-padding-bottom: calc(
-              14px + env(safe-area-inset-bottom) +
+              0.5in + 14px + env(safe-area-inset-bottom) +
                 max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
             );
           }
@@ -1490,9 +1487,11 @@ export default function AddressForm({
             min-width: 0;
             max-width: 100%;
 
-            scroll-margin-top: calc(16px + var(--navbar-h, 96px) + env(safe-area-inset-top));
+            /* Add HARD 0.5in buffer into scroll positioning */
+            scroll-margin-top: calc(0.5in + 16px + var(--navbar-h, 96px) + env(safe-area-inset-top));
             scroll-margin-bottom: calc(
-              16px + max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) +
+              0.5in + 16px +
+                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) +
                 env(safe-area-inset-bottom)
             );
           }
@@ -1631,9 +1630,10 @@ export default function AddressForm({
 
           @media (max-width: 640px) {
             .ca-safe-wrap[data-safe="1"] {
-              padding-top: calc(8px + env(safe-area-inset-top) + var(--navbar-h, 84px));
+              /* keep 0.5in buffer even on mobile; only fallback navbar height changes */
+              padding-top: calc(0.5in + 8px + env(safe-area-inset-top) + var(--navbar-h, 84px));
               padding-bottom: calc(
-                14px + env(safe-area-inset-bottom) +
+                0.5in + 14px + env(safe-area-inset-bottom) +
                   max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
               );
             }

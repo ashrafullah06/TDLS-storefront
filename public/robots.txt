@@ -1,12 +1,4 @@
-# *
 User-agent: *
-Allow: /
-Allow: /_next/
-Allow: /_next/static/
-Allow: /static/
-Allow: /assets/
-Allow: /fonts/
-Allow: /images/
 Disallow: /admin/
 Disallow: /api/
 Disallow: /internal/
@@ -19,13 +11,12 @@ Disallow: /signup
 Disallow: /logout
 Disallow: /account
 Disallow: /customer
-Disallow: /customer/
 Disallow: /profile
 Disallow: /orders
 Disallow: /cart
 Disallow: /checkout
-Disallow: /search
 Disallow: /info
+
 Disallow: /*?*utm_source=
 Disallow: /*?*utm_medium=
 Disallow: /*?*utm_campaign=
@@ -33,56 +24,5 @@ Disallow: /*?*utm_term=
 Disallow: /*?*utm_content=
 Disallow: /*?*gclid=
 Disallow: /*?*fbclid=
-Disallow: /*?*ref=
-Disallow: /*?*session=
-Disallow: /*?*preview=
-Disallow: /*?*page=
-Disallow: /*?*sort=
-Disallow: /*?*filter=
-Disallow: /*?*q=
 
-# Googlebot
-User-agent: Googlebot
-Allow: /
-
-# Mediapartners-Google
-User-agent: Mediapartners-Google
-Allow: /
-
-# bingbot
-User-agent: bingbot
-Allow: /
-
-# Slurp
-User-agent: Slurp
-Allow: /
-
-# AhrefsBot
-User-agent: AhrefsBot
-Disallow: /
-
-# SemrushBot
-User-agent: SemrushBot
-Disallow: /
-
-# MJ12bot
-User-agent: MJ12bot
-Disallow: /
-
-# BLEXBot
-User-agent: BLEXBot
-Disallow: /
-
-# DotBot
-User-agent: DotBot
-Disallow: /
-
-# Host
-Host: https://www.thednalabstore.com
-
-# Sitemaps
 Sitemap: https://www.thednalabstore.com/sitemap.xml
-Sitemap: https://www.thednalabstore.com/sitemap-products.xml
-Sitemap: https://www.thednalabstore.com/sitemap-collections.xml
-Sitemap: https://www.thednalabstore.com/sitemap-blog.xml
-Sitemap: https://www.thednalabstore.com/server-sitemap.xml
