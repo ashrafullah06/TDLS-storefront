@@ -3,26 +3,14 @@
 /**
  * TDLS — Health Checks Library
  * Path: "@/lib/health/checks"
- *
- * Purpose:
- * - Provide a single, reusable health summary builder for /api/health/summary and other internal health endpoints.
- * - Runs defensive, real checks (env, DB ping via Prisma if available, Strapi ping, optional queue hook, sitemap/robots audit).
- * - Returns a stable shape:
- *   {
- *     status, timestamp,
- *     version: { commit, region, runtime, node, build, app },
- *     env: { node_env, next_public_site_url, strapi_url, strapi_token_set, strapi_token_preview, database },
- *     checks: { [key]: { ok, status, ms, desc, error?, meta? } },
- *     suggestions: string[]
- *   }
  */
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
 function nowMs() {
   try {
-    // eslint-disable-next-line no-undef
-    return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+    const p = typeof globalThis !== "undefined" ? globalThis.performance : undefined;
+    return p && typeof p.now === "function" ? p.now() : Date.now();
   } catch {
     return Date.now();
   }
@@ -91,14 +79,12 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = DEFAULT_TIMEOUT_MS) 
 
 function classifyStatusFromOk(ok, level = "info") {
   if (ok) return "ok";
-  // for non-ok, map to degraded/error by severity
   if (level === "critical") return "error";
   if (level === "warning") return "degraded";
   return "degraded";
 }
 
 function mergeOverallStatus(checks) {
-  // Priority: error > degraded > ok
   let hasError = false;
   let hasDegraded = false;
 
@@ -114,9 +100,6 @@ function mergeOverallStatus(checks) {
   return "ok";
 }
 
-/**
- * Run a single check with timing and standardized shape.
- */
 async function runCheck(key, desc, fn, { level = "info" } = {}) {
   const started = nowMs();
   try {
@@ -152,10 +135,6 @@ async function runCheck(key, desc, fn, { level = "info" } = {}) {
   }
 }
 
-/**
- * Optional: allow consumers to provide baseUrl (origin) for same-app probes.
- * If omitted, relative fetches still work in Next.js route handlers.
- */
 export async function buildHealthSummary({
   include = "all",
   baseUrl = "",
@@ -168,7 +147,6 @@ export async function buildHealthSummary({
   const runtime = safeStr(process.env.NEXT_RUNTIME || "nodejs");
   const isEdge = runtime === "edge";
 
-  // ---- env & version surface (lightweight, always safe) ----
   const strapiUrl =
     pickEnv(["STRAPI_URL", "NEXT_PUBLIC_STRAPI_URL", "STRAPI_BASE_URL", "NEXT_PUBLIC_STRAPI_BASE_URL"]) || "";
   const strapiToken =
@@ -198,7 +176,6 @@ export async function buildHealthSummary({
     database: dbUrl ? redactDbUrl(dbUrl) : "",
   };
 
-  // ---- Check: env sanity ----
   Object.assign(
     checks,
     await runCheck(
@@ -206,17 +183,13 @@ export async function buildHealthSummary({
       "Environment variables sanity",
       async () => {
         const missing = [];
-        // Keep this strict but realistic: Strapi and DB are core for TDLS.
         if (!strapiUrl) missing.push("STRAPI_URL");
         if (!dbUrl) missing.push("DATABASE_URL");
         const ok = missing.length === 0;
         return {
           ok,
           status: ok ? "ok" : "degraded",
-          meta: {
-            missing,
-            node_env: env.node_env || "—",
-          },
+          meta: { missing, node_env: env.node_env || "—" },
           error: ok ? "" : `Missing: ${missing.join(", ")}`,
         };
       },
@@ -228,28 +201,20 @@ export async function buildHealthSummary({
     suggestions.push("Set missing core environment variables (STRAPI_URL, DATABASE_URL) in your hosting platform and redeploy.");
   }
 
-  // ---- Check: DB ping (Prisma) ----
   Object.assign(
     checks,
     await runCheck(
       "db",
       "Database connectivity (Prisma ping)",
       async () => {
-        if (isEdge) {
-          return { ok: true, status: "ok", meta: { skipped: true, reason: "edge runtime" } };
-        }
+        if (isEdge) return { ok: true, status: "ok", meta: { skipped: true, reason: "edge runtime" } };
 
-        // Dynamic import to avoid bundling issues when Prisma isn't present in some environments
         let prisma = null;
         try {
           const mod = await import("@/lib/prisma");
           prisma = mod?.default || mod?.prisma || mod;
         } catch (e) {
-          return {
-            ok: false,
-            status: "error",
-            error: `Cannot import prisma: ${safeStr(e?.message || e)}`,
-          };
+          return { ok: false, status: "error", error: `Cannot import prisma: ${safeStr(e?.message || e)}` };
         }
 
         if (!prisma || typeof prisma.$queryRaw !== "function") {
@@ -258,13 +223,10 @@ export async function buildHealthSummary({
 
         const started = nowMs();
         try {
-          // Postgres-safe ping
           await prisma.$queryRaw`SELECT 1`;
-          const ms = nowMs() - started;
-          return { ok: true, status: "ok", ms };
+          return { ok: true, status: "ok", ms: nowMs() - started };
         } catch (e) {
-          const ms = nowMs() - started;
-          return { ok: false, status: "error", ms, error: safeStr(e?.message || e) };
+          return { ok: false, status: "error", ms: nowMs() - started, error: safeStr(e?.message || e) };
         }
       },
       { level: "critical" }
@@ -275,7 +237,6 @@ export async function buildHealthSummary({
     suggestions.push("Database check failed. Verify Neon/DB connection string, Prisma binaryTarget, and network access from your host.");
   }
 
-  // ---- Check: Strapi reachability ----
   Object.assign(
     checks,
     await runCheck(
@@ -284,8 +245,6 @@ export async function buildHealthSummary({
       async () => {
         if (!strapiUrl) return { ok: false, status: "degraded", error: "STRAPI_URL not set" };
 
-        // We prefer a lightweight endpoint.
-        // Most Strapi instances answer "/" or "/_health" (varies). We'll try a small sequence safely.
         const base = trimSlash(strapiUrl);
         const candidates = [`${base}/_health`, `${base}/api/_health`, `${base}/api/users-permissions/roles`];
 
@@ -296,10 +255,7 @@ export async function buildHealthSummary({
           // eslint-disable-next-line no-await-in-loop
           const { res, ms, error } = await fetchWithTimeout(
             url,
-            {
-              method: "GET",
-              headers: strapiToken ? { Authorization: `Bearer ${strapiToken}` } : {},
-            },
+            { method: "GET", headers: strapiToken ? { Authorization: `Bearer ${strapiToken}` } : {} },
             timeoutMs
           );
 
@@ -310,11 +266,9 @@ export async function buildHealthSummary({
 
           lastHttp = res.status;
 
-          // /roles may require auth; treat 200/401/403 as "reachable"
           if (res.status >= 200 && res.status < 300) return { ok: true, status: "ok", ms, meta: { http: res.status, url } };
           if (res.status === 401 || res.status === 403) return { ok: true, status: "ok", ms, meta: { http: res.status, url, note: "auth-gated but reachable" } };
 
-          // retry next candidate
           lastErr = `HTTP ${res.status}`;
         }
 
@@ -328,27 +282,17 @@ export async function buildHealthSummary({
     suggestions.push("Strapi check failed. Verify STRAPI_URL is correct/reachable and Strapi is up (Railway), then confirm token scope if needed.");
   }
 
-  // ---- Optional: Queue integration hook (only if your project provides it) ----
   Object.assign(
     checks,
     await runCheck(
       "queue_hook",
       "Queue layer hook (optional import)",
       async () => {
-        // This does NOT replace /api/health/queue. It just detects if a queue helper exists.
         try {
           const mod = await import("@/lib/queue");
           const hasAnything = !!mod && Object.keys(mod).length > 0;
-          return {
-            ok: true,
-            status: "ok",
-            meta: {
-              present: hasAnything,
-              exports: hasAnything ? Object.keys(mod).slice(0, 10) : [],
-            },
-          };
-        } catch (e) {
-          // Not an error for most apps
+          return { ok: true, status: "ok", meta: { present: hasAnything, exports: hasAnything ? Object.keys(mod).slice(0, 10) : [] } };
+        } catch {
           return { ok: true, status: "ok", meta: { present: false, skipped: true, reason: "no /lib/queue module" } };
         }
       },
@@ -356,10 +300,11 @@ export async function buildHealthSummary({
     )
   );
 
-  // ---- Optional: robots.txt audit (same-app) ----
+  // SEO checks only when include says so
   if (include === "all" || include === "seo") {
     const origin = trimSlash(baseUrl) || "";
-    const robotsUrl = origin ? `${origin}/robots.txt` : "/robots.txt";
+    const robotsUrl = origin ? `${origin}/robots.txt` : null;
+    const sitemapUrl = origin ? `${origin}/sitemap.xml` : null;
 
     Object.assign(
       checks,
@@ -367,6 +312,8 @@ export async function buildHealthSummary({
         "robots",
         "robots.txt reachable and disallows /admin",
         async () => {
+          if (!robotsUrl) return { ok: true, status: "ok", meta: { skipped: true, reason: "baseUrl not provided" } };
+
           const { res, ms, error } = await fetchWithTimeout(robotsUrl, { method: "GET" }, timeoutMs);
           if (!res) return { ok: false, status: "degraded", ms, error: error || "robots fetch failed" };
 
@@ -374,27 +321,13 @@ export async function buildHealthSummary({
           const disallowAdmin = /Disallow:\s*\/admin\/?/i.test(txt);
           const ok = res.status >= 200 && res.status < 400 && disallowAdmin;
 
-          return {
-            ok,
-            status: ok ? "ok" : "degraded",
-            ms,
-            meta: { http: res.status, disallowAdmin },
-            error: ok ? "" : "robots.txt missing Disallow: /admin (recommended)",
-          };
+          return { ok, status: ok ? "ok" : "degraded", ms, meta: { http: res.status, disallowAdmin }, error: ok ? "" : "robots.txt missing Disallow: /admin (recommended)" };
         },
         { level: "warning" }
       )
     );
 
-    if (checks.robots.ok === false) {
-      suggestions.push("Update robots.txt to disallow /admin (and ideally /api) to prevent accidental indexing.");
-    }
-  }
-
-  // ---- Optional: sitemap audit (same-app) ----
-  if (include === "all" || include === "seo") {
-    const origin = trimSlash(baseUrl) || "";
-    const sitemapUrl = origin ? `${origin}/sitemap.xml` : "/sitemap.xml";
+    if (checks.robots.ok === false) suggestions.push("Update robots.txt to disallow /admin (and ideally /api) to prevent accidental indexing.");
 
     Object.assign(
       checks,
@@ -402,6 +335,8 @@ export async function buildHealthSummary({
         "sitemap",
         "sitemap.xml reachable and does not leak /admin or /health",
         async () => {
+          if (!sitemapUrl) return { ok: true, status: "ok", meta: { skipped: true, reason: "baseUrl not provided" } };
+
           const { res, ms, error } = await fetchWithTimeout(sitemapUrl, { method: "GET" }, timeoutMs);
           if (!res) return { ok: false, status: "degraded", ms, error: error || "sitemap fetch failed" };
 
@@ -415,39 +350,37 @@ export async function buildHealthSummary({
           const leakHealth = locs.some((u) => /\/health(\/|$)/i.test(u));
           const ok = res.status >= 200 && res.status < 400 && !leakAdmin && !leakHealth;
 
-          return {
-            ok,
-            status: ok ? "ok" : "degraded",
-            ms,
-            meta: { http: res.status, locCount: locs.length, leakAdmin, leakHealth },
-            error: ok ? "" : "Sitemap leaks internal routes (admin/health) or is not reachable",
-          };
+          return { ok, status: ok ? "ok" : "degraded", ms, meta: { http: res.status, locCount: locs.length, leakAdmin, leakHealth }, error: ok ? "" : "Sitemap leaks internal routes (admin/health) or is not reachable" };
         },
         { level: "warning" }
       )
     );
 
-    if (checks.sitemap.ok === false) {
-      suggestions.push("Fix sitemap generation to exclude internal routes (/admin, /health). Admin routes must never be indexed.");
-    }
+    if (checks.sitemap.ok === false) suggestions.push("Fix sitemap generation to exclude internal routes (/admin, /health). Admin routes must never be indexed.");
   }
 
   const status = mergeOverallStatus(checks);
 
-  return {
-    status,
-    timestamp: ts,
-    version,
-    env,
-    checks,
-    suggestions,
-  };
+  return { status, timestamp: ts, version, env, checks, suggestions };
 }
 
 /**
- * Convenience runner used by simple /api/health route styles.
- * Returns the same shape as buildHealthSummary.
+ * Compatibility runner:
+ * - supports runHealthChecks({ baseUrl, include })
+ * - AND your current callers: runHealthChecks({ origin, includeAll })
  */
 export async function runHealthChecks(opts = {}) {
-  return buildHealthSummary(opts);
+  const inOpts = opts && typeof opts === "object" ? opts : {};
+  const { origin, includeAll, ...rest } = inOpts;
+
+  const mapped = { ...rest };
+
+  if (!mapped.baseUrl && origin) mapped.baseUrl = origin;
+
+  // If caller uses includeAll, map it.
+  if (!mapped.include && typeof includeAll === "boolean") {
+    mapped.include = includeAll ? "all" : "core";
+  }
+
+  return buildHealthSummary(mapped);
 }
