@@ -1,10 +1,13 @@
 User-agent: *
+Disallow: /admin
 Disallow: /admin/
+Disallow: /api
 Disallow: /api/
 Disallow: /internal/
 Disallow: /draft/
 Disallow: /private/
 Disallow: /preview
+Disallow: /preview/
 Disallow: /login
 Disallow: /signin
 Disallow: /signup
@@ -16,6 +19,20 @@ Disallow: /orders
 Disallow: /cart
 Disallow: /checkout
 Disallow: /info
+
+# ✅ prevent any health/status endpoints from being indexed
+Disallow: /health
+Disallow: /health/
+Disallow: /healthz
+Disallow: /healthz/
+Disallow: /status
+Disallow: /status/
+Disallow: /metrics
+Disallow: /metrics/
+
+# ✅ usually best to keep internal site search out of Google
+Disallow: /search
+Disallow: /search/
 
 Disallow: /*?*utm_source=
 Disallow: /*?*utm_medium=
