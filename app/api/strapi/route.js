@@ -3,7 +3,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
 
 /* ───────── envs ───────── */
 
@@ -30,12 +29,11 @@ const STRAPI_TOKEN = (
   ""
 ).trim();
 
-// Hard safety timeout to avoid “hanging streams” and Vercel platform 502 timeouts.
-// Keep it below typical serverless hard limits.
+// Hard safety timeout to avoid “hanging streams” and platform 502 timeouts.
 const UPSTREAM_TIMEOUT_MS = (() => {
   const n = Number(process.env.STRAPI_PROXY_TIMEOUT_MS || 12000);
   if (!Number.isFinite(n) || n <= 0) return 12000;
-  // clamp: 3s..25s (safe)
+  // clamp: 3s..25s
   return Math.min(25000, Math.max(3000, Math.round(n)));
 })();
 
@@ -99,26 +97,15 @@ try {
 /**
  * Hardening: ensure `path` is a relative API path (not a full URL),
  * and does not contain CRLF or protocol tricks.
- *
- * Allowed:
- *  - "/products?populate=*"
- *  - "products?populate=*"
- *  - "/products/123?populate=*"
  */
 function normalizeStrapiPath(input) {
   const p = String(input || "").trim();
   if (!p) return "";
 
-  // Reject full URLs to avoid SSRF and odd behavior
   if (/^https?:\/\//i.test(p)) return "";
-
-  // Reject protocol-relative urls like //evil.com
   if (p.startsWith("//")) return "";
-
-  // Reject any CRLF
   if (/[\r\n]/.test(p)) return "";
 
-  // Ensure leading slash
   return p.startsWith("/") ? p : `/${p}`;
 }
 
@@ -129,32 +116,38 @@ function fetchWithTimeout(url, init) {
   return fetch(url, {
     ...init,
     signal: controller.signal,
-    // Always follow redirects (Strapi behind proxies/CDNs sometimes redirects)
     redirect: "follow",
   }).finally(() => clearTimeout(t));
 }
 
+/* ───────── Prisma lazy-load (CRITICAL FIX) ───────── */
+/**
+ * DO NOT import Prisma at module scope.
+ * Only load Prisma when we actually need it (products stock patch).
+ */
+let _prismaPromise = null;
+async function getPrisma() {
+  if (_prismaPromise) return _prismaPromise;
+  _prismaPromise = import("@/lib/prisma").then((m) => m?.default ?? m);
+  return _prismaPromise;
+}
+
 /**
  * Extract all Strapi size IDs from a Strapi product payload.
- * Supports both:
- *   - your flattened JSON (row.variants[].sizes[])
- *   - more "raw" Strapi style (row.attributes.variants.data[].attributes.sizes.data[])
+ * Supports both flattened JSON and Strapi attributes/data shape.
  */
 function collectSizeIdsFromStrapiProducts(strapiData) {
   const itemsRaw = strapiData?.data;
-
   const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
 
   const sizeIds = new Set();
 
   for (const item of items) {
-    // flattened vs attributes
-    let row = item;
+    const row = item;
     const attrs = row.attributes || null;
 
     let variants = row.variants || attrs?.variants || [];
 
-    // if Strapi-style collection (with .data)
     if (variants && Array.isArray(variants.data)) {
       variants = variants.data.map((v) => v.attributes || v);
     }
@@ -165,19 +158,15 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
       let sizes = v.sizes || v.attributes?.sizes || [];
 
       if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s); // keep id + attributes
+        sizes = sizes.data.map((s) => s);
       }
 
       if (!Array.isArray(sizes)) continue;
 
       for (const s of sizes) {
-        // support multiple styles of id storage
         const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
-
         const sid = Number(rawId);
-        if (Number.isFinite(sid) && sid > 0) {
-          sizeIds.add(sid);
-        }
+        if (Number.isFinite(sid) && sid > 0) sizeIds.add(sid);
       }
     }
   }
@@ -186,34 +175,22 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
 }
 
 /**
- * Patch Strapi products with live Prisma stock:
- *  - For each size row, override:
- *      s.stock_quantity
- *      s.live_stock
- *      s.is_available
- *    and also mirror to s.attributes.* if present.
+ * Patch Strapi products with live Prisma stock (logic unchanged).
  */
 async function patchProductsWithPrismaStock(strapiData) {
   const { items, sizeIds } = collectSizeIdsFromStrapiProducts(strapiData);
 
-  if (sizeIds.size === 0) {
-    return strapiData; // nothing to patch
-  }
+  if (sizeIds.size === 0) return strapiData;
 
-  // Load all matching variants from Prisma
+  const prisma = await getPrisma();
+
   const prismaVariants = await prisma.productVariant.findMany({
-    where: {
-      strapiSizeId: { in: Array.from(sizeIds) },
-    },
-    select: {
-      strapiSizeId: true,
-      stockAvailable: true,
-    },
+    where: { strapiSizeId: { in: Array.from(sizeIds) } },
+    select: { strapiSizeId: true, stockAvailable: true },
   });
 
   const bySizeId = new Map(prismaVariants.map((v) => [v.strapiSizeId, v.stockAvailable]));
 
-  // Patch in-place
   for (const item of items) {
     const row = item;
     const attrs = row.attributes || null;
@@ -221,7 +198,7 @@ async function patchProductsWithPrismaStock(strapiData) {
     let variants = row.variants || attrs?.variants || [];
 
     if (variants && Array.isArray(variants.data)) {
-      variants = variants.data.map((v) => v); // keep id + attributes
+      variants = variants.data.map((v) => v);
     }
 
     if (!Array.isArray(variants)) continue;
@@ -232,7 +209,7 @@ async function patchProductsWithPrismaStock(strapiData) {
       let sizes = v.sizes || vAttrs?.sizes || [];
 
       if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s); // keep id + attributes
+        sizes = sizes.data.map((s) => s);
       }
 
       if (!Array.isArray(sizes)) continue;
@@ -250,12 +227,10 @@ async function patchProductsWithPrismaStock(strapiData) {
         const liveStock = Number(live) || 0;
         const isAvailable = liveStock > 0;
 
-        // Direct fields (flattened / custom JSON)
         s.stock_quantity = liveStock;
         s.live_stock = liveStock;
         s.is_available = isAvailable;
 
-        // If Strapi nested attributes exists, mirror there as well
         if (sAttrs) {
           s.attributes = {
             ...sAttrs,
@@ -278,13 +253,8 @@ export async function GET(req) {
 
   try {
     if (STRAPI_BOOT_ERROR) {
-      // Prevent platform 502 (module init crash) by returning a clean JSON error.
       return j(
-        {
-          ok: false,
-          error: "SERVER_MISCONFIGURED",
-          message: STRAPI_BOOT_ERROR,
-        },
+        { ok: false, error: "SERVER_MISCONFIGURED", message: STRAPI_BOOT_ERROR },
         500,
         { "cache-control": "no-store" }
       );
@@ -292,7 +262,6 @@ export async function GET(req) {
 
     const url = new URL(req.url);
 
-    // Optional secret – only validated when actually provided
     const clientSecretRaw =
       url.searchParams.get("secret") ||
       req.headers.get("x-strapi-sync-secret") ||
@@ -320,7 +289,6 @@ export async function GET(req) {
       }
     }
 
-    // Extract Strapi path (like /products?populate=*)
     const rawPath = url.searchParams.get("path") || "";
     const normalizedPath = normalizeStrapiPath(rawPath);
 
@@ -336,23 +304,16 @@ export async function GET(req) {
       );
     }
 
-    // Detect product endpoints so we can patch stock from Prisma
     const isProductEndpoint =
       normalizedPath.startsWith("/products") || normalizedPath.startsWith("/products/");
 
-    // Compose final Strapi URL: https://<strapi>/api/products?populate=*
     const target = `${STRAPI_API_BASE}${normalizedPath}`;
 
-    // Prepare headers (with optional token)
     const baseHeaders = {
       Accept: "application/json",
-      // Avoid setting Content-Type on GET (not needed and sometimes harms proxies)
     };
 
-    // Faster delivery without changing logic:
-    // - Allow CDN caching ONLY for non-product, non-secret reads.
-    //   Products must remain no-store because live stock is patched via Prisma.
-    // - Also allow opt-out: ?noCache=1
+    // SPEED: edge cache ONLY for non-product + non-secret reads (payload unchanged)
     const noCache = url.searchParams.get("noCache") === "1";
     const cacheControl =
       !noCache && !isProductEndpoint && !hasClientSecret
@@ -361,17 +322,10 @@ export async function GET(req) {
 
     let res;
 
-    // Fetch with token (if present), else public fetch.
-    // Logic unchanged: 401 with token -> retry without Authorization.
     if (STRAPI_TOKEN) {
-      const headersWithToken = {
-        ...baseHeaders,
-        Authorization: `Bearer ${STRAPI_TOKEN}`,
-      };
-
       res = await fetchWithTimeout(target, {
         method: "GET",
-        headers: headersWithToken,
+        headers: { ...baseHeaders, Authorization: `Bearer ${STRAPI_TOKEN}` },
         cache: "no-store",
       });
 
@@ -397,8 +351,6 @@ export async function GET(req) {
       const text = await res.text().catch(() => "");
       const ms = Date.now() - t0;
 
-      // Keep your behavior (proxy returns 502 on upstream failure),
-      // but add timing + upstream status for faster debugging.
       return j(
         {
           ok: false,
@@ -422,7 +374,7 @@ export async function GET(req) {
     let data;
     try {
       data = await res.json();
-    } catch (e) {
+    } catch {
       const ms = Date.now() - t0;
       return j(
         {
@@ -437,7 +389,7 @@ export async function GET(req) {
       );
     }
 
-    // OVERRIDE STOCK WITH PRISMA (OPTION A) — unchanged logic
+    // Patch stock ONLY for products (same behavior as before)
     if (isProductEndpoint) {
       try {
         data = await patchProductsWithPrismaStock(data);
@@ -451,9 +403,6 @@ export async function GET(req) {
 
     const ms = Date.now() - t0;
 
-    // IMPORTANT:
-    // We wrap Strapi's raw payload in { ok: true, data }
-    // This keeps compatibility with fetchProductsFromStrapi and other helpers.
     return j(
       { ok: true, data, ms },
       200,
@@ -466,7 +415,6 @@ export async function GET(req) {
   } catch (err) {
     const ms = Date.now() - t0;
 
-    // Distinguish timeout aborts vs generic failure
     const name = String(err?.name || "");
     const isAbort =
       name === "AbortError" ||
