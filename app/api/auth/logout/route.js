@@ -13,7 +13,7 @@ function json(body, status = 200) {
       "cache-control": "no-store",
       vary: "origin, cookie",
       // bump version so you can confirm deploy behavior quickly
-      "x-tdlc-customer-logout": "v3",
+      "x-tdlc-customer-logout": "v4", // <- bumped
     },
   });
 }
@@ -82,6 +82,20 @@ function candidateDomains(hostname) {
 
   out.push(`.${host}`);
   return Array.from(new Set(out));
+}
+
+/**
+ * Expand cookie names to also clear chunked variants.
+ * NextAuth/Auth.js may set:
+ * - authjs.session-token
+ * - authjs.session-token.0 / .1 / ...
+ */
+function expandChunkedNames(name, maxChunks = 16) {
+  const n = String(name || "").trim();
+  if (!n) return [];
+  const out = [n];
+  for (let i = 0; i < maxChunks; i++) out.push(`${n}.${i}`);
+  return out;
 }
 
 function expireCookieMatrix(response, name, hostname) {
@@ -190,10 +204,16 @@ export async function POST(request) {
   const effective = effectiveCustomerSessionCookieName();
   if (effective) customerAuthCookies.push(effective);
 
-  // De-dup
-  const uniq = Array.from(new Set(customerAuthCookies.map(String).filter(Boolean)));
+  // De-dup base names
+  const baseUniq = Array.from(new Set(customerAuthCookies.map(String).filter(Boolean)));
 
-  for (const name of uniq) {
+  // Expand chunked names (base + .0..)
+  const namesToClear = new Set();
+  for (const n of baseUniq) {
+    for (const x of expandChunkedNames(n, 16)) namesToClear.add(x);
+  }
+
+  for (const name of namesToClear) {
     expireCookieMatrix(res, name, host);
   }
 

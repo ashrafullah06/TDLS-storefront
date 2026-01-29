@@ -14,11 +14,8 @@ import { useState, useEffect } from "react";
  * then do a refresh/navigation to update any UI state.
  */
 function clearCustomerClientArtifacts() {
-  // manual signout marker is timestamp-based; remove after use
-  try {
-    sessionStorage.removeItem("tdlc_manual_signout");
-  } catch {}
-
+  // NOTE: do NOT remove tdlc_manual_signout immediately.
+  // Keep it briefly so any UI/guards can respect the signout action.
   const removeByPrefix = (storage, prefixes) => {
     try {
       const keys = [];
@@ -55,19 +52,63 @@ function clearCustomerClientArtifacts() {
 }
 
 /** Customer-only hard logout endpoint (server clears customer cookies/session) */
-async function callCustomerHardLogout() {
+async function callCustomerHardLogout(redirectTo) {
+  const url = "/api/auth/logout";
+
+  const safeRead = async (res) => {
+    try {
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        await res.json().catch(() => null);
+      } else {
+        // drain (prevents some browsers from keeping the connection open)
+        await res.text().catch(() => null);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Attempt #1: JSON (existing behavior)
   try {
-    const res = await fetch("/api/auth/logout", {
+    const res = await fetch(url, {
       method: "POST",
       credentials: "include",
       cache: "no-store",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ ok: true }),
     });
-    await res.json().catch(() => null);
-    return res.ok;
+    await safeRead(res);
+    if (res.ok) return true;
+
+    // Attempt #2: form-encoded (more compatible with standards-based handlers)
+    const body = new URLSearchParams();
+    if (redirectTo) body.set("callbackUrl", String(redirectTo));
+    const res2 = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+        accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+      },
+      body: body.toString(),
+    });
+    await safeRead(res2);
+    return res2.ok;
   } catch {
-    return false;
+    // Attempt #3: bare POST (some handlers reject bodies)
+    try {
+      const res3 = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+      });
+      await safeRead(res3);
+      return res3.ok;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -107,6 +148,20 @@ export default function SignoutButton({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
+  const hardNavigate = (to) => {
+    try {
+      window.location.replace(to);
+      return true;
+    } catch {
+      try {
+        window.location.assign(to);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+
   const handleSignOut = async () => {
     if (busy) return;
     setBusy(true);
@@ -118,10 +173,16 @@ export default function SignoutButton({
        */
       try {
         sessionStorage.setItem("tdlc_manual_signout", String(Date.now()));
+        // auto-clear after a short window (lets the next page read it if needed)
+        setTimeout(() => {
+          try {
+            sessionStorage.removeItem("tdlc_manual_signout");
+          } catch {}
+        }, 15000);
       } catch {}
 
       // 1) Customer-only server cleanup (NEVER touches admin plane by design)
-      const hardOk = await callCustomerHardLogout();
+      const hardOk = await callCustomerHardLogout(redirectTo);
 
       // 2) Minimal customer-scoped client cleanup (no global clearing)
       clearCustomerClientArtifacts();
@@ -132,27 +193,24 @@ export default function SignoutButton({
       } catch {}
 
       /**
-       * 3) Redirect + refresh (forces UI/session re-evaluation)
-       * router.refresh alone can allow a brief "bounce back" if session providers
-       * still have in-memory state; hard navigation guarantees correctness.
+       * 3) IMPORTANT FIX (real logout correctness):
+       * If server logout fails, we must do the POST <form> fallback BEFORE navigating.
        */
+      if (!hardOk) {
+        postCustomerLogoutForm(redirectTo);
+        return;
+      }
+
+      /**
+       * 4) Redirect + refresh (forces UI/session re-evaluation)
+       */
+      if (hardNavigate(redirectTo)) return;
+
+      // Final fallback (should rarely run)
       try {
         router.replace(redirectTo);
         router.refresh();
       } catch {}
-
-      try {
-        window.location.replace(redirectTo);
-      } catch {
-        try {
-          window.location.assign(redirectTo);
-        } catch {}
-      }
-
-      // If hard logout failed, do a standards fallback post to ensure cookies clear
-      if (!hardOk) {
-        postCustomerLogoutForm(redirectTo);
-      }
     } finally {
       setBusy(false);
     }
