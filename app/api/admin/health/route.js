@@ -1,10 +1,10 @@
 // FILE: app/api/admin/health/route.js
 import { NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
+import { Permissions } from "@/lib/rbac";
 import prisma from "@/lib/prisma";
 
 export const runtime = "nodejs";
-// Optional: force dynamic so this endpoint never gets cached at build time
 export const dynamic = "force-dynamic";
 
 /* ---------- tiny helpers (no external imports) ---------- */
@@ -25,6 +25,20 @@ function getBaseUrl(fallback) {
   return "http://localhost:3000";
 }
 
+function json(body, status = 200) {
+  return NextResponse.json(body ?? null, {
+    status,
+    headers: {
+      "cache-control": "no-store, max-age=0",
+      pragma: "no-cache",
+      "x-robots-tag": "noindex, nofollow, noarchive",
+      vary: "cookie, authorization",
+      "x-tdlc-scope": "admin",
+      "x-tdls-scope": "admin",
+    },
+  });
+}
+
 /* single place to fetch with timing + optional validator */
 async function timeFetch(url, opts = {}, timeoutMs = 5000, validator) {
   const started = nowNs();
@@ -34,7 +48,12 @@ async function timeFetch(url, opts = {}, timeoutMs = 5000, validator) {
     const res = await fetch(url, { ...opts, signal: ctrl.signal, cache: "no-store" });
     clearTimeout(id);
     const ms = msBetween(started);
-    const base = { status: res.status, ms, headers: Object.fromEntries([...res.headers.entries()].slice(0, 50)) };
+    const base = {
+      status: res.status,
+      ms,
+      headers: Object.fromEntries([...res.headers.entries()].slice(0, 50)),
+    };
+
     if (validator) {
       try {
         const verdict = await validator(res);
@@ -57,6 +76,7 @@ async function timeFetch(url, opts = {}, timeoutMs = 5000, validator) {
         };
       }
     }
+
     return { ok: res.ok, error: res.ok ? null : `HTTP ${res.status}`, diagnosis: null, ...base };
   } catch (err) {
     clearTimeout(id);
@@ -102,11 +122,17 @@ async function ga4DebugPing({ measurementId, apiSecret, timeoutMs = 5000 }) {
     });
     clearTimeout(id);
     const ms = msBetween(started);
-    const json = await res.json().catch(() => ({}));
-    const msgs = Array.isArray(json?.validationMessages) ? json.validationMessages : [];
+    const j = await res.json().catch(() => ({}));
+    const msgs = Array.isArray(j?.validationMessages) ? j.validationMessages : [];
     const ok = res.ok && msgs.length === 0;
     const error = ok ? null : `GA4 validation: ${JSON.stringify(msgs).slice(0, 400)}`;
-    return { ok, status: res.status, ms, error, diagnosis: ok ? null : "GA4 debug endpoint reported validation issues" };
+    return {
+      ok,
+      status: res.status,
+      ms,
+      error,
+      diagnosis: ok ? null : "GA4 debug endpoint reported validation issues",
+    };
   } catch (err) {
     clearTimeout(id);
     return {
@@ -239,21 +265,24 @@ async function prismaStats() {
   };
 }
 
-/* ---------- RBAC gate helper ---------- */
-function hasPerm(session, perm) {
-  const perms = session?.admin?.permissions || session?.permissions || [];
-  return perms.includes(perm);
+function expect404Validator(label) {
+  return async (res) => {
+    const ok = res.status === 404;
+    return {
+      ok,
+      diagnosis: ok ? null : `Expected 404 for ${label}, got HTTP ${res.status}`,
+      error: ok ? null : `PUBLIC_HEALTH_EXPOSED (${label})`,
+    };
+  };
 }
 
-/* ---------- main handler (RBAC-gated) ---------- */
+/* ---------- main handler (RBAC-gated, non-discoverable) ---------- */
 export async function GET(req) {
-  // RBAC gate — admin-only diagnostics
-  const session = await requireAuth(); // throws or returns session with user
-  if (!hasPerm(session, "VIEW_HEALTH")) {
-    return new NextResponse(JSON.stringify({ ok: false, error: "FORBIDDEN" }), {
-      status: 403,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+  // Admin-only diagnostics. Non-admin gets 404 to conceal existence.
+  try {
+    await requireAdmin(req, { permission: Permissions.VIEW_HEALTH });
+  } catch {
+    return json({ ok: false, error: "NOT_FOUND" }, 404);
   }
 
   const urlIn = new URL(req.url);
@@ -262,6 +291,7 @@ export async function GET(req) {
   const verbose = urlIn.searchParams.get("verbose") === "1";
 
   const { headers } = req;
+  const cookie = headers.get("cookie") || "";
 
   const host = headers.get("x-forwarded-host") || headers.get("host") || "localhost:3000";
   const proto = headers.get("x-forwarded-proto") || "http";
@@ -300,35 +330,75 @@ export async function GET(req) {
     .filter(Boolean);
 
   // DNS/TLS/Checkout
-  const DNS_PROBE_URL = process.env.DNS_PROBE_URL || ""; // returns { ok: true } when healthy
-  const TLS_STATUS_URL = process.env.TLS_STATUS_URL || ""; // returns { ok: true, days_left: N }
-  const CHECKOUT_SANDBOX_URL = process.env.CHECKOUT_SANDBOX_URL || ""; // returns { ok: true } (no real charges)
+  const DNS_PROBE_URL = process.env.DNS_PROBE_URL || "";
+  const TLS_STATUS_URL = process.env.TLS_STATUS_URL || "";
+  const CHECKOUT_SANDBOX_URL = process.env.CHECKOUT_SANDBOX_URL || "";
 
-  // Prisma stats (will be filled later)
+  // Prisma stats (filled later)
   let stats = null;
   let statsError = null;
 
   const checks = [];
   const add = (key, desc, run, { required = false } = {}) => checks.push({ key, desc, run, required });
 
-  // Strapi
+  // ✅ Admin-plane session endpoint check (admin-only API namespace)
+  add(
+    "admin_session",
+    "Admin session endpoint (/api/admin/session)",
+    () =>
+      timeFetch(
+        `${baseUrl}/api/admin/session`,
+        { method: "GET", headers: cookie ? { cookie } : {} },
+        3500,
+        async (res) => {
+          let ok = res.ok;
+          let diagnosis = null;
+          if (!ok) return { ok: false, diagnosis: `HTTP ${res.status}`, error: `HTTP ${res.status}` };
+          const j = await res.json().catch(() => null);
+          const has = !!(j?.user || j?.admin || j?.ok);
+          if (!has) {
+            ok = false;
+            diagnosis = "Session payload missing expected keys";
+          }
+          return { ok, diagnosis, error: ok ? null : "Admin session malformed" };
+        }
+      ),
+    { required: false }
+  );
+
+  // ✅ Enforce: public health endpoints must NOT exist / must be hidden
+  add("public_health_hidden", "Public health surface is not exposed (/api/health)", () =>
+    timeFetch(`${baseUrl}/api/health`, { method: "GET" }, 2500, expect404Validator("/api/health"))
+  );
+  add("public_health_prisma_hidden", "Public /api/health/prisma is not exposed", () =>
+    timeFetch(`${baseUrl}/api/health/prisma`, { method: "GET" }, 2500, expect404Validator("/api/health/prisma"))
+  );
+  add("public_health_cms_hidden", "Public /api/health/cms is not exposed", () =>
+    timeFetch(`${baseUrl}/api/health/cms`, { method: "GET" }, 2500, expect404Validator("/api/health/cms"))
+  );
+  add("public_health_summary_hidden", "Public /api/health/summary is not exposed", () =>
+    timeFetch(`${baseUrl}/api/health/summary`, { method: "GET" }, 2500, expect404Validator("/api/health/summary"))
+  );
+  add("public_health_queue_hidden", "Public /api/health/queue is not exposed", () =>
+    timeFetch(`${baseUrl}/api/health/queue`, { method: "GET" }, 2500, expect404Validator("/api/health/queue"))
+  );
+
+  // Strapi (direct checks here; do NOT depend on public /api/health/cms)
   if (STRAPI_URL) {
     const auth = STRAPI_API_TOKEN ? { Authorization: `Bearer ${STRAPI_API_TOKEN}` } : undefined;
     add("strapi_root", `Reach ${STRAPI_URL}`, () => timeFetch(STRAPI_URL, { headers: auth }), { required: true });
-    add(
-      "strapi_products",
-      "Fetch products (1)",
-      () => timeFetch(`${STRAPI_URL}/api/products?pagination[pageSize]=1`, { headers: auth })
+    add("strapi_products", "Fetch products (1)", () =>
+      timeFetch(`${STRAPI_URL}/api/products?pagination[pageSize]=1`, { headers: auth })
     );
-    add(
-      "strapi_collections",
-      "Fetch collections (1)",
-      () => timeFetch(`${STRAPI_URL}/api/collections?pagination[pageSize]=1`, { headers: auth })
+    add("strapi_collections", "Fetch collections (1)", () =>
+      timeFetch(`${STRAPI_URL}/api/collections?pagination[pageSize]=1`, { headers: auth })
     );
-    add("strapi_posts", "Fetch posts (1)", () => timeFetch(`${STRAPI_URL}/api/posts?pagination[pageSize]=1`, { headers: auth }));
+    add("strapi_posts", "Fetch posts (1)", () =>
+      timeFetch(`${STRAPI_URL}/api/posts?pagination[pageSize]=1`, { headers: auth })
+    );
   }
 
-  // SMTP (HTTP health of your SMTP bridge / status endpoint)
+  // SMTP
   if (SMTP_HEALTH_URL) {
     add("smtp", "SMTP service health", () =>
       timeFetch(SMTP_HEALTH_URL, { method: "GET" }, 5000, async (res) => {
@@ -347,7 +417,7 @@ export async function GET(req) {
     );
   }
 
-  // Payment gateway (HTTP health/status)
+  // Payment health
   if (PAYMENT_HEALTH_URL) {
     add("payment", "Payment gateway health", () =>
       timeFetch(PAYMENT_HEALTH_URL, { method: "GET" }, 5000, async (res) => {
@@ -355,15 +425,9 @@ export async function GET(req) {
           diagnosis = null;
         try {
           const body = await res.json();
-          const flag =
-            body?.ok === true || /^(ok|up|operational)$/i.test(String(body?.status || body?.overall || ""));
+          const flag = body?.ok === true || /^(ok|up|operational)$/i.test(String(body?.status || body?.overall || ""));
           ok = ok && flag;
-          if (!ok)
-            diagnosis = `Payment body not OK (${JSON.stringify({
-              status: body?.status,
-              overall: body?.overall,
-              ok: body?.ok,
-            })})`;
+          if (!ok) diagnosis = `Payment body not OK (${JSON.stringify({ status: body?.status, overall: body?.overall, ok: body?.ok })})`;
         } catch {
           if (!ok) diagnosis = `HTTP ${res.status} and non-JSON response`;
         }
@@ -372,7 +436,7 @@ export async function GET(req) {
     );
   }
 
-  // SEO
+  // SEO probes (public pages are fine to probe; results stay admin-only)
   for (const ep of [
     { key: "robots", url: `${baseUrl}/robots.txt`, desc: "Fetch robots.txt" },
     { key: "sitemap_index", url: `${baseUrl}/sitemap.xml`, desc: "Fetch sitemap index" },
@@ -388,18 +452,7 @@ export async function GET(req) {
   add("home", "Fetch homepage", () => timeFetch(baseUrl));
   add("favicon", "Fetch favicon.ico", () => timeFetch(`${baseUrl}/favicon.ico`));
 
-  // Internal health APIs for the app itself
-  add("api_prisma_health", "Internal Prisma DB health endpoint", () =>
-    timeFetch(`${baseUrl}/api/health/prisma`, { method: "GET" }, 5000)
-  );
-  add("api_cms_health", "Internal CMS (Strapi) health endpoint", () =>
-    timeFetch(`${baseUrl}/api/health/cms`, { method: "GET" }, 5000)
-  );
-  add("api_auth_session", "Auth session API", () =>
-    timeFetch(`${baseUrl}/api/auth/session`, { method: "GET" }, 5000)
-  );
-
-  // CORS preflight (OPTIONS)
+  // CORS preflight to Strapi
   if (STRAPI_URL) {
     add(
       "strapi_cors_preflight",
@@ -424,10 +477,13 @@ export async function GET(req) {
             const allowHeaders = (res.headers.get("access-control-allow-headers") || "")
               .split(",")
               .map((s) => s.trim().toLowerCase());
+
             const originOk = allowOrigin === "*" || allowOrigin === CORS_ORIGIN;
             const methodsOk = CORS_METHODS_REQUIRED.every((m) => allowMethods.includes(m.toUpperCase()));
             const headersOk = CORS_HEADERS_REQUIRED.every((h) => allowHeaders.includes(h.toLowerCase()));
+
             const ok = (res.status === 204 || res.status === 200) && originOk && methodsOk && headersOk;
+
             let diagnosis = null;
             if (!ok) {
               const miss = [];
@@ -455,7 +511,7 @@ export async function GET(req) {
     );
   }
 
-  // DB health (via Strapi's own health endpoint, if any)
+  // Strapi DB health (if you have STRAPI_HEALTH_URL)
   if (STRAPI_HEALTH_URL) {
     add("db", "Strapi DB health", () =>
       timeFetch(STRAPI_HEALTH_URL, { method: "GET" }, 5000, async (res) => {
@@ -473,7 +529,7 @@ export async function GET(req) {
     );
   }
 
-  // Queue/worker
+  // Queue/worker health (external worker endpoint)
   if (QUEUE_HEALTH_URL) {
     add("queue", "Queue/worker health", () =>
       timeFetch(QUEUE_HEALTH_URL, { method: "GET" }, 5000, async (res) => {
@@ -509,12 +565,7 @@ export async function GET(req) {
             const body = await res.json();
             const flag = body?.ok === true || /^(ok|up|operational)$/i.test(String(body?.status || body?.overall || ""));
             ok = ok && flag;
-            if (!ok)
-              diagnosis = `Body status not OK (${JSON.stringify({
-                status: body?.status,
-                overall: body?.overall,
-                ok: body?.ok,
-              })})`;
+            if (!ok) diagnosis = `Body status not OK (${JSON.stringify({ status: body?.status, overall: body?.overall, ok: body?.ok })})`;
           } catch {
             if (!ok) diagnosis = `HTTP ${res.status} and non-JSON response`;
           }
@@ -535,60 +586,50 @@ export async function GET(req) {
   // DNS
   if (DNS_PROBE_URL) {
     add("dns", "DNS resolution probe", () =>
-      timeFetch(
-        DNS_PROBE_URL,
-        { method: "GET" },
-        5000,
-        async (res) => {
-          let ok = res.ok,
-            diagnosis = null;
-          try {
-            const body = await res.json();
-            ok = ok && body?.ok === true;
-            if (!ok) diagnosis = body?.error ? `Resolver: ${body.error}` : "Resolver did not return ok=true";
-          } catch {
-            /* ignore */
-          }
-          return { ok, diagnosis, error: ok ? null : `DNS probe HTTP ${res.status}` };
+      timeFetch(DNS_PROBE_URL, { method: "GET" }, 5000, async (res) => {
+        let ok = res.ok,
+          diagnosis = null;
+        try {
+          const body = await res.json();
+          ok = ok && body?.ok === true;
+          if (!ok) diagnosis = body?.error ? `Resolver: ${body.error}` : "Resolver did not return ok=true";
+        } catch {
+          /* ignore */
         }
-      )
+        return { ok, diagnosis, error: ok ? null : `DNS probe HTTP ${res.status}` };
+      })
     );
   }
 
   // TLS
   if (TLS_STATUS_URL) {
     add("tls", "TLS certificate status", () =>
-      timeFetch(
-        TLS_STATUS_URL,
-        { method: "GET" },
-        5000,
-        async (res) => {
-          let ok = res.ok,
-            diagnosis = null;
-          try {
-            const body = await res.json();
-            const days = Number(body?.days_left ?? NaN);
-            if (Number.isFinite(days)) {
-              if (days < 0) {
-                ok = false;
-                diagnosis = `Certificate expired ${Math.abs(days)}d ago`;
-              } else if (days < 7) {
-                ok = false;
-                diagnosis = `Expires in ${days}d (<7d)`;
-              } else if (days < 30) {
-                diagnosis = `Expires in ${days}d (<30d)`;
-              }
-            } else {
+      timeFetch(TLS_STATUS_URL, { method: "GET" }, 5000, async (res) => {
+        let ok = res.ok,
+          diagnosis = null;
+        try {
+          const body = await res.json();
+          const days = Number(body?.days_left ?? NaN);
+          if (Number.isFinite(days)) {
+            if (days < 0) {
               ok = false;
-              diagnosis = "No days_left provided";
+              diagnosis = `Certificate expired ${Math.abs(days)}d ago`;
+            } else if (days < 7) {
+              ok = false;
+              diagnosis = `Expires in ${days}d (<7d)`;
+            } else if (days < 30) {
+              diagnosis = `Expires in ${days}d (<30d)`;
             }
-          } catch {
+          } else {
             ok = false;
-            diagnosis = "Invalid TLS status payload";
+            diagnosis = "No days_left provided";
           }
-          return { ok, diagnosis, error: ok ? null : `TLS status not OK (HTTP ${res.status})` };
+        } catch {
+          ok = false;
+          diagnosis = "Invalid TLS status payload";
         }
-      )
+        return { ok, diagnosis, error: ok ? null : `TLS status not OK (HTTP ${res.status})` };
+      })
     );
   }
 
@@ -610,11 +651,7 @@ export async function GET(req) {
             const body = await res.json();
             const flag = body?.ok === true || /^ok$/i.test(String(body?.status || ""));
             ok = ok && flag;
-            if (!ok)
-              diagnosis = `Synthetic result not OK (${JSON.stringify({
-                ok: body?.ok,
-                status: body?.status,
-              })})`;
+            if (!ok) diagnosis = `Synthetic result not OK (${JSON.stringify({ ok: body?.ok, status: body?.status })})`;
           } catch {
             if (!ok) diagnosis = `HTTP ${res.status} and non-JSON response`;
           }
@@ -625,21 +662,9 @@ export async function GET(req) {
   }
 
   // Filtering
-  const onlySet = new Set(
-    (onlyParam || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-  );
-  const excludeSet = new Set(
-    (excludeParam || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-  );
-  const filteredChecks = checks.filter(
-    (c) => (onlySet.size ? onlySet.has(c.key) : true) && !excludeSet.has(c.key)
-  );
+  const onlySet = new Set((onlyParam || "").split(",").map((s) => s.trim()).filter(Boolean));
+  const excludeSet = new Set((excludeParam || "").split(",").map((s) => s.trim()).filter(Boolean));
+  const filteredChecks = checks.filter((c) => (onlySet.size ? onlySet.has(c.key) : true) && !excludeSet.has(c.key));
 
   // Run HTTP/integration checks
   const runResults = {};
@@ -671,53 +696,25 @@ export async function GET(req) {
   // Suggestions
   const suggestions = [];
   if (!STRAPI_URL) suggestions.push("Set STRAPI_URL in your environment.");
-  if (!STRAPI_API_TOKEN) suggestions.push("Set STRAPI_API_TOKEN in your environment (read-only token is enough).");
-  if (runResults.robots && !runResults.robots.ok)
-    suggestions.push("robots.txt not reachable — ensure next-sitemap built and server restarted.");
-  if (runResults.sitemap_index && !runResults.sitemap_index.ok)
-    suggestions.push("sitemap.xml not reachable — verify next-sitemap public output.");
-  for (const k of ["sitemap_products", "sitemap_collections", "sitemap_blog", "sitemap_server"]) {
-    if (runResults[k] && !runResults[k].ok)
-      suggestions.push(`Check ${runResults[k].desc} route and Strapi connectivity/permissions.`);
+  if (!STRAPI_API_TOKEN) suggestions.push("Set STRAPI_API_TOKEN (read-only token is enough).");
+
+  // If any public health endpoints are exposed, it must be fixed
+  for (const k of [
+    "public_health_hidden",
+    "public_health_prisma_hidden",
+    "public_health_cms_hidden",
+    "public_health_summary_hidden",
+    "public_health_queue_hidden",
+  ]) {
+    if (runResults[k] && !runResults[k].ok) {
+      suggestions.push(`Public health endpoint is exposed: ${runResults[k].desc}. Remove it or force 404.`);
+    }
   }
+
   if (runResults.strapi_root && !runResults.strapi_root.ok)
     suggestions.push("Cannot reach Strapi — confirm STRAPI_URL, CORS, and server status.");
   if (runResults.strapi_cors_preflight && !runResults.strapi_cors_preflight.ok)
-    suggestions.push("CORS preflight failed — update Access-Control-Allow-* on Strapi or proxy.");
-  if (runResults.cdn && !runResults.cdn.ok)
-    suggestions.push("CDN asset not reachable — verify CDN URL, ACL, and cache rules.");
-  if (runResults.db && !runResults.db.ok) suggestions.push("DB health failed — check DB connection/credentials from Strapi.");
-  if (runResults.queue && !runResults.queue.ok)
-    suggestions.push("Queue/worker health failed — ensure workers are connected and queues healthy.");
-  if (runResults.ga4_debug && !runResults.ga4_debug.ok)
-    suggestions.push("GA4 debug failed — check GA4_MEASUREMENT_ID / GA4_API_SECRET.");
-  if (runResults.posthog && !runResults.posthog.ok)
-    suggestions.push("PostHog capture failed — check POSTHOG_HOST / POSTHOG_KEY.");
-  if (runResults.smtp && !runResults.smtp.ok)
-    suggestions.push("SMTP health failed — verify SMTP bridge / status endpoint.");
-  if (runResults.payment && !runResults.payment.ok)
-    suggestions.push("Payment gateway health failed — check provider status & credentials.");
-  if (runResults.dns && !runResults.dns.ok) suggestions.push("DNS probe failed — verify records and resolvers.");
-  if (runResults.tls && !runResults.tls.ok) suggestions.push("TLS status not OK — renew/rotate certificates.");
-  if (runResults.checkout && !runResults.checkout.ok)
-    suggestions.push("Synthetic checkout failed — inspect order flow & payment sandbox.");
-  if (runResults.api_prisma_health && !runResults.api_prisma_health.ok)
-    suggestions.push("Prisma health endpoint failed — check /api/health/prisma and DATABASE_URL.");
-  if (runResults.api_cms_health && !runResults.api_cms_health.ok)
-    suggestions.push("CMS health endpoint failed — check /api/health/cms and Strapi read-only URL.");
-  if (runResults.api_auth_session && !runResults.api_auth_session.ok)
-    suggestions.push("Auth session endpoint failed — verify /api/auth/session and Auth.js configuration.");
-  for (const k of Object.keys(runResults).filter((k) => k.startsWith("vendor_"))) {
-    if (runResults[k] && !runResults[k].ok)
-      suggestions.push(`${runResults[k].desc} not OK — check third-party status or your proxy.`);
-  }
-  if (statsError) {
-    suggestions.push(
-      "Prisma stats failed — ensure DATABASE_URL is correct and migrations are applied (error: " +
-        statsError.slice(0, 160) +
-        ")"
-    );
-  }
+    suggestions.push("CORS preflight failed — update Strapi CORS or proxy.");
 
   const version = {
     app: process.env.NEXT_PUBLIC_APP_VERSION || null,
@@ -726,42 +723,9 @@ export async function GET(req) {
     region: process.env.VERCEL_REGION || process.env.FLY_REGION || process.env.NEXT_RUNTIME || null,
   };
 
-  // High-level feature map (so you can see which “options” of the site are wired)
   const features = {
-    env: {
-      nodeEnv: NODE_ENV,
-      baseUrl,
-    },
-    auth: {
-      nextAuth: true,
-      otp: Boolean(process.env.OTP_SECRET),
-      googleOAuth: Boolean(process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID_WEB),
-      facebookOAuth: Boolean(process.env.FACEBOOK_CLIENT_ID),
-    },
-    cms: {
-      strapiEnabled: Boolean(STRAPI_URL),
-    },
-    analytics: {
-      ga4: Boolean(GA4_MEASUREMENT_ID && GA4_API_SECRET),
-      posthog: HEALTH_ENABLE_POSTHOG && !!POSTHOG_HOST && !!POSTHOG_KEY,
-    },
-    email: {
-      smtpBridgeHealthEndpoint: Boolean(SMTP_HEALTH_URL),
-      directSmtpConfigured: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER),
-    },
-    payments: {
-      sslcommerz: Boolean(process.env.SSLCOMMERZ_STORE_ID || process.env.SSLC_STORE_ID),
-      bkash: Boolean(process.env.BKASH_APP_KEY || process.env.BKASH_USERNAME),
-      nagad: Boolean(process.env.NAGAD_MERCHANT_ID || process.env.NAGAD_MERCHANT_PHONE),
-      stripe: Boolean(process.env.STRIPE_SECRET_KEY),
-      cod: true,
-    },
-    queues: {
-      workerHealthEndpoint: Boolean(QUEUE_HEALTH_URL),
-    },
-    storage: {
-      cdnAssetConfigured: Boolean(CDN_ASSET_URL),
-    },
+    env: { nodeEnv: NODE_ENV, baseUrl },
+    cms: { strapiEnabled: Boolean(STRAPI_URL) },
     monitoring: {
       prismaStats: !statsError,
       checksRegistered: checks.length,
@@ -770,6 +734,7 @@ export async function GET(req) {
   };
 
   const payload = {
+    ok: true,
     status,
     timestamp: new Date().toISOString(),
     env: {
@@ -790,5 +755,6 @@ export async function GET(req) {
   if (!verbose) {
     for (const k of Object.keys(payload.checks)) delete payload.checks[k]?.headers;
   }
-  return NextResponse.json(payload);
+
+  return json(payload, 200);
 }

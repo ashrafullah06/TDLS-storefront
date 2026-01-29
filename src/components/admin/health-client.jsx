@@ -2,17 +2,13 @@
 "use client";
 
 /**
- * TDLS — Admin Health (Merged Ultra-Premium Client)
+ * TDLS — Admin Health (Ultra-Premium Client)
  *
- * Merged from:
- * 1) Website probe + SEO/sitemap auditor client (customer + SEO + internal endpoints)
- * 2) RBAC-aware admin health overview (permissions + /api/health/summary + queue controls)
- *
- * Key behaviors:
+ * Key behaviors (ADMIN NAMESPACE ONLY):
  * - RBAC: reads /api/admin/session and gates UI (VIEW_HEALTH / MANAGE_SETTINGS / VIEW_DEV_TOOLS)
- * - Health data: prefers /api/health/summary?include=all, falls back to /api/health
- * - Queues: GET/POST /api/health/queue (snapshot + admin actions when MANAGE_SETTINGS)
- * - Website coverage: probes core pages, SEO surfaces, internal APIs, and admin routes
+ * - Health data: loads from /api/admin/health (no public /api/health usage)
+ * - Queues: GET/POST /api/admin/health/queue (snapshot + admin actions when MANAGE_SETTINGS)
+ * - Website coverage: probes core pages, SEO surfaces, and ADMIN endpoints
  * - SEO auditor: parses sitemaps (<loc>), flags leaks (/admin, /health) and host mismatch
  * - Exports: Print-safe PDF, Copy JSON, Download JSON
  */
@@ -66,12 +62,6 @@ function toneFromStatus(s) {
   if (["degraded", "warn", "warning", "partial", "unavailable"].includes(v)) return "degraded";
   if (["error", "down", "failed", "fail"].includes(v)) return "error";
   return "neutral";
-}
-
-function moneyBDT(n) {
-  const x = Number(n ?? 0);
-  if (!Number.isFinite(x)) return "৳ 0";
-  return `৳ ${x.toLocaleString("en-BD", { maximumFractionDigits: 2 })}`;
 }
 
 /* --------------------------------- UI bits -------------------------------- */
@@ -182,6 +172,7 @@ async function fetchJson(url, { timeoutMs = 12000 } = {}) {
     const res = await fetch(url, {
       method: "GET",
       cache: "no-store",
+      credentials: "same-origin",
       signal: ctrl.signal,
       headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
     });
@@ -211,6 +202,7 @@ async function probeUrl(url, { timeoutMs = 12000, readPreview = true } = {}) {
     const res = await fetch(url, {
       method: "GET",
       cache: "no-store",
+      credentials: "same-origin",
       redirect: "manual",
       signal: ctrl.signal,
       headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
@@ -244,8 +236,8 @@ function isAllowedStatus(http, allow = []) {
  * Probes cover "entire website surface":
  * - Customer core pages
  * - SEO endpoints
- * - Health endpoints (api)
- * - Admin endpoints (expected auth/redirect)
+ * - ADMIN APIs (admin namespace only)
+ * - Admin pages
  * - Public /health is expected NOT to exist (404 OK) to prevent indexing leak
  */
 function buildDefaultProbes(origin) {
@@ -265,14 +257,14 @@ function buildDefaultProbes(origin) {
     { key: "sitemap_server", label: "server-sitemap.xml", path: "/server-sitemap.xml", expect: "public" },
     { key: "sitemap_blog", label: "sitemap-blog.xml", path: "/sitemap-blog.xml", expect: "public" },
 
-    // Health APIs
-    { key: "api_health", label: "/api/health", path: "/api/health", expect: "internal_api" },
-    { key: "api_health_summary", label: "/api/health/summary", path: "/api/health/summary?include=all", expect: "internal_api" },
-    { key: "api_health_queue", label: "/api/health/queue", path: "/api/health/queue", expect: "internal_api" },
+    // ADMIN APIs (no public /api/health)
+    { key: "api_admin_session", label: "/api/admin/session", path: "/api/admin/session", expect: "admin_api" },
+    { key: "api_admin_health", label: "/api/admin/health", path: "/api/admin/health", expect: "admin_api" },
+    { key: "api_admin_health_queue", label: "/api/admin/health/queue", path: "/api/admin/health/queue", expect: "admin_api" },
 
-    // Admin surface: auth/redirect expected (or 200 if already authenticated)
-    { key: "admin_root", label: "/admin", path: "/admin", expect: "admin" },
-    { key: "admin_health", label: "/admin/health", path: "/admin/health", expect: "admin" },
+    // Admin pages
+    { key: "admin_root", label: "/admin", path: "/admin", expect: "admin_page" },
+    { key: "admin_health", label: "/admin/health", path: "/admin/health", expect: "admin_page" },
 
     // IMPORTANT: public /health should NOT exist (404 is GOOD)
     { key: "public_health_should_404", label: "/health (must not exist)", path: "/health", expect: "must404" },
@@ -290,12 +282,12 @@ export default function HealthClient() {
   // RBAC
   const [perms, setPerms] = useState(null);
 
-  // Health data (merged)
-  const [summary, setSummary] = useState(null); // /api/health/summary
-  const [health, setHealth] = useState(null); // /api/health
+  // Health data (admin)
+  const [summary, setSummary] = useState(null); // kept for backward UI model; admin endpoint fills "health"
+  const [health, setHealth] = useState(null); // /api/admin/health
   const [healthLoading, setHealthLoading] = useState(true);
 
-  // Queues
+  // Queues (admin)
   const [queueSnapshot, setQueueSnapshot] = useState(null);
   const [queueLoading, setQueueLoading] = useState(true);
   const [queueBusyAction, setQueueBusyAction] = useState("");
@@ -334,11 +326,7 @@ export default function HealthClient() {
 
   const permSet = useMemo(() => new Set((perms || []).map((p) => String(p || "").trim().toUpperCase())), [perms]);
 
-  const canView =
-    permSet.has("VIEW_HEALTH") ||
-    permSet.has("MANAGE_SETTINGS") ||
-    permSet.has("VIEW_DEV_TOOLS");
-
+  const canView = permSet.has("VIEW_HEALTH") || permSet.has("MANAGE_SETTINGS") || permSet.has("VIEW_DEV_TOOLS");
   const canManage = permSet.has("MANAGE_SETTINGS");
 
   /* ---------- data loaders ---------- */
@@ -348,28 +336,19 @@ export default function HealthClient() {
     setHealthLoading(true);
 
     try {
-      // Prefer /api/health/summary; fall back to /api/health
-      const [a, b] = await Promise.all([
-        fetchJson("/api/health/summary?include=all", { timeoutMs: 14000 }),
-        fetchJson("/api/health", { timeoutMs: 14000 }),
-      ]);
+      // ADMIN ONLY: /api/admin/health
+      const r = await fetchJson("/api/admin/health", { timeoutMs: 20000 });
 
       if (!mountedRef.current) return;
 
-      // summary may not exist; keep it nullable
-      setSummary(a.ok && a.json ? a.json : null);
+      // Keep summary nullable (no public endpoints)
+      setSummary(null);
 
-      // /api/health is your canonical "legacy" health endpoint in the earlier page
-      // keep it nullable too
-      setHealth(b.ok && b.json ? b.json : (b.json ? b.json : null));
+      // Canonical admin health payload
+      setHealth(r.ok && r.json ? r.json : null);
 
-      // If both failed, surface best error we can
-      if ((!a.ok || !a.json) && (!b.ok || !b.json)) {
-        const msg =
-          a.error ||
-          b.error ||
-          (a.text && a.text.slice ? a.text.slice(0, 160) : "") ||
-          "Failed to load health endpoints.";
+      if (!r.ok || !r.json) {
+        const msg = r.error || (r.text && r.text.slice ? r.text.slice(0, 160) : "") || "Failed to load /api/admin/health.";
         setErr(String(msg));
       }
     } catch (e) {
@@ -383,7 +362,7 @@ export default function HealthClient() {
   const loadQueues = useCallback(async () => {
     setQueueLoading(true);
     try {
-      const r = await fetchJson("/api/health/queue", { timeoutMs: 14000 });
+      const r = await fetchJson("/api/admin/health/queue", { timeoutMs: 20000 });
       if (!mountedRef.current) return;
       if (!r.ok || !r.json) throw new Error((r.json && r.json.error) || "queue snapshot failed");
       setQueueSnapshot(r.json);
@@ -403,8 +382,9 @@ export default function HealthClient() {
       setQueueBusyAction(key);
 
       try {
-        const res = await fetch("/api/health/queue", {
+        const res = await fetch("/api/admin/health/queue", {
           method: "POST",
+          credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: kind, queue: queueName }),
         });
@@ -449,8 +429,8 @@ export default function HealthClient() {
         if (p.expect === "must404") {
           ok = r.http === 404;
           note = ok ? "Correct: route not present (prevents public indexing)" : "Unexpected: route exists (should be removed)";
-        } else if (p.expect === "admin") {
-          // admin is allowed to be 200 (already authed) OR redirect/auth gated
+        } else if (p.expect === "admin_page") {
+          // admin page: ok if authed (200) or auth gate/redirect
           ok = isAllowedStatus(r.http, [200, 301, 302, 303, 307, 308, 401, 403]);
           note =
             st === "auth"
@@ -460,8 +440,9 @@ export default function HealthClient() {
               : st === "ok"
               ? "OK"
               : "Unexpected response";
-        } else if (p.expect === "internal_api") {
-          // APIs: allow 200 or auth gate (depends on your setup)
+        } else if (p.expect === "admin_api") {
+          // admin API should be reachable for authorized admin (200).
+          // 401/403 may occur depending on your admin session behavior; 404 is NOT OK here.
           ok = isAllowedStatus(r.http, [200, 401, 403]);
           note =
             st === "auth"
@@ -553,7 +534,13 @@ export default function HealthClient() {
   }, [summary, health]);
 
   const statusKey =
-    canonical.status === "ok" ? "ok" : canonical.status === "degraded" ? "degraded" : canonical.status === "error" ? "error" : "unknown";
+    canonical.status === "ok"
+      ? "ok"
+      : canonical.status === "degraded"
+      ? "degraded"
+      : canonical.status === "error"
+      ? "error"
+      : "unknown";
 
   const theme = STATUS_COLORS[statusKey] || STATUS_COLORS.unknown;
 
@@ -758,7 +745,8 @@ export default function HealthClient() {
   const sub = "text-sm";
 
   const headerGradient = {
-    background: "radial-gradient(1200px 360px at 12% 0%, rgba(15,33,71,0.15) 0%, rgba(255,255,255,0) 55%), linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.90) 100%)",
+    background:
+      "radial-gradient(1200px 360px at 12% 0%, rgba(15,33,71,0.15) 0%, rgba(255,255,255,0) 55%), linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.90) 100%)",
   };
 
   return (
@@ -785,14 +773,8 @@ export default function HealthClient() {
                 Admin Health
               </div>
               <Badge tone={toneFromStatus(canonical.status)} text={String(canonical.status || "unknown").toUpperCase()} />
-              <Badge
-                tone={probeSummary.bad === 0 ? "ok" : "degraded"}
-                text={`WEBSITE: ${probeSummary.ok}/${probeSummary.total} OK`}
-              />
-              <Badge
-                tone={seoAudit.leakedAdmin ? "error" : "ok"}
-                text={seoAudit.leakedAdmin ? "SITEMAP ADMIN LEAK" : "SITEMAP CLEAN"}
-              />
+              <Badge tone={probeSummary.bad === 0 ? "ok" : "degraded"} text={`WEBSITE: ${probeSummary.ok}/${probeSummary.total} OK`} />
+              <Badge tone={seoAudit.leakedAdmin ? "error" : "ok"} text={seoAudit.leakedAdmin ? "SITEMAP ADMIN LEAK" : "SITEMAP CLEAN"} />
             </div>
 
             <div className="text-sm" style={{ color: MUTED }}>
@@ -826,12 +808,7 @@ export default function HealthClient() {
             <PillButton subtle icon="📋" label="Copy JSON" onClick={copyRaw} title="Copy full report JSON" />
             <PillButton subtle icon="💾" label="Download" onClick={downloadRaw} title="Download full report JSON" />
             <label className="ml-1 inline-flex items-center gap-2 text-sm font-semibold" style={{ color: "#111827" }}>
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="h-4 w-4"
-              />
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="h-4 w-4" />
               Auto-refresh (30s)
             </label>
           </div>
@@ -887,11 +864,7 @@ export default function HealthClient() {
 
         {(err || queueMsg) && (
           <div className="mt-4 space-y-2">
-            {err && (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
-                {clampStr(err, 400)}
-              </div>
-            )}
+            {err && <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{clampStr(err, 400)}</div>}
             {queueMsg && (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
                 {queueMsg}
@@ -906,7 +879,9 @@ export default function HealthClient() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {/* Build */}
           <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
-            <div className={h2} style={{ color: NAVY }}>Build</div>
+            <div className={h2} style={{ color: NAVY }}>
+              Build
+            </div>
             <div className="mt-3 grid grid-cols-[160px_1fr] gap-x-3 gap-y-2 text-sm">
               <div style={{ color: MUTED }}>App Version</div>
               <div className="font-mono text-xs">{canonical.version?.app || canonical.version?.version || "—"}</div>
@@ -930,7 +905,9 @@ export default function HealthClient() {
 
           {/* Environment */}
           <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
-            <div className={h2} style={{ color: NAVY }}>Environment</div>
+            <div className={h2} style={{ color: NAVY }}>
+              Environment
+            </div>
             <div className="mt-3 grid grid-cols-[160px_1fr] gap-x-3 gap-y-2 text-sm">
               <div style={{ color: MUTED }}>NODE_ENV</div>
               <div className="font-mono text-xs">{canonical.env?.node_env || "—"}</div>
@@ -954,34 +931,16 @@ export default function HealthClient() {
 
           {/* Quick Flags */}
           <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
-            <div className={h2} style={{ color: NAVY }}>Audit Flags</div>
+            <div className={h2} style={{ color: NAVY }}>
+              Audit Flags
+            </div>
 
             <div className="mt-3 flex flex-col gap-2">
-              <FlagRow
-                label={<>Public sitemap leaking <b>/admin</b></>}
-                tone={seoAudit.leakedAdmin ? "error" : "ok"}
-                value={seoAudit.leakedAdmin ? "LEAK" : "CLEAN"}
-              />
-              <FlagRow
-                label={<>Public sitemap contains <b>/health</b></>}
-                tone={seoAudit.leakedHealth ? "degraded" : "ok"}
-                value={seoAudit.leakedHealth ? "FOUND" : "NOT FOUND"}
-              />
-              <FlagRow
-                label={<>robots.txt disallows <b>/admin</b></>}
-                tone={seoAudit.robotsHasDisallowAdmin ? "ok" : "degraded"}
-                value={seoAudit.robotsHasDisallowAdmin ? "YES" : "NO"}
-              />
-              <FlagRow
-                label={<>robots.txt disallows <b>/api</b></>}
-                tone={seoAudit.robotsHasDisallowApi ? "ok" : "degraded"}
-                value={seoAudit.robotsHasDisallowApi ? "YES" : "NO"}
-              />
-              <FlagRow
-                label={<>Sitemap host mismatch</>}
-                tone={seoAudit.hostMismatch ? "degraded" : "ok"}
-                value={seoAudit.hostMismatch ? "CHECK" : "OK"}
-              />
+              <FlagRow label={<>Public sitemap leaking <b>/admin</b></>} tone={seoAudit.leakedAdmin ? "error" : "ok"} value={seoAudit.leakedAdmin ? "LEAK" : "CLEAN"} />
+              <FlagRow label={<>Public sitemap contains <b>/health</b></>} tone={seoAudit.leakedHealth ? "degraded" : "ok"} value={seoAudit.leakedHealth ? "FOUND" : "NOT FOUND"} />
+              <FlagRow label={<>robots.txt disallows <b>/admin</b></>} tone={seoAudit.robotsHasDisallowAdmin ? "ok" : "degraded"} value={seoAudit.robotsHasDisallowAdmin ? "YES" : "NO"} />
+              <FlagRow label={<>robots.txt disallows <b>/api</b></>} tone={seoAudit.robotsHasDisallowApi ? "ok" : "degraded"} value={seoAudit.robotsHasDisallowApi ? "YES" : "NO"} />
+              <FlagRow label={<>Sitemap host mismatch</>} tone={seoAudit.hostMismatch ? "degraded" : "ok"} value={seoAudit.hostMismatch ? "CHECK" : "OK"} />
             </div>
           </div>
 
@@ -1025,11 +984,21 @@ export default function HealthClient() {
               <table className="w-full text-left">
                 <thead>
                   <tr style={{ background: "#F6F6F6" }}>
-                    <th className="px-3 py-3 text-xs font-extrabold" style={{ color: "#111827" }}>Check</th>
-                    <th className="px-3 py-3 text-xs font-extrabold" style={{ color: "#111827" }}>Result</th>
-                    <th className="px-3 py-3 text-right text-xs font-extrabold" style={{ color: "#111827" }}>Status</th>
-                    <th className="px-3 py-3 text-right text-xs font-extrabold" style={{ color: "#111827" }}>Latency</th>
-                    <th className="px-3 py-3 text-xs font-extrabold" style={{ color: "#111827" }}>Error</th>
+                    <th className="px-3 py-3 text-xs font-extrabold" style={{ color: "#111827" }}>
+                      Check
+                    </th>
+                    <th className="px-3 py-3 text-xs font-extrabold" style={{ color: "#111827" }}>
+                      Result
+                    </th>
+                    <th className="px-3 py-3 text-right text-xs font-extrabold" style={{ color: "#111827" }}>
+                      Status
+                    </th>
+                    <th className="px-3 py-3 text-right text-xs font-extrabold" style={{ color: "#111827" }}>
+                      Latency
+                    </th>
+                    <th className="px-3 py-3 text-xs font-extrabold" style={{ color: "#111827" }}>
+                      Error
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1092,22 +1061,17 @@ export default function HealthClient() {
         <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className={h2} style={{ color: NAVY }}>Website Probes</div>
+              <div className={h2} style={{ color: NAVY }}>
+                Website Probes
+              </div>
               <div className={sub} style={{ color: MUTED }}>
-                Live route checks across customer pages, SEO, internal APIs, and admin routes.
+                Live route checks across customer pages, SEO, and <b>admin endpoints</b>.
                 Admin endpoints may return <b>3xx/401/403</b> (expected depending on auth). Public <b>/health</b> must be <b>404</b>.
               </div>
             </div>
 
             <div className="no-print flex items-center gap-2">
-              <PillButton
-                subtle
-                icon="🧪"
-                label={probing ? "Probing…" : "Re-run probes"}
-                disabled={probing}
-                onClick={runProbes}
-                title="Re-run route probes"
-              />
+              <PillButton subtle icon="🧪" label={probing ? "Probing…" : "Re-run probes"} disabled={probing} onClick={runProbes} title="Re-run route probes" />
             </div>
           </div>
 
@@ -1125,8 +1089,7 @@ export default function HealthClient() {
               <tbody>
                 {probes.map((p) => {
                   const st = statusFromHttp(p.http);
-                  const tone =
-                    p.ok ? "ok" : st === "redirect" || st === "auth" || st === "notfound" ? "degraded" : "error";
+                  const tone = p.ok ? "ok" : st === "redirect" || st === "auth" || st === "notfound" ? "degraded" : "error";
 
                   return (
                     <tr key={p.key} className="no-break border-t" style={{ borderColor: "#EEE" }}>
@@ -1168,7 +1131,9 @@ export default function HealthClient() {
       {tab === "seo" && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
-            <div className={h2} style={{ color: NAVY }}>Sitemap Auditor</div>
+            <div className={h2} style={{ color: NAVY }}>
+              Sitemap Auditor
+            </div>
             <div className="mt-1 text-sm" style={{ color: MUTED }}>
               Counts & samples from each sitemap. Flags leaks like <b>/admin</b> or <b>/health</b> and host mismatch.
             </div>
@@ -1195,7 +1160,9 @@ export default function HealthClient() {
 
                   {s.sample?.length ? (
                     <div className="mt-2 rounded-xl border p-2" style={{ borderColor: "#EEE", background: "#FAFAFA" }}>
-                      <div className="mb-1 text-xs font-extrabold" style={{ color: NAVY }}>Sample URLs</div>
+                      <div className="mb-1 text-xs font-extrabold" style={{ color: NAVY }}>
+                        Sample URLs
+                      </div>
                       <ul className="space-y-1 text-xs font-mono" style={{ color: "#111827" }}>
                         {s.sample.map((u, i) => (
                           <li key={i}>{clampStr(u, 130)}</li>
@@ -1213,7 +1180,9 @@ export default function HealthClient() {
 
             {(seoAudit.leakedAdmin || seoAudit.leakedHealth) && (
               <div className="mt-4 rounded-2xl border p-3" style={{ borderColor: "#FFCDD2", background: "#FFEBEE" }}>
-                <div className="text-sm font-extrabold" style={{ color: "#B71C1C" }}>Action Required</div>
+                <div className="text-sm font-extrabold" style={{ color: "#B71C1C" }}>
+                  Action Required
+                </div>
                 <div className="mt-1 text-sm" style={{ color: "#B71C1C" }}>
                   Public sitemap is exposing internal routes.
                   {seoAudit.leakedHealth ? (
@@ -1232,14 +1201,18 @@ export default function HealthClient() {
           </div>
 
           <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
-            <div className={h2} style={{ color: NAVY }}>robots.txt Preview</div>
+            <div className={h2} style={{ color: NAVY }}>
+              robots.txt Preview
+            </div>
             <div className="mt-1 text-sm" style={{ color: MUTED }}>
               Ensure <b>Disallow: /admin/</b> exists (and ideally <b>/api/</b>). Admin must be excluded from indexing.
             </div>
 
             <div className="mt-4 rounded-2xl border p-3" style={{ borderColor: "#EEE", background: "#FAFAFA" }}>
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-sm font-extrabold" style={{ color: NAVY }}>robots.txt</div>
+                <div className="text-sm font-extrabold" style={{ color: NAVY }}>
+                  robots.txt
+                </div>
                 <div className="flex items-center gap-2">
                   <Badge tone={seoAudit.robotsHasDisallowAdmin ? "ok" : "degraded"} text={seoAudit.robotsHasDisallowAdmin ? "DISALLOW /admin OK" : "MISSING /admin"} />
                   <Badge tone={seoAudit.robotsHasDisallowApi ? "ok" : "degraded"} text={seoAudit.robotsHasDisallowApi ? "DISALLOW /api OK" : "MISSING /api"} />
@@ -1258,39 +1231,28 @@ export default function HealthClient() {
         <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className={h2} style={{ color: NAVY }}>Job Queues & Background Workers</div>
+              <div className={h2} style={{ color: NAVY }}>
+                Job Queues & Background Workers
+              </div>
               <div className="text-sm" style={{ color: MUTED }}>
-                Snapshot + controls via <code>/api/health/queue</code>. Actions require <b>MANAGE_SETTINGS</b>.
+                Snapshot + controls via <code>/api/admin/health/queue</code>. Actions require <b>MANAGE_SETTINGS</b>.
               </div>
             </div>
 
             <div className="no-print flex items-center gap-2">
-              <PillButton
-                subtle
-                icon="⟳"
-                label={queueLoading ? "Loading…" : "Refresh queues"}
-                disabled={queueLoading}
-                onClick={loadQueues}
-                title="Reload queue snapshot"
-              />
+              <PillButton subtle icon="⟳" label={queueLoading ? "Loading…" : "Refresh queues"} disabled={queueLoading} onClick={loadQueues} title="Reload queue snapshot" />
             </div>
           </div>
 
           <div className="mt-4">
             {queues.length === 0 ? (
               <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: "#EEE", color: MUTED }}>
-                No queues reported yet. Ensure your queue layer reports into <code>/api/health/queue</code>.
+                No queues reported yet. Ensure your admin queue endpoint exists at <code>/api/admin/health/queue</code>.
               </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2">
                 {queues.map((q) => (
-                  <QueueCard
-                    key={q.name}
-                    queue={q}
-                    canManage={canManage}
-                    busyAction={queueBusyAction}
-                    onAction={queueAction}
-                  />
+                  <QueueCard key={q.name} queue={q} canManage={canManage} busyAction={queueBusyAction} onAction={queueAction} />
                 ))}
               </div>
             )}
@@ -1301,9 +1263,11 @@ export default function HealthClient() {
       {/* RAW */}
       {tab === "raw" && (
         <div className={`${panel} p-4`} style={{ borderColor: BORDER }}>
-          <div className={h2} style={{ color: NAVY }}>Raw JSON</div>
+          <div className={h2} style={{ color: NAVY }}>
+            Raw JSON
+          </div>
           <div className="mt-1 text-sm" style={{ color: MUTED }}>
-            Full payload from <code>/api/health/summary</code> (if available) and <code>/api/health</code>, plus probes and queues.
+            Full payload from <code>/api/admin/health</code>, plus probes and queues.
           </div>
 
           <div className="mt-4 rounded-2xl border p-3" style={{ borderColor: "#EEE", background: "#0B1220" }}>
@@ -1336,7 +1300,9 @@ function FlagRow({ label, tone, value }) {
   };
   return (
     <div className="flex items-center justify-between gap-3">
-      <div className="text-sm" style={{ color: MUTED }}>{label}</div>
+      <div className="text-sm" style={{ color: MUTED }}>
+        {label}
+      </div>
       <Badge tone={map[tone] || "neutral"} text={value} />
     </div>
   );
@@ -1345,14 +1311,30 @@ function FlagRow({ label, tone, value }) {
 function QueueCard({ queue, canManage, busyAction, onAction }) {
   const activeDepth = typeof queue.depth === "number" ? queue.depth : queue.size;
 
-  const actions = [
-    { key: "rerun", label: "Rerun" },
-    { key: "retry", label: "Retry failed" },
-    { key: "drain", label: "Drain" },
-    { key: "pause", label: "Pause" },
-    { key: "resume", label: "Resume" },
-    { key: "clearfailed", label: "Clear failed" },
-  ];
+  // No guessing:
+  // - If API provides allowed actions, use them
+  // - Otherwise default to the minimal safe set used by the original queue route (rerun/drain/retry)
+  const rawAllowed =
+    (Array.isArray(queue.allowedActions) && queue.allowedActions) ||
+    (Array.isArray(queue.actions) && queue.actions) ||
+    null;
+
+  const normalizedAllowed = rawAllowed
+    ? rawAllowed
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter(Boolean)
+    : ["rerun", "retry", "drain"];
+
+  const labelMap = {
+    rerun: "Rerun",
+    retry: "Retry",
+    drain: "Drain",
+    pause: "Pause",
+    resume: "Resume",
+    clearfailed: "Clear failed",
+  };
+
+  const actions = normalizedAllowed.map((k) => ({ key: k, label: labelMap[k] || k }));
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
@@ -1361,20 +1343,16 @@ function QueueCard({ queue, canManage, busyAction, onAction }) {
           <div className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
             {queue.label || queue.name}
             {queue.paused ? (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold text-amber-800">
-                Paused
-              </span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold text-amber-800">Paused</span>
             ) : null}
           </div>
 
           <div className="mt-1 text-[12px] text-slate-700">
-            Depth: <b>{activeDepth ?? 0}</b> · Failed: <b>{queue.failed ?? queue.failedCount ?? 0}</b> · Delayed:{" "}
-            <b>{queue.delayed ?? 0}</b>
+            Depth: <b>{activeDepth ?? 0}</b> · Failed: <b>{queue.failed ?? queue.failedCount ?? 0}</b> · Delayed: <b>{queue.delayed ?? 0}</b>
           </div>
 
           <div className="mt-1 text-[11px] text-slate-600">
-            Concurrency: <b>{queue.concurrency ?? "—"}</b> · Last run:{" "}
-            <b>{queue.lastRunAt ? new Date(queue.lastRunAt).toLocaleString() : "—"}</b>
+            Concurrency: <b>{queue.concurrency ?? "—"}</b> · Last run: <b>{queue.lastRunAt ? new Date(queue.lastRunAt).toLocaleString() : "—"}</b>
           </div>
         </div>
       </div>

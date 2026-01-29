@@ -68,9 +68,12 @@ const STRAPI_SYNC_SECRET = (
 ).trim();
 
 // Token for Strapi REST (optional; will be ignored if invalid)
+// (kept your originals, plus safe extra fallbacks — still optional)
 const STRAPI_TOKEN = (
   process.env.STRAPI_API_TOKEN ||
   process.env.STRAPI_GRAPHQL_TOKEN ||
+  process.env.STRAPI_TOKEN ||
+  process.env.STRAPI_READ_TOKEN ||
   ""
 ).trim();
 
@@ -112,6 +115,15 @@ function normalizeStrapiPath(input) {
 
   // Ensure leading slash
   return p.startsWith("/") ? p : `/${p}`;
+}
+
+function fetchWithTimeout(url, options, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+    clearTimeout(t)
+  );
 }
 
 /**
@@ -156,8 +168,7 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
 
       for (const s of sizes) {
         // support multiple styles of id storage
-        const rawId =
-          s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
+        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
 
         const sid = Number(rawId);
         if (Number.isFinite(sid) && sid > 0) {
@@ -328,51 +339,61 @@ export async function GET(req) {
 
     let res;
 
+    const timeoutMs = 15000;
+
     if (STRAPI_TOKEN) {
       const headersWithToken = {
         ...baseHeaders,
         Authorization: `Bearer ${STRAPI_TOKEN}`,
       };
 
-      res = await fetch(target, {
-        method: "GET",
-        headers: headersWithToken,
-        cache: "no-store",
-      });
+      res = await fetchWithTimeout(
+        target,
+        { method: "GET", headers: headersWithToken, cache: "no-store" },
+        timeoutMs
+      );
 
       // If Strapi says "Missing or invalid credentials", retry WITHOUT Authorization
       if (res.status === 401) {
         console.warn(
           "[strapi-proxy] Got 401 with token, retrying without Authorization header"
         );
-        res = await fetch(target, {
-          method: "GET",
-          headers: baseHeaders,
-          cache: "no-store",
-        });
+        res = await fetchWithTimeout(
+          target,
+          { method: "GET", headers: baseHeaders, cache: "no-store" },
+          timeoutMs
+        );
       }
     } else {
       // No token configured – just call public endpoint
-      res = await fetch(target, {
-        method: "GET",
-        headers: baseHeaders,
-        cache: "no-store",
-      });
+      res = await fetchWithTimeout(
+        target,
+        { method: "GET", headers: baseHeaders, cache: "no-store" },
+        timeoutMs
+      );
     }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+
+      // ✅ FIX: return the REAL upstream status (401/403/404/500...),
+      // instead of collapsing everything into 502.
+      const upstreamStatus =
+        Number(res.status) && Number.isFinite(Number(res.status))
+          ? Number(res.status)
+          : 502;
+
       return j(
         {
           ok: false,
           error: "STRAPI_PROXY_ERROR",
-          status: res.status,
+          status: upstreamStatus,
           statusText: res.statusText,
           message: "Strapi request failed",
           details: text || null,
           target: IS_PROD ? undefined : target, // avoid leaking internal target in prod
         },
-        502
+        upstreamStatus
       );
     }
 
@@ -395,7 +416,26 @@ export async function GET(req) {
     // This keeps compatibility with fetchProductsFromStrapi and other helpers.
     return j({ ok: true, data }, 200);
   } catch (err) {
+    const msg = String(err?.message || err || "");
+    const isAbort =
+      msg.toLowerCase().includes("aborted") ||
+      msg.toLowerCase().includes("abort") ||
+      msg.toLowerCase().includes("timeout");
+
     console.error("STRAPI PROXY FATAL ERROR:", err);
+
+    // ✅ FIX: timeouts / upstream unreachable should be 503 (not 500)
+    if (isAbort) {
+      return j(
+        {
+          ok: false,
+          error: "STRAPI_UNREACHABLE",
+          message: "Strapi upstream timed out or could not be reached",
+        },
+        503
+      );
+    }
+
     return j(
       { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed" },
       500

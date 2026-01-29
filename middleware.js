@@ -1,4 +1,4 @@
-// FILE: my-project/middleware.js
+//FULL FILE: my-project/middleware.js
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
@@ -283,7 +283,7 @@ const ADMIN_SECRET =
 /**
  * Legacy admin cookie fallback (for migration only)
  * Supports: otp_session_admin, admin_session, tdlc_a_otp
- * Verified using OTP_SECRET and requires payload.scope === "admin"
+ * Verified using small secret-set and rejects explicit non-admin scopes
  */
 const LEGACY_ADMIN_OTP_COOKIE_PRIMARY = "otp_session_admin";
 const LEGACY_ADMIN_SESSION_COOKIE_PRIMARY = "admin_session";
@@ -329,12 +329,57 @@ function constantTimeEqual(a, b) {
   return ok === 0;
 }
 
-async function verifyLegacyAdminOtpJwt(tokenRaw) {
-  const OTP_SECRET = String(process.env.OTP_SECRET || "").trim();
-  if (!OTP_SECRET) return null;
+function legacyAdminSecrets() {
+  // Align with your /api/admin/session logic: try a small deterministic set.
+  const out = [];
+  const push = (v) => {
+    const s = String(v || "").trim();
+    if (s) out.push(s);
+  };
+  push(process.env.ADMIN_AUTH_SECRET);
+  push(process.env.OTP_SECRET);
+  push(process.env.AUTH_SECRET);
+  push(process.env.NEXTAUTH_SECRET);
+  push(process.env.CUSTOMER_AUTH_SECRET); // harmless; scope check will reject customer tokens
+  return Array.from(new Set(out));
+}
 
-  const token = String(tokenRaw || "").trim();
-  const parts = token.split(".");
+function extractLegacyScope(payload) {
+  const s = String(
+    payload?.scope || payload?.tdlcScope || payload?.scp || ""
+  ).toLowerCase();
+  return s || null;
+}
+
+function extractLegacyUid(payload) {
+  const uid =
+    payload?.uid ||
+    payload?.userId ||
+    payload?.sub ||
+    payload?.user?.id ||
+    payload?.adminId ||
+    payload?.id ||
+    null;
+  const v = String(uid || "").trim();
+  return v || null;
+}
+
+function extractLegacyExpMs(payload) {
+  const raw =
+    payload?.exp ??
+    payload?.expiresAt ??
+    payload?.expires ??
+    payload?.expiry ??
+    null;
+
+  let expMs = Number(raw);
+  if (!Number.isFinite(expMs) || expMs <= 0) return null;
+  if (expMs < 1e12) expMs = expMs * 1000;
+  return expMs;
+}
+
+async function verifyHs256JwtWithSecret(token, secret) {
+  const parts = String(token || "").trim().split(".");
   if (parts.length !== 3) return null;
 
   const [h, p, sig] = parts;
@@ -342,7 +387,7 @@ async function verifyLegacyAdminOtpJwt(tokenRaw) {
   try {
     const key = await crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode(OTP_SECRET),
+      new TextEncoder().encode(String(secret || "")),
       { name: "HMAC", hash: "SHA-256" },
       false,
       ["sign"]
@@ -360,16 +405,42 @@ async function verifyLegacyAdminOtpJwt(tokenRaw) {
 
   const payload = safeJsonParseUint8(b64UrlToUint8(p));
   if (!payload || typeof payload !== "object") return null;
+  return payload;
+}
 
-  if (payload.scope !== "admin") return null;
+async function verifyLegacyAdminOtpJwt(tokenRaw) {
+  const token = String(tokenRaw || "").trim();
+  if (!token) return null;
 
-  const uid = payload.uid ? String(payload.uid) : "";
+  const secrets = legacyAdminSecrets();
+  if (!secrets.length) return null;
+
+  let payload = null;
+  for (const sec of secrets) {
+    // eslint-disable-next-line no-await-in-loop
+    const p = await verifyHs256JwtWithSecret(token, sec);
+    if (p) {
+      payload = p;
+      break;
+    }
+  }
+  if (!payload) return null;
+
+  // If scope is explicitly present, it MUST be admin. If absent, allow (legacy admin cookies only).
+  const scope = extractLegacyScope(payload);
+  if (scope && scope !== "admin") return null;
+
+  const uid = extractLegacyUid(payload);
   if (!uid) return null;
 
-  let expMs = Number(payload.exp);
-  if (!Number.isFinite(expMs) || expMs <= 0) return null;
-  if (expMs < 1e12) expMs = expMs * 1000;
+  const expMs = extractLegacyExpMs(payload);
+  if (!expMs) return null;
   if (Date.now() >= expMs) return null;
+
+  // normalize for downstream usage
+  payload.uid = payload.uid || uid;
+  payload.scope = payload.scope || scope || "admin";
+  payload.exp = payload.exp || Math.floor(expMs / 1000);
 
   return payload;
 }
@@ -437,10 +508,21 @@ async function getAdminAuth(req) {
 
   const isAuthed = !!payload;
 
+  const legacyUid = payload
+    ? String(
+        payload.uid ||
+          payload.userId ||
+          payload.sub ||
+          payload.adminId ||
+          payload.id ||
+          ""
+      ).trim()
+    : "";
+
   return {
     isAuthed,
     source: isAuthed ? "admin_legacy" : "none",
-    uid: isAuthed ? String(payload.uid || "") : "",
+    uid: isAuthed ? legacyUid : "",
     token: payload || null,
     roleHint,
     hasRole: !!roleHint,
@@ -461,6 +543,18 @@ async function getCustomerAuth(req) {
   if (scope === "admin") return { isAuthed: false, token: null };
 
   return { isAuthed: true, token: t };
+}
+
+function acceptsJson(req) {
+  const a = String(req.headers.get("accept") || "").toLowerCase();
+  return a.includes("application/json") || a.includes("+json") || a.includes("text/json");
+}
+
+function isLikelyFetch(req) {
+  const dest = String(req.headers.get("sec-fetch-dest") || "").toLowerCase();
+  // "document" usually indicates navigation; "empty" is common for fetch/XHR.
+  if (!dest) return false;
+  return dest !== "document";
 }
 
 export default async function middleware(req) {
@@ -492,6 +586,27 @@ export default async function middleware(req) {
     }
   }
 
+  /**
+   * FIX: If Admin Health UI (or Raw JSON panel) accidentally hits /admin/health/<x>
+   * expecting JSON, Next will return HTML. Rewrite ONLY when request expects JSON/fetch.
+   * Keeps /admin/health page behavior unchanged.
+   */
+  if (pathname.startsWith("/admin/health/") && pathname !== "/admin/health") {
+    if (acceptsJson(req) || isLikelyFetch(req)) {
+      const r = url.clone();
+      r.pathname = pathname.replace(/^\/admin\/health\//, "/api/admin/health/");
+      const res = NextResponse.rewrite(r);
+      try {
+        res.headers.set("x-tdlc-health-rewrite", "admin_page -> api_admin_health");
+        res.headers.set("cache-control", "no-store, max-age=0");
+        res.headers.set("pragma", "no-cache");
+        res.headers.set("expires", "0");
+        res.headers.set("vary", "Cookie");
+      } catch {}
+      return res;
+    }
+  }
+
   // Admin NextAuth endpoints must be public
   if (pathname.startsWith("/api/admin/auth/")) {
     return noStoreNext({ "x-tdlc-auth-plane": "admin" });
@@ -511,14 +626,20 @@ export default async function middleware(req) {
 
     // Strong intent signals (do NOT rely only on presence of admin cookie)
     const strongAdminIntent =
-      hdrScope === "admin" || adminCallbackSignal(url) || refererPath(req).startsWith("/admin");
+      hdrScope === "admin" ||
+      adminCallbackSignal(url) ||
+      refererPath(req).startsWith("/admin");
 
     if ((strongAdminIntent || adminSig) && !hasCustomerCookie) {
       return rewriteCustomerAuthToAdminAuth(req, url);
     }
 
     return noStoreNext({
-      "x-tdlc-auth-plane": hasCustomerCookie ? "customer" : adminSig ? "customer_ambiguous" : "customer_default",
+      "x-tdlc-auth-plane": hasCustomerCookie
+        ? "customer"
+        : adminSig
+        ? "customer_ambiguous"
+        : "customer_default",
     });
   }
 
@@ -626,12 +747,24 @@ export default async function middleware(req) {
     // Allow explicit logout handler if you have one
     if (pathname === "/api/admin/logout") return noStoreNext();
 
+    /**
+     * FIX: /api/admin/session must be callable even when not authenticated.
+     * It reports admin session state (authenticated true/false) and is admin-plane only.
+     */
+    if (pathname === "/api/admin/session") {
+      return noStoreNext({ "x-tdlc-auth-plane": "admin_session" });
+    }
+
     if (!adminAuth.isAuthed) {
       return jsonUnauthorized({ scope: "admin", reason: "not_signed_in" });
     }
 
     // Optional: role hint check (never authenticates by itself)
-    if (adminAuth.hasRole && adminAuth.roleHint && !ADMIN_ROLES.has(adminAuth.roleHint)) {
+    if (
+      adminAuth.hasRole &&
+      adminAuth.roleHint &&
+      !ADMIN_ROLES.has(adminAuth.roleHint)
+    ) {
       return jsonForbidden({ scope: "admin", reason: "role_hint_not_allowed" });
     }
 
