@@ -504,6 +504,7 @@ const withTimeout = async (fn, ms) => {
 };
 
 const hrefToInternalPath = (href) => {
+  // Resolves absolute OR relative to same-origin. Non-http(s) schemes are rejected.
   try {
     const w = safeWindow();
     if (!w) return null;
@@ -511,14 +512,42 @@ const hrefToInternalPath = (href) => {
     const h = String(href || "").trim();
     if (!h) return null;
 
-    if (/^https?:\/\//i.test(h)) {
-      const u = new URL(h, w.location.origin);
-      if (u.origin !== w.location.origin) return null;
-      return `${u.pathname}${u.search || ""}` || null;
-    }
+    if (h.startsWith("#")) return null;
+    if (h.startsWith("//")) return null;
 
-    if (h.startsWith("/")) return h;
+    // Reject non-http(s) schemes (mailto:, tel:, javascript:, data:, etc.)
+    if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(h) && !/^https?:/i.test(h)) return null;
+
+    const u = new URL(h, w.location.origin);
+    if (u.origin !== w.location.origin) return null;
+
+    return `${u.pathname}${u.search || ""}` || null;
+  } catch {
     return null;
+  }
+};
+
+const hrefToInternalPathFromBase = (href, basePath) => {
+  // Like hrefToInternalPath but resolves relative links against the CURRENT PAGE path (HTML crawl correctness).
+  try {
+    const w = safeWindow();
+    if (!w) return null;
+
+    const h = String(href || "").trim();
+    if (!h) return null;
+
+    if (h.startsWith("#")) return null;
+    if (h.startsWith("//")) return null;
+
+    if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(h) && !/^https?:/i.test(h)) return null;
+
+    const base = canonicalPath(basePath || "/") || "/";
+    const baseDir = base === "/" ? "/" : `${base}/`;
+
+    const u = new URL(h, `${w.location.origin}${baseDir}`);
+    if (u.origin !== w.location.origin) return null;
+
+    return `${u.pathname}${u.search || ""}` || null;
   } catch {
     return null;
   }
@@ -849,8 +878,16 @@ export default function NavSearchbar({ className = "", placeholder = "Search pro
     };
 
     const buildFromSitemaps = async () => {
+      // ✅ critical fix: cached index must resolve to a SET of paths (boot expects Set), not an array of items.
       const cached = readIndexCache();
-      if (cached && cached.length) return dedupeIndex(cached);
+      if (cached && cached.length) {
+        const set = new Set();
+        for (const it of dedupeIndex(cached)) {
+          if (it?.type === "page" && it.href && isPublicNavigablePath(it.href)) set.add(it.href);
+        }
+        if (set.size >= MIN_USABLE_INDEX_ITEMS) return set;
+        // if cache is weirdly small, fall through to rebuild
+      }
 
       const sitemapQueue = [];
       const enqueued = new Set();
@@ -968,7 +1005,7 @@ export default function NavSearchbar({ className = "", placeholder = "Search pro
           const anchors = Array.from(doc.querySelectorAll("a[href]"));
           for (const a of anchors) {
             const h = a.getAttribute("href") || "";
-            const internal = hrefToInternalPath(h);
+            const internal = hrefToInternalPathFromBase(h, basePath);
             const p = internal ? sanitizeInternalHref(internal) : null;
             if (!p) continue;
             outLinks.push(p);
