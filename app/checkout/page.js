@@ -88,7 +88,6 @@ async function preloadAddressBookMeta() {
   const json = await res.json().catch(() => null);
   if (!json || !Array.isArray(json.addresses)) return null;
 
-  // Keep the shape stable for the client
   return {
     ok: !!json.ok,
     addresses: json.addresses,
@@ -101,6 +100,17 @@ export default async function Checkout() {
   // 1) read session (if signed in)
   const session = await auth().catch(() => null);
   const userId = session?.user?.id || null;
+
+  // Provide client enough session info to avoid waiting for /api/auth/session
+  const initialSessionUser = userId
+    ? {
+        id: session.user.id,
+        name: session.user.name || "",
+        email: session.user.email || "",
+        phone: session.user.phone || "",
+        phoneVerified: !!(session.user.phoneVerified || session.user.phoneVerifiedAt),
+      }
+    : null;
 
   // 2) read guest cookie (if it exists)
   const sid = await readGuestCookie();
@@ -116,6 +126,7 @@ export default async function Checkout() {
     <CheckoutPage
       serverCartId={cart?.id || null}
       initialAddressMeta={initialAddressMeta}
+      initialSessionUser={initialSessionUser}
     />
   );
 }

@@ -1,4 +1,4 @@
-// FILE: src/components/common/navbar.jsx
+//✅ FULL FILE: src/components/common/navbar.jsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -8,8 +8,10 @@ import Slidingmenubar from "@/components/common/slidingmenubar";
 import HomePanel from "@/components/common/homepanel";
 import NavSearchbar from "@/components/common/nav_searchbar";
 
+const MOBILE_MQ = "(max-width: 639px)";
+
 function HomeButton({ onClick, isActive }) {
-  const [hover, setHover] = React.useState(false);
+  const [hover, setHover] = useState(false);
   return (
     <button
       aria-label="Home"
@@ -100,31 +102,41 @@ function escapeRegExp(str) {
 }
 
 /**
- * ✅ FIX (Hooks-safe + Hydration-safe):
- * - Navbar calls ONE hook and can safely return null for admin routes.
- * - All heavy child components mount ONLY after client hydration (mounted=true),
- *   preventing server/client hook-count mismatches from children that use window/document guards.
- * - HomePanel/Slidingmenubar are conditionally mounted only when open (so they never render "closed" states).
+ * Inner navbar: all hooks always run when this component is mounted.
+ * It is ONLY mounted for non-admin routes (wrapper below).
  */
-export default function Navbar() {
-  const pathname = usePathname() || "";
-  const isAdminRoute = typeof pathname === "string" && pathname.startsWith("/admin");
-  if (isAdminRoute) return null;
-
-  return <NavbarInner pathname={pathname} />;
-}
-
 function NavbarInner({ pathname }) {
   const router = useRouter();
+
   const [mounted, setMounted] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [categories, setCategories] = useState([]);
   const [homePanelOpen, setHomePanelOpen] = useState(false);
   const headerRef = useRef(null);
 
+  // mount + mobile detector (prevents mounting NavSearchbar in mobile)
   useEffect(() => {
     setMounted(true);
+
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+
+    const mql = window.matchMedia(MOBILE_MQ);
+
+    const apply = () => setIsMobile(!!mql.matches);
+    apply();
+
+    const onChange = (e) => setIsMobile(!!e.matches);
+
+    // Safari compat
+    if (typeof mql.addEventListener === "function") mql.addEventListener("change", onChange);
+    else if (typeof mql.addListener === "function") mql.addListener(onChange);
+
+    return () => {
+      if (typeof mql.removeEventListener === "function") mql.removeEventListener("change", onChange);
+      else if (typeof mql.removeListener === "function") mql.removeListener(onChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -169,7 +181,6 @@ function NavbarInner({ pathname }) {
     if (!mounted) return;
     if (typeof document === "undefined") return;
 
-    // Legacy tokens (runtime-constructed so none remain in source)
     const LEGACY_ABBR = sFromCodes([84, 68, 76, 67]); // TDLC
     const LEGACY_ABBR_LO = LEGACY_ABBR.toLowerCase(); // tdlc
     const LEGACY_LONG = sFromCodes([
@@ -232,8 +243,8 @@ function NavbarInner({ pathname }) {
       }
     };
 
-    const legacyLower = LEGACY_ABBR_LO; // runtime
-    const newLower = NEW_ABBR.toLowerCase(); // tdls
+    const legacyLower = LEGACY_ABBR_LO;
+    const newLower = NEW_ABBR.toLowerCase();
 
     const selectorsFor = (t) => [
       `#big-${t}`,
@@ -254,7 +265,6 @@ function NavbarInner({ pathname }) {
         try {
           normalizeDomBranding(el);
         } catch {}
-
         try {
           if (typeof el.close === "function" && el.open) el.close();
         } catch {}
@@ -306,17 +316,10 @@ function NavbarInner({ pathname }) {
     };
 
     const moRoot = new MutationObserver(schedule);
-    moRoot.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "style"],
-    });
+    moRoot.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style"] });
 
     const moBody = new MutationObserver(schedule);
-    moBody.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
+    moBody.observe(document.body, { childList: true, subtree: true, characterData: true });
 
     const cap = { capture: true, passive: true };
     const onPointerDownCapture = () => {
@@ -424,15 +427,7 @@ function NavbarInner({ pathname }) {
           }}
         >
           {/* LEFT */}
-          <div
-            className="tdls-left"
-            style={{
-              gridArea: "left",
-              display: "flex",
-              alignItems: "center",
-              minWidth: 0,
-            }}
-          >
+          <div className="tdls-left" style={{ gridArea: "left", display: "flex", alignItems: "center", minWidth: 0 }}>
             <HomeButton onClick={handleHomeClick} isActive={homePanelOpen} />
           </div>
 
@@ -471,8 +466,12 @@ function NavbarInner({ pathname }) {
                 minWidth: 0,
               }}
             >
-              {/* Hydration-safe: show the rotator only after mount */}
-              {mounted ? <Logorotator size={36} /> : <span aria-hidden style={{ width: 36, height: 36, display: "inline-block" }} />}
+              {mounted ? (
+                <Logorotator size={36} />
+              ) : (
+                <span aria-hidden style={{ width: 36, height: 36, display: "inline-block" }} />
+              )}
+
               <span
                 className="tdls-brand-text"
                 style={{
@@ -501,17 +500,14 @@ function NavbarInner({ pathname }) {
               gap: 18,
             }}
           >
-            {/* Hydration-safe: reserve space, mount search only after client hydration */}
-            {mounted ? (
+            {/* IMPORTANT: do NOT mount NavSearchbar on mobile (it’s hidden by CSS anyway). */}
+            {mounted && !isMobile ? (
               <NavSearchbar className="tdls-navsearch" />
             ) : (
               <div className="tdls-navsearch" aria-hidden />
             )}
 
-            <div
-              className="tdls-menublock"
-              style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}
-            >
+            <div className="tdls-menublock" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
               <button
                 aria-label="Open menu"
                 className="tdls-menu-btn"
@@ -567,12 +563,10 @@ function NavbarInner({ pathname }) {
         </div>
 
         <style jsx>{`
-          /* Shared gutter token (no “inch” padding) */
           .tdls-header {
             --nav-gutter-x: var(--page-gutter-x);
           }
 
-          /* Width-trap prevention: allow shrink everywhere it matters */
           .tdls-navgrid,
           .tdls-left,
           .tdls-center,
@@ -581,24 +575,20 @@ function NavbarInner({ pathname }) {
             min-width: 0;
           }
 
-          /* Desktop default brand: premium single-line with safe truncation */
           .tdls-brand-text {
             font-size: 3.9rem;
             letter-spacing: 0.19em;
-
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             max-width: min(54vw, 560px);
           }
 
-          /* Reserve space for search placeholder too */
           :global(.tdls-navsearch) {
             width: clamp(180px, 28vw, 360px);
             min-width: 0;
           }
 
-          /* Large screens: constrain heavy rules through shared token */
           @media (min-width: 1280px) {
             .tdls-header {
               --nav-gutter-x: clamp(28px, 4.6vw, 96px);
@@ -606,7 +596,6 @@ function NavbarInner({ pathname }) {
             }
           }
 
-          /* 1024–1279: 2-line clamp to prevent brand forcing overflow */
           @media (max-width: 1279px) and (min-width: 1024px) {
             .tdls-header {
               height: 84px;
@@ -617,7 +606,6 @@ function NavbarInner({ pathname }) {
               font-size: 1.7rem;
               letter-spacing: 0.16em;
               max-width: min(52vw, 520px);
-
               white-space: normal;
               display: -webkit-box;
               -webkit-line-clamp: 2;
@@ -632,7 +620,6 @@ function NavbarInner({ pathname }) {
             }
           }
 
-          /* 820–1023 */
           @media (max-width: 1023px) and (min-width: 820px) {
             .tdls-header {
               height: 82px;
@@ -643,7 +630,6 @@ function NavbarInner({ pathname }) {
               font-size: 1.5rem;
               letter-spacing: 0.14em;
               max-width: min(48vw, 460px);
-
               white-space: normal;
               display: -webkit-box;
               -webkit-line-clamp: 2;
@@ -658,7 +644,6 @@ function NavbarInner({ pathname }) {
             }
           }
 
-          /* 640–819 */
           @media (max-width: 819px) and (min-width: 640px) {
             .tdls-header {
               --nav-gutter-x: clamp(14px, 2.8vw, 22px);
@@ -668,7 +653,6 @@ function NavbarInner({ pathname }) {
               font-size: 1.34rem;
               letter-spacing: 0.12em;
               max-width: min(44vw, 420px);
-
               white-space: normal;
               display: -webkit-box;
               -webkit-line-clamp: 2;
@@ -683,7 +667,6 @@ function NavbarInner({ pathname }) {
             }
           }
 
-          /* Mobile: remove searchbar; keep clean layout; reduce CTA sizes without touching desktop */
           @media (max-width: 639px) {
             .tdls-header {
               height: clamp(64px, 12.5vw, 76px);
@@ -694,7 +677,6 @@ function NavbarInner({ pathname }) {
               display: none !important;
             }
 
-            /* Keep brand text hidden on mobile as before (Logorotator still visible, size preserved) */
             .tdls-brand-text {
               display: none;
             }
@@ -703,7 +685,6 @@ function NavbarInner({ pathname }) {
               gap: clamp(10px, 2.6vw, 12px) !important;
             }
 
-            /* HOME + MENU labels: smaller on tiny screens */
             .tdls-home-label,
             .tdls-menu-label {
               font-size: clamp(0.72rem, 2.9vw, 0.82rem) !important;
@@ -760,7 +741,6 @@ function NavbarInner({ pathname }) {
         `}</style>
       </header>
 
-      {/* ✅ Mount overlays only when open (avoids hook-mismatch patterns inside those components) */}
       {mounted && menuOpen ? (
         <Slidingmenubar open={menuOpen} onClose={() => setMenuOpen(false)} categories={categories} />
       ) : null}
@@ -770,4 +750,16 @@ function NavbarInner({ pathname }) {
       ) : null}
     </>
   );
+}
+
+/**
+ * Wrapper navbar:
+ * - Always calls exactly ONE hook (usePathname).
+ * - Returns null for /admin BEFORE mounting NavbarInner.
+ */
+export default function Navbar() {
+  const pathname = usePathname() || "";
+  const isAdminRoute = typeof pathname === "string" && pathname.startsWith("/admin");
+  if (isAdminRoute) return null;
+  return <NavbarInner pathname={pathname} />;
 }

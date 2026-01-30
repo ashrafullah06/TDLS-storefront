@@ -1832,7 +1832,7 @@ function CheckoutAddressForm({
   );
 }
 
-export default function CheckoutPage({ initialAddressMeta = null } = {}) {
+export default function CheckoutPage({ initialAddressMeta = null, initialSessionUser = null, serverCartId = null } = {}) {
   // Optional SSR/route-level preload (pass the /api/customers/address-book JSON here)
   // so addresses are already rendered on first paint.
   const seededMeta = (() => {
@@ -1900,13 +1900,13 @@ export default function CheckoutPage({ initialAddressMeta = null } = {}) {
   const [editingShipping, setEditingShipping] = useState(null);
   const [editingBilling, setEditingBilling] = useState(null);
 
-  const [userInfo, setUserInfo] = useState({
-    id: "",
-    name: "",
-    email: "",
-    phone: "",
-    phoneVerified: false,
-  });
+  const [userInfo, setUserInfo] = useState(() => ({
+    id: initialSessionUser?.id || "",
+    name: initialSessionUser?.name || "",
+    email: initialSessionUser?.email || "",
+    phone: initialSessionUser?.phone || "",
+    phoneVerified: !!(initialSessionUser?.phoneVerified || initialSessionUser?.phoneVerifiedAt),
+  }));
   const [defaultKey, setDefaultKey] = useState(() => seededDefaultKey);
   const [defaultEditing, setDefaultEditing] = useState(false);
 
@@ -1936,11 +1936,11 @@ export default function CheckoutPage({ initialAddressMeta = null } = {}) {
   const preOtpSnapshotRef = useRef(null);
 
   // SESSION + CHECKOUT MODE
-  const [sessionChecked, setSessionChecked] = useState(false);
-  const [checkoutMode, setCheckoutMode] = useState(null); // "account" | "guest" | null
+  const impliedAccount = !!(initialSessionUser?.id || (seededMeta && ((seededMeta.list || []).length || seededMeta.defaultId != null || seededMeta.defaultAddr)));
+  const [sessionChecked, setSessionChecked] = useState(() => !!initialSessionUser?.id);
+  const [checkoutMode, setCheckoutMode] = useState(() => (impliedAccount ? "account" : null)); // "account" | "guest" | null
   const [modeDialogOpen, setModeDialogOpen] = useState(false);
-
-  // GUEST STATE (session-only)
+// GUEST STATE (session-only)
   const [guestDraft, setGuestDraft] = useState({
     profile: { name: "", phone: "", email: "" },
     shipping: null,
@@ -2109,8 +2109,19 @@ export default function CheckoutPage({ initialAddressMeta = null } = {}) {
       // NOTE: primeAddressBookMeta does NOT cache 401 (not-logged-in) results.
       primeAddressBookMeta().catch(() => null);
 
+      // SSR/route-level session preload: render account UI immediately (no waiting).
+      if (initialSessionUser?.id) {
+        setCheckoutMode("account");
+        setModeDialogOpen(false);
+        setUserInfo((prev) => ({ ...prev, ...initialSessionUser }));
+        // hydrateAccount will use the already-seeded address meta if present; it can refresh in background.
+        hydrateAccount({ sessionUser: initialSessionUser, keepSelection: true }).catch(() => null);
+        setSessionChecked(true);
+        return;
+      }
+
       const sessionUser = await fetchSessionUserNoRedirect();
-      if (sessionUser?.id) {
+if (sessionUser?.id) {
         setCheckoutMode("account");
         setUserInfo((prev) => ({ ...prev, ...sessionUser }));
         await hydrateAccount({ sessionUser, keepSelection: true });
@@ -3215,7 +3226,8 @@ export default function CheckoutPage({ initialAddressMeta = null } = {}) {
             --navbar-h: var(--nav-h, 88px);
             --tdls-safe-top: calc(0.5in + 10px + env(safe-area-inset-top) + max(var(--navbar-h, 88px), 72px));
             --tdls-safe-bottom: calc(
-              0.5in + 14px + env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), 120px)
+              0.5in + 14px + env(safe-area-inset-bottom) +
+                max(var(--bottom-floating-h, 0px), var(--bfbar-h, 0px), var(--bottom-safe-pad, 120px))
             );
           }
 
@@ -3226,7 +3238,7 @@ export default function CheckoutPage({ initialAddressMeta = null } = {}) {
             display: flex;
             align-items: flex-start;
             justify-content: center;
-            z-index: 160;
+            z-index: 2147483647;
 
             /* HARD GUARANTEE: sheet never sits under navbar/bfbar */
             padding-left: 12px;
@@ -3248,8 +3260,7 @@ export default function CheckoutPage({ initialAddressMeta = null } = {}) {
             box-shadow: 0 12px 36px rgba(15, 33, 71, 0.25);
             border: 1px solid ${BORDER};
           }
-;
-          }
+
           .co-sheet-head {
             display: flex;
             align-items: center;

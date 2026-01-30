@@ -1,4 +1,5 @@
 // FILE: app/api/customers/address-book/route.js
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -9,35 +10,54 @@ import { auth } from "@/lib/auth";
 /* ────────────────────────── utilities ────────────────────────── */
 
 function getUserIdFromSession(session) {
-  return (
-    session?.user?.id ||
-    session?.user?.uid ||
-    session?.user?.sub ||
-    null
-  );
+  return session?.user?.id || session?.user?.uid || session?.user?.sub || null;
 }
 
+/**
+ * Phone normalizer:
+ * - Supports BD formats: 01XXXXXXXXX, 8801XXXXXXXXX, +8801XXXXXXXXX
+ * - Also accepts other international E.164-ish numbers safely
+ * Returns "+<digits>" or null
+ */
 function normalizePhone(raw) {
   if (!raw) return null;
-  let s = String(raw).trim().replace(/[^\d+]/g, "");
 
+  let s = String(raw).trim();
+  if (!s) return null;
+
+  // Remove spaces/separators but keep + for now
+  s = s.replace(/[\s\-().]/g, "");
+
+  // Convert leading 00 -> +
+  if (s.startsWith("00")) s = `+${s.slice(2)}`;
+
+  // If there are multiple "+" anywhere, keep only a single leading "+"
+  if (s.includes("+")) {
+    s = s.replace(/\+/g, "");
+    s = `+${s}`;
+  }
+
+  // Strip anything not digit after optional leading +
+  if (s.startsWith("+")) {
+    const digits = s.slice(1).replace(/\D/g, "");
+    s = `+${digits}`;
+  } else {
+    s = s.replace(/\D/g, "");
+  }
+
+  // BD specific
   const bdLocal = /^01[3-9]\d{8}$/;
   const bdIntl = /^8801[3-9]\d{8}$/;
   const bdPlus = /^\+8801[3-9]\d{8}$/;
 
   if (bdPlus.test(s)) return s;
-  if (bdIntl.test(s)) return `+${s}`;
-  if (bdLocal.test(s)) return `+88${s}`;
+  if (bdIntl.test(s.replace(/^\+/, ""))) return `+${s.replace(/^\+/, "")}`;
+  if (bdLocal.test(s.replace(/^\+/, ""))) return `+88${s.replace(/^\+/, "")}`;
 
-  if (s.startsWith("00")) s = `+${s.slice(2)}`;
-  if (s.indexOf("+") > 0) s = s.replace(/\+/g, "");
+  // Generic E.164-ish guard (8–15 digits)
+  const digitsOnly = s.startsWith("+") ? s.slice(1) : s;
+  if (/^\d{8,15}$/.test(digitsOnly)) return `+${digitsOnly}`;
 
-  if (s.startsWith("+")) {
-    const digits = s.slice(1);
-    if (digits.length >= 8 && digits.length <= 15) return `+${digits}`;
-    return null;
-  }
-  if (s.length >= 8 && s.length <= 15) return `+${s}`;
   return null;
 }
 
@@ -59,7 +79,7 @@ function pickInputAddress(raw = {}) {
   );
   const line2 = strOrNull(a.line2 ?? a.address2 ?? a.address_2);
 
-  // Bangladesh naming: upazila ≈ city, district ≈ state (in your schema usage)
+  // Bangladesh naming: upazila ≈ city, district ≈ state
   const upazila = strOrNull(a.upazila ?? a.city ?? a.area);
   const district = strOrNull(a.district ?? a.state ?? a.region);
   const division = strOrNull(a.division ?? a.adminLevel1);
@@ -93,8 +113,8 @@ function pickInputAddress(raw = {}) {
     // Canonical mailing
     line1,
     line2,
-    city: upazila,   // required by schema
-    state: district, // optional by schema but treated important in BD
+    city: upazila, // required by schema
+    state: district,
 
     postalCode,
     countryIso2,
@@ -130,11 +150,10 @@ function pickInputAddress(raw = {}) {
 
 /**
  * Validates required Prisma fields: Address.line1, Address.city, Address.countryIso2
- * Returns { ok, error } instead of throwing to keep responses clean.
  */
 function validateForWrite(picked) {
   if (!picked?.line1) return { ok: false, error: "LINE1_REQUIRED" };
-  if (!picked?.city) return { ok: false, error: "UPAZILA_REQUIRED" }; // city in DB
+  if (!picked?.city) return { ok: false, error: "UPAZILA_REQUIRED" };
   if (!picked?.countryIso2 || picked.countryIso2.length !== 2) {
     return { ok: false, error: "COUNTRY_ISO2_REQUIRED" };
   }
@@ -147,9 +166,11 @@ function validateForWrite(picked) {
  */
 function toPrismaAddressData(picked, existing = null) {
   const ex = existing || {};
-  const g = (ex.granular && typeof ex.granular === "object") ? ex.granular : {};
+  const g =
+    ex.granular && typeof ex.granular === "object" ? ex.granular : {};
 
-  const houseBits = [picked.apartmentNo, picked.floorNo].filter(Boolean).join(", ") || null;
+  const houseBits =
+    [picked.apartmentNo, picked.floorNo].filter(Boolean).join(", ") || null;
 
   return {
     // required + canonical mailing
@@ -192,7 +213,7 @@ function toPrismaAddressData(picked, existing = null) {
       union: picked.union ?? g.union ?? null,
       policeStation: picked.policeStation ?? g.policeStation ?? null,
 
-      // store UI alias keys too (harmless, prevents future client drift)
+      // store UI alias keys too
       streetAddress: picked.line1 ?? g.streetAddress ?? null,
       address2: picked.line2 ?? g.address2 ?? null,
       upazila: picked.upazila ?? g.upazila ?? null,
@@ -204,7 +225,7 @@ function toPrismaAddressData(picked, existing = null) {
 
 function normalizeAddressRow(a, defaultId) {
   if (!a) return null;
-  const g = (a.granular && typeof a.granular === "object") ? a.granular : {};
+  const g = a.granular && typeof a.granular === "object" ? a.granular : {};
 
   const isDefault = defaultId ? String(a.id) === String(defaultId) : !!a.isDefault;
 
@@ -256,10 +277,10 @@ function normalizeAddressRow(a, defaultId) {
  * Ensures consistency between:
  * - User.defaultAddressId (canonical pointer)
  * - Address.isDefault (denormalized flag)
- *
- * Auto-heals only if mismatch is detected.
  */
-async function loadListAndDefault(userId) {
+async function loadListAndDefault(userIdRaw) {
+  const userId = String(userIdRaw);
+
   const [user, list] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
@@ -272,7 +293,8 @@ async function loadListAndDefault(userId) {
   ]);
 
   const userDefaultId = user?.defaultAddressId || null;
-  const hasUserDefault = userDefaultId && list.some((x) => String(x.id) === String(userDefaultId));
+  const hasUserDefault =
+    userDefaultId && list.some((x) => String(x.id) === String(userDefaultId));
 
   // determine desired default
   let desiredDefaultId = null;
@@ -281,13 +303,9 @@ async function loadListAndDefault(userId) {
     desiredDefaultId = userDefaultId;
   } else {
     const flagged = list.filter((x) => !!x.isDefault);
-    if (flagged.length > 0) {
-      desiredDefaultId = flagged[0].id;
-    } else if (list.length > 0) {
-      desiredDefaultId = list[0].id;
-    } else {
-      desiredDefaultId = null;
-    }
+    if (flagged.length > 0) desiredDefaultId = flagged[0].id;
+    else if (list.length > 0) desiredDefaultId = list[0].id;
+    else desiredDefaultId = null;
   }
 
   // detect mismatch
@@ -295,13 +313,12 @@ async function loadListAndDefault(userId) {
   const desiredStr = desiredDefaultId ? String(desiredDefaultId) : null;
 
   const mismatch =
-    (String(userDefaultId || "") !== String(desiredDefaultId || "")) ||
+    String(userDefaultId || "") !== String(desiredDefaultId || "") ||
     (desiredStr
       ? !(defaultsFlagged.length === 1 && defaultsFlagged[0] === desiredStr)
       : defaultsFlagged.length > 0);
 
   if (mismatch) {
-    // heal in a transaction
     await prisma.$transaction(async (tx) => {
       await tx.address.updateMany({
         where: { userId, archivedAt: null },
@@ -325,7 +342,6 @@ async function loadListAndDefault(userId) {
       }
     });
 
-    // re-load after heal
     const [u2, l2] = await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
@@ -345,7 +361,7 @@ async function loadListAndDefault(userId) {
       addresses: normalized2,
       defaultId: def2?.id || null,
       defaultAddress: def2,
-      data: normalized2, // legacy alias
+      data: normalized2,
     };
   }
 
@@ -356,11 +372,14 @@ async function loadListAndDefault(userId) {
     addresses: normalized,
     defaultId: def?.id || null,
     defaultAddress: def,
-    data: normalized, // legacy alias
+    data: normalized,
   };
 }
 
-async function setDefaultAddress(userId, addressId) {
+async function setDefaultAddress(userIdRaw, addressIdRaw) {
+  const userId = String(userIdRaw);
+  const addressId = String(addressIdRaw);
+
   await prisma.$transaction(async (tx) => {
     const target = await tx.address.findFirst({
       where: { id: addressId, userId, archivedAt: null },
@@ -387,7 +406,10 @@ async function setDefaultAddress(userId, addressId) {
   });
 }
 
-async function softDeleteAddress(userId, id) {
+async function softDeleteAddress(userIdRaw, idRaw) {
+  const userId = String(userIdRaw);
+  const id = String(idRaw);
+
   await prisma.$transaction(async (tx) => {
     const existing = await tx.address.findFirst({
       where: { id, userId, archivedAt: null },
@@ -400,13 +422,11 @@ async function softDeleteAddress(userId, id) {
       throw e;
     }
 
-    // archive
     await tx.address.update({
       where: { id },
       data: { archivedAt: new Date(), isDefault: false },
     });
 
-    // if deleted was default, choose new default
     if (existing.isDefault) {
       const candidate = await tx.address.findFirst({
         where: { userId, archivedAt: null },
@@ -430,12 +450,11 @@ async function softDeleteAddress(userId, id) {
         });
       }
     } else {
-      // if not default, keep user pointer as-is
       const u = await tx.user.findUnique({
         where: { id: userId },
         select: { defaultAddressId: true },
       });
-      // if pointer referenced this id (mismatch case), clear it and heal on next read
+
       if (u?.defaultAddressId && String(u.defaultAddressId) === String(id)) {
         await tx.user.update({
           where: { id: userId },
@@ -446,14 +465,12 @@ async function softDeleteAddress(userId, id) {
   });
 }
 
-/* ────────────────────────── GET ──────────────────────────
-   - GET /api/customers/address-book          -> list + default
-   - GET /api/customers/address-book?default=1 -> default only (optional convenience)
-*/
+/* ────────────────────────── GET ────────────────────────── */
 export async function GET(req) {
   try {
-    const session = await auth();
-    const userId = getUserIdFromSession(session);
+    const session = await auth().catch(() => null);
+    const uid = getUserIdFromSession(session);
+    const userId = uid ? String(uid) : null;
 
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
@@ -471,7 +488,7 @@ export async function GET(req) {
     return NextResponse.json(
       {
         ok: true,
-        data: loaded.addresses, // legacy alias for older clients
+        data: loaded.addresses,
         addresses: loaded.addresses,
         defaultAddress: loaded.defaultAddress,
         defaultId: loaded.defaultId,
@@ -484,16 +501,12 @@ export async function GET(req) {
   }
 }
 
-/* ────────────────────────── POST ──────────────────────────
-   Single source of truth for:
-   - create: { ...fields }
-   - update (compat): { id, ...fields }
-   - set default: { id, makeDefault: true } (no other fields needed)
-*/
+/* ────────────────────────── POST ────────────────────────── */
 export async function POST(req) {
   try {
-    const session = await auth();
-    const userId = getUserIdFromSession(session);
+    const session = await auth().catch(() => null);
+    const uid = getUserIdFromSession(session);
+    const userId = uid ? String(uid) : null;
 
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
@@ -502,8 +515,8 @@ export async function POST(req) {
     const body = await req.json().catch(() => ({}));
     const id = body?.id ? String(body.id) : null;
 
-    // default-only operation
     const makeDefault = !!(body?.makeDefault ?? body?.isDefault ?? body?.default ?? body?.primary);
+
     const hasAnyAddressFields =
       body?.line1 ||
       body?.streetAddress ||
@@ -557,10 +570,8 @@ export async function POST(req) {
         data,
       });
     } else {
-      // create
       const data = toPrismaAddressData(picked, null);
 
-      // auto-default if this is first address OR makeDefault was requested
       const existingCount = await prisma.address.count({
         where: { userId, archivedAt: null },
       });
@@ -571,7 +582,7 @@ export async function POST(req) {
           ...data,
           userId,
           archivedAt: null,
-          isDefault: false, // set below transactionally if needed
+          isDefault: false,
         },
       });
 
@@ -580,7 +591,6 @@ export async function POST(req) {
       }
     }
 
-    // If makeDefault requested on update
     if (id && makeDefault) {
       await setDefaultAddress(userId, saved.id);
     }
@@ -608,14 +618,12 @@ export async function POST(req) {
   }
 }
 
-/* ────────────────────────── PUT (compat) ──────────────────────────
-   Optional: allows clients to call PUT /api/customers/address-book with { id, ...fields }.
-   This is useful if you want to remove reliance on /address-book/[id].
-*/
+/* ────────────────────────── PUT (compat) ────────────────────────── */
 export async function PUT(req) {
   try {
-    const session = await auth();
-    const userId = getUserIdFromSession(session);
+    const session = await auth().catch(() => null);
+    const uid = getUserIdFromSession(session);
+    const userId = uid ? String(uid) : null;
 
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
@@ -627,7 +635,6 @@ export async function PUT(req) {
       return NextResponse.json({ ok: false, error: "ID_REQUIRED" }, { status: 400 });
     }
 
-    // Reuse POST logic by calling it internally is not possible cleanly; implement directly.
     const makeDefault = !!(body?.makeDefault ?? body?.isDefault ?? body?.default ?? body?.primary);
 
     const picked = pickInputAddress(body);
@@ -677,13 +684,12 @@ export async function PUT(req) {
   }
 }
 
-/* ────────────────────────── DELETE (compat — body.id) ──────────────────────────
-   Prefer /api/customers/address-book/[id] for REST, but this keeps old callers working.
-*/
+/* ────────────────────────── DELETE (compat — body.id) ────────────────────────── */
 export async function DELETE(req) {
   try {
-    const session = await auth();
-    const userId = getUserIdFromSession(session);
+    const session = await auth().catch(() => null);
+    const uid = getUserIdFromSession(session);
+    const userId = uid ? String(uid) : null;
 
     if (!userId) {
       return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });

@@ -11,15 +11,26 @@ const RAW_STRAPI_ORIGIN =
   process.env.STRAPI_API_ORIGIN ||
   process.env.STRAPI_URL ||
   process.env.NEXT_PUBLIC_STRAPI_URL ||
+  process.env.NEXT_PUBLIC_STRAPI_ORIGIN ||
+  process.env.NEXT_PUBLIC_STRAPI_API_URL ||
+  process.env.NEXT_PUBLIC_STRAPI_API_ORIGIN ||
   "http://127.0.0.1:1337";
 
 const IS_PROD = process.env.NODE_ENV === "production";
 
 // Optional secret used by internal / cron calls (OPTIONAL for public reads)
-const STRAPI_SYNC_SECRET = (process.env.STRAPI_SYNC_SECRET || process.env.STRAPI_PROXY_SECRET || "").trim();
+const STRAPI_SYNC_SECRET = (
+  process.env.STRAPI_SYNC_SECRET ||
+  process.env.STRAPI_PROXY_SECRET ||
+  ""
+).trim();
 
 // Token for Strapi REST (optional; will be ignored if invalid)
-const STRAPI_TOKEN = (process.env.STRAPI_API_TOKEN || process.env.STRAPI_GRAPHQL_TOKEN || "").trim();
+const STRAPI_TOKEN = (
+  process.env.STRAPI_API_TOKEN ||
+  process.env.STRAPI_GRAPHQL_TOKEN ||
+  ""
+).trim();
 
 // Hard safety timeout to avoid “hanging streams” and platform timeouts.
 const UPSTREAM_TIMEOUT_MS = (() => {
@@ -30,18 +41,17 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 
 /**
  * ✅ CDN caching controls
- * Goal: prevent “empty menu / no pieces match filters” caused by transient upstream failures,
- * especially on serverless cold starts where in-memory fallback is empty.
+ * Goal: prevent “empty grid / no pieces match filters” caused by transient upstream failures
+ * and/or transient empty product lists in production.
  *
  * - META endpoints can be cached longer.
- * - PRODUCTS endpoints get SHORT cache (still safe for browsing) + stale-if-error.
+ * - PRODUCTS endpoints get SHORT cache + stale-if-error.
  * - Callers can force bypass using `noCache=1`.
  */
 const META_CACHE_CONTROL =
   "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, stale-if-error=86400";
 
 const PRODUCT_CACHE_CONTROL = (() => {
-  // Defaults tuned for “never blank UI” while keeping stock reasonably fresh for browsing.
   const maxAge = Number(process.env.TDLS_STRAPI_PRODUCT_MAXAGE_SEC ?? 15); // browser
   const sMaxAge = Number(process.env.TDLS_STRAPI_PRODUCT_SMAXAGE_SEC ?? 180); // CDN
   const swr = Number(process.env.TDLS_STRAPI_PRODUCT_SWR_SEC ?? 3600);
@@ -85,6 +95,14 @@ function rawJsonResponse(bodyString, status = 200, extraHeaders = {}) {
   });
 }
 
+function safeJsonParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
 /* ───────── origin helpers ───────── */
 
 function normalizeOrigin(raw) {
@@ -103,7 +121,8 @@ function normalizeOrigin(raw) {
 function assertNotLocalhostInProd(origin) {
   if (!IS_PROD) return;
   const h = new URL(origin).hostname;
-  const isLocal = h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
+  const isLocal =
+    h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
   if (isLocal) {
     throw new Error(
       `Invalid STRAPI_URL for production (localhost): ${origin}. Set STRAPI_URL/STRAPI_API_ORIGIN to your real Strapi domain (https://...).`
@@ -170,31 +189,27 @@ function hasAnyPopulate(params) {
   return false;
 }
 
-function hasPopulateBranch(params, branch) {
-  const prefix = `populate[${branch}]`;
+function hasFiltersInPath(path) {
+  const { search } = splitPathAndQuery(path);
+  if (!search) return false;
+  const params = new URLSearchParams(search);
   for (const k of params.keys()) {
-    if (k === prefix || k.startsWith(prefix + "[")) return true;
+    if (k === "filters" || k.startsWith("filters[") || k.includes("filters[")) return true;
   }
   return false;
 }
 
-function ensureDeepPopulate(params, branch, nestedKey) {
-  const k = `populate[${branch}][populate][${nestedKey}]`;
-  if (!params.has(k)) params.set(k, "*");
-}
-
-/**
- * ✅ Normalize product LIST requests so all callers get a consistent dataset.
- * This prevents production-only “random empty filters” caused by:
- * - default Strapi pagination (25)
- * - missing deep relations (variants/sizes) in some callers
- */
 const DEFAULT_PRODUCTS_PAGESIZE = (() => {
   const n = Number(process.env.TDLS_STRAPI_PRODUCTS_PAGESIZE ?? 1000);
   if (!Number.isFinite(n) || n <= 0) return 1000;
   return Math.min(1500, Math.max(25, Math.round(n)));
 })();
 
+/**
+ * ✅ Normalize product requests so all callers get a consistent dataset.
+ * Prevents production-only “random empty filters” caused by default Strapi pagination (25)
+ * and missing populate.
+ */
 function normalizeProductsPath(p) {
   const { pathname, search } = splitPathAndQuery(p);
   if (!pathname.startsWith("/products")) return p;
@@ -206,36 +221,25 @@ function normalizeProductsPath(p) {
     params.set("populate", "*");
   }
 
-  // Always ensure deep populate for sizes under variants to prevent client-side filters from excluding everything.
-  // Supports both schemas: product_variants (new) and variants (legacy).
-  // Even if populate="*" exists, Strapi won't necessarily deep-populate nested relations.
-  ensureDeepPopulate(params, "product_variants", "sizes");
-  ensureDeepPopulate(params, "variants", "sizes");
+  // Only enforce pagination on LIST endpoint. (Detail endpoints don't need it.)
+  const isList = pathname === "/products";
+  if (isList) {
+    const pageSizeKey = "pagination[pageSize]";
+    const existing = params.get(pageSizeKey);
 
-  // If caller explicitly populates variant branches but not sizes, also force sizes.
-  if (hasPopulateBranch(params, "product_variants")) ensureDeepPopulate(params, "product_variants", "sizes");
-  if (hasPopulateBranch(params, "variants")) ensureDeepPopulate(params, "variants", "sizes");
-
-  // Ensure pagination[pageSize] exists for product LIST calls.
-  // (Safe even if caller already provided filters — it just increases page size.)
-  const pageSizeKey = "pagination[pageSize]";
-  const existing = params.get(pageSizeKey);
-
-  if (!existing) {
-    params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
-  } else {
-    const x = Number(existing);
-    if (!Number.isFinite(x) || x <= 0) {
+    if (!existing) {
       params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
+    } else {
+      const x = Number(existing);
+      if (!Number.isFinite(x) || x <= 0) {
+        params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
+      }
     }
-  }
 
-  // Avoid “random empty” from callers accidentally paging deep
-  const pageKey = "pagination[page]";
-  const pageVal = params.get(pageKey);
-  if (pageVal) {
-    const n = Number(pageVal);
-    if (!Number.isFinite(n) || n < 1) params.delete(pageKey);
+    // Force a stable default page (avoids odd caller-side omissions).
+    if (!params.get("pagination[page]")) {
+      params.set("pagination[page]", "1");
+    }
   }
 
   const qs = params.toString();
@@ -243,8 +247,9 @@ function normalizeProductsPath(p) {
 }
 
 /**
- * ✅ Build upstream URL using URL() so bracket queries (filters[...], populate[...]) are safely encoded.
- * This eliminates environment-specific fetch URL parsing edge cases.
+ * ✅ Build upstream URL using URLSearchParams re-encoding.
+ * This avoids environment-specific parsing differences for bracket keys
+ * (filters[...], populate[...]) and guarantees safe encoding.
  */
 function buildTargetUrl(normalizedPath) {
   const { pathname, search } = splitPathAndQuery(normalizedPath);
@@ -253,7 +258,14 @@ function buildTargetUrl(normalizedPath) {
   const basePath = base.pathname.replace(/\/+$/, "");
   base.pathname = `${basePath}${pathname}`;
 
-  base.search = search ? `?${search}` : "";
+  if (search) {
+    const params = new URLSearchParams(search);
+    const qs = params.toString();
+    base.search = qs ? `?${qs}` : "";
+  } else {
+    base.search = "";
+  }
+
   return base.toString();
 }
 
@@ -273,7 +285,15 @@ function sleep(ms) {
 }
 
 function shouldRetryStatus(status) {
-  return status === 429 || status === 502 || status === 503 || status === 504;
+  return (
+    status === 408 ||
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    status === 520 ||
+    status === 521
+  );
 }
 
 /* ───────── Prisma lazy-load (stability + speed) ───────── */
@@ -290,13 +310,15 @@ async function getPrisma() {
 
 /* ───────── micro-cache + in-flight dedupe ───────── */
 
-const INFLIGHT = new Map(); // key -> Promise<{ ok, status, payloadStr, productCount? }>
+const INFLIGHT = new Map(); // key -> Promise<{ ok, status, payloadStr, reason?, degraded? }>
 const MEM_META = new Map(); // key -> { exp, payloadStr, headers }
 const MEM_PROD = new Map(); // key -> { exp, payloadStr, headers }
 
 // Last-known-good payload (public reads only), used when upstream fails.
-// NOTE: we intentionally do NOT store “empty products list” as last-good.
 const LAST_GOOD = new Map(); // key -> { exp, payloadStr }
+
+// “Any good products” fallback for cases where a specific filtered key has no cached LKG yet.
+const LAST_GOOD_ANY_PRODUCTS_KEY = "pub|prod|__any__";
 
 // Stock cache (sizeId -> stock) used when Prisma temporarily fails.
 const STOCK_CACHE = new Map(); // sizeId -> { exp, stock }
@@ -323,6 +345,12 @@ const LAST_GOOD_TTL_MS = (() => {
   const n = Number(process.env.TDLS_STRAPI_LASTGOOD_TTL_MS || 180000); // 3 min
   if (!Number.isFinite(n) || n <= 0) return 180000;
   return Math.min(15 * 60 * 1000, Math.max(30 * 1000, Math.round(n))); // 30s..15m
+})();
+
+const LAST_GOOD_ANY_TTL_MS = (() => {
+  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_ANY_TTL_MS || 600000); // 10 min
+  if (!Number.isFinite(n) || n <= 0) return 600000;
+  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.round(n))); // 1m..60m
 })();
 
 const STOCK_CACHE_TTL_MS = (() => {
@@ -358,10 +386,11 @@ function lastGoodGet(key) {
   return v;
 }
 
-function lastGoodSet(key, payloadStr) {
+function lastGoodSet(key, payloadStr, ttlMs = LAST_GOOD_TTL_MS) {
   if (typeof payloadStr !== "string") return;
   if (payloadStr.length > 8 * 1024 * 1024) return; // hard guard 8MB
-  LAST_GOOD.set(key, { exp: Date.now() + LAST_GOOD_TTL_MS, payloadStr });
+  const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LAST_GOOD_TTL_MS;
+  LAST_GOOD.set(key, { exp: Date.now() + ttl, payloadStr });
 }
 
 function stockCacheGet(sizeId) {
@@ -399,40 +428,6 @@ async function runDedupe(key, fn) {
 
 /* ───────── stock patch helpers (logic hardened, behavior preserved) ───────── */
 
-function normalizeRelArray(x) {
-  if (!x) return [];
-  if (Array.isArray(x)) return x;
-  if (Array.isArray(x.data)) return x.data;
-  if (x.data) return [x.data];
-  return [];
-}
-
-function getProductVariantsContainers(row) {
-  const attrs = row?.attributes || null;
-
-  // Support BOTH field names (production sometimes differs): product_variants and variants
-  const raw =
-    row?.product_variants ??
-    row?.variants ??
-    (attrs ? attrs.product_variants ?? attrs.variants : null) ??
-    [];
-
-  return normalizeRelArray(raw);
-}
-
-function getVariantSizesContainers(variant) {
-  const vAttrs = variant?.attributes || null;
-  const raw = variant?.sizes ?? (vAttrs ? vAttrs.sizes : null) ?? [];
-  return normalizeRelArray(raw);
-}
-
-function getSizeId(sizeObj) {
-  const sAttrs = sizeObj?.attributes || null;
-  const rawId = sizeObj?.id ?? sizeObj?.size_id ?? sizeObj?.strapiSizeId ?? (sAttrs ? sAttrs.id : undefined);
-  const sid = Number(rawId);
-  return Number.isFinite(sid) && sid > 0 ? sid : null;
-}
-
 function collectSizeIdsFromStrapiProducts(strapiData) {
   const itemsRaw = strapiData?.data;
   const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
@@ -440,12 +435,28 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
   const sizeIds = new Set();
 
   for (const item of items) {
-    const variants = getProductVariantsContainers(item);
+    const row = item;
+    const attrs = row.attributes || null;
+
+    let variants = row.variants || attrs?.variants || [];
+
+    if (variants && Array.isArray(variants.data)) {
+      variants = variants.data.map((v) => v.attributes || v);
+    }
+    if (!Array.isArray(variants)) continue;
+
     for (const v of variants) {
-      const sizes = getVariantSizesContainers(v);
+      let sizes = v.sizes || v.attributes?.sizes || [];
+
+      if (sizes && Array.isArray(sizes.data)) {
+        sizes = sizes.data.map((s) => s);
+      }
+      if (!Array.isArray(sizes)) continue;
+
       for (const s of sizes) {
-        const sid = getSizeId(s);
-        if (sid) sizeIds.add(sid);
+        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
+        const sid = Number(rawId);
+        if (Number.isFinite(sid) && sid > 0) sizeIds.add(sid);
       }
     }
   }
@@ -495,30 +506,39 @@ async function getStockMapForSizeIds(sizeIds) {
 
 /**
  * ✅ Ensure sizes always have `is_available`
- * (prevents client filters from excluding everything when stock patching can’t run)
  */
 function ensureAvailabilityDefaultsOnProducts(strapiData) {
   const itemsRaw = strapiData?.data;
   const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
 
   for (const item of items) {
-    const variants = getProductVariantsContainers(item);
+    const row = item;
+    const attrs = row.attributes || null;
+
+    let variants = row.variants || attrs?.variants || [];
+    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v);
+    if (!Array.isArray(variants)) continue;
 
     for (const v of variants) {
-      const sizes = getVariantSizesContainers(v);
+      const vAttrs = v.attributes || null;
+
+      let sizes = v.sizes || vAttrs?.sizes || [];
+      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
+      if (!Array.isArray(sizes)) continue;
 
       for (const s of sizes) {
-        const sAttrs = s?.attributes || null;
+        const sAttrs = s.attributes || null;
 
         const hasBool =
-          typeof s.is_available === "boolean" || (sAttrs && typeof sAttrs.is_available === "boolean");
+          typeof s.is_available === "boolean" ||
+          (sAttrs && typeof sAttrs.is_available === "boolean");
 
         if (hasBool) continue;
 
         const stockRaw =
           s.live_stock ??
           s.stock_quantity ??
-          (sAttrs ? sAttrs.live_stock ?? sAttrs.stock_quantity : undefined);
+          (sAttrs ? (sAttrs.live_stock ?? sAttrs.stock_quantity) : undefined);
 
         const stockNum = Number(stockRaw);
         const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true; // optimistic when unknown
@@ -536,7 +556,6 @@ function ensureAvailabilityDefaultsOnProducts(strapiData) {
 
 /**
  * Patch Strapi products with live Prisma stock.
- * If Prisma is temporarily down, we use cached stock (prevents products “disappearing”).
  */
 async function patchProductsWithPrismaStock(strapiData) {
   const { items, sizeIds } = collectSizeIdsFromStrapiProducts(strapiData);
@@ -549,16 +568,32 @@ async function patchProductsWithPrismaStock(strapiData) {
   }
 
   for (const item of items) {
-    const variants = getProductVariantsContainers(item);
+    const row = item;
+    const attrs = row.attributes || null;
+
+    let variants = row.variants || attrs?.variants || [];
+
+    if (variants && Array.isArray(variants.data)) {
+      variants = variants.data.map((v) => v);
+    }
+    if (!Array.isArray(variants)) continue;
 
     for (const v of variants) {
-      const sizes = getVariantSizesContainers(v);
+      const vAttrs = v.attributes || null;
+
+      let sizes = v.sizes || vAttrs?.sizes || [];
+
+      if (sizes && Array.isArray(sizes.data)) {
+        sizes = sizes.data.map((s) => s);
+      }
+      if (!Array.isArray(sizes)) continue;
 
       for (const s of sizes) {
-        const sAttrs = s?.attributes || null;
+        const sAttrs = s.attributes || null;
 
-        const sid = getSizeId(s);
-        if (!sid) continue;
+        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? sAttrs?.id;
+        const sid = Number(rawId);
+        if (!Number.isFinite(sid) || sid <= 0) continue;
 
         if (!bySizeId.has(sid)) {
           if (
@@ -596,7 +631,7 @@ async function patchProductsWithPrismaStock(strapiData) {
 /* ───────── upstream fetch (retry hardened) ───────── */
 
 async function fetchUpstreamResilient(target, baseHeaders) {
-  const attempt = async () => {
+  const attemptOnce = async () => {
     let res;
 
     if (STRAPI_TOKEN) {
@@ -606,6 +641,7 @@ async function fetchUpstreamResilient(target, baseHeaders) {
         cache: "no-store",
       });
 
+      // token invalid → retry without auth
       if (res.status === 401) {
         res = await fetchWithTimeout(target, {
           method: "GET",
@@ -624,41 +660,53 @@ async function fetchUpstreamResilient(target, baseHeaders) {
     return res;
   };
 
-  try {
-    const res1 = await attempt();
-    if (shouldRetryStatus(res1.status)) {
-      await sleep(220);
-      const res2 = await attempt();
-      return res2;
+  // 3 attempts with small backoff + jitter.
+  const delays = [0, 180, 420];
+
+  let lastErr = null;
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i]) await sleep(delays[i] + Math.floor(Math.random() * 80));
+    try {
+      const res = await attemptOnce();
+
+      // If retryable status → continue (unless last attempt)
+      if (shouldRetryStatus(res.status) && i < delays.length - 1) {
+        continue;
+      }
+
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (i === delays.length - 1) throw e;
     }
-    return res1;
-  } catch {
-    await sleep(220);
-    return await attempt();
   }
+
+  // Should never reach.
+  if (lastErr) throw lastErr;
+  return await attemptOnce();
 }
 
-function isProductsListPath(pathname) {
-  return pathname === "/products";
+function productCountFromStrapiPayload(data) {
+  const itemsRaw = data?.data;
+  if (Array.isArray(itemsRaw)) return itemsRaw.length;
+  if (itemsRaw) return 1;
+  return 0;
 }
 
-function productCountFromStrapiData(strapiData) {
-  const d = strapiData?.data;
-  if (Array.isArray(d)) return d.length;
-  return d ? 1 : 0;
+function isSuspectEmptyProductsResponse(data) {
+  const items = data?.data;
+  if (!Array.isArray(items)) return false;
+  if (items.length !== 0) return false;
+  const total = Number(data?.meta?.pagination?.total ?? 0);
+  return Number.isFinite(total) && total > 0;
 }
 
-/**
- * Global products fallback path (used to avoid “random empty grid” in production).
- * We keep this minimal and normalized to ensure it succeeds and returns a full dataset for client filters.
- */
-function getGlobalProductsEffectivePath() {
-  return canonicalizePath(normalizeProductsPath("/products"));
-}
-
-async function fetchGlobalProductsNow(baseHeaders) {
-  const effectivePath = getGlobalProductsEffectivePath();
-  const target = buildTargetUrl(effectivePath);
+async function fetchBroaderProductsFallback(baseHeaders) {
+  // Broadest safe browse listing (prevents empty UI if Strapi is up but filtered request is failing).
+  const fallbackPath = canonicalizePath(
+    normalizeProductsPath(`/products?populate=*&pagination[pageSize]=${DEFAULT_PRODUCTS_PAGESIZE}`)
+  );
+  const target = buildTargetUrl(fallbackPath);
 
   const res = await fetchUpstreamResilient(target, baseHeaders);
   if (!res.ok) return null;
@@ -670,12 +718,18 @@ async function fetchGlobalProductsNow(baseHeaders) {
     return null;
   }
 
+  // Patch stock if possible
   data = await patchProductsWithPrismaStock(data);
 
-  const cnt = productCountFromStrapiData(data);
-  if (cnt <= 0) return null;
+  const payloadObj = { ok: true, data, degraded: true, reason: "BROAD_FALLBACK" };
+  const payloadStr = JSON.stringify(payloadObj);
 
-  return { effectivePath, data, cnt };
+  // Only accept if we actually got products
+  const parsed = safeJsonParse(payloadStr);
+  const count = productCountFromStrapiPayload(parsed?.data);
+  if (count <= 0) return null;
+
+  return payloadStr;
 }
 
 /* ───────── main handler ───────── */
@@ -699,7 +753,8 @@ export async function GET(req) {
       req.headers.get("x-strapi-sync-secret") ||
       req.headers.get("x-strapi-proxy-secret");
 
-    const hasClientSecret = typeof clientSecretRaw === "string" && clientSecretRaw.trim().length > 0;
+    const hasClientSecret =
+      typeof clientSecretRaw === "string" && clientSecretRaw.trim().length > 0;
 
     if (hasClientSecret) {
       if (!STRAPI_SYNC_SECRET) {
@@ -715,7 +770,10 @@ export async function GET(req) {
 
       const clientSecret = clientSecretRaw.trim();
       if (clientSecret !== STRAPI_SYNC_SECRET) {
-        return jsonResponse({ ok: false, error: "UNAUTHORIZED", message: "Invalid proxy secret" }, 401);
+        return jsonResponse(
+          { ok: false, error: "UNAUTHORIZED", message: "Invalid proxy secret" },
+          401
+        );
       }
     }
 
@@ -733,12 +791,15 @@ export async function GET(req) {
       );
     }
 
-    // ✅ Normalize product list requests + canonicalize query order for stable caching
-    const effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
+    // ✅ Normalize product requests + canonicalize query order for stable caching
+    const effectivePath = canonicalizePath(
+      normalizeProductsPath(canonicalizePath(normalizedPath0))
+    );
+
     const { pathname: effPathname } = splitPathAndQuery(effectivePath);
 
     const isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
-    const isProductsList = isProductEndpoint && isProductsListPath(effPathname);
+    const isProductsList = isProductEndpoint && effPathname === "/products";
 
     const target = buildTargetUrl(effectivePath);
     const baseHeaders = { Accept: "application/json" };
@@ -748,55 +809,31 @@ export async function GET(req) {
     // Allow CDN caching for PUBLIC reads unless caller forces noCache=1.
     const CACHE_OK = !noCache && !hasClientSecret;
 
-    const cacheControl = CACHE_OK ? (isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL) : "no-store";
+    const cacheControl = CACHE_OK
+      ? isProductEndpoint
+        ? PRODUCT_CACHE_CONTROL
+        : META_CACHE_CONTROL
+      : "no-store";
 
     const cacheKey = `${CACHE_OK ? "pub" : "noc"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
     // Key for last-known-good fallback (public only)
     const lastGoodKey = `${hasClientSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
-    // Also keep a global products last-good key (public) to avoid blank grids when a filtered/list request glitches.
-    const globalProductsEffectivePath = isProductsList ? getGlobalProductsEffectivePath() : "";
-    const globalProductsLastGoodKey = globalProductsEffectivePath ? `pub|prod|${globalProductsEffectivePath}` : "";
-
-    // 1) in-memory micro-cache (NEVER serve cached empty products list)
+    // 1) in-memory micro-cache
     if (CACHE_OK) {
       const map = isProductEndpoint ? MEM_PROD : MEM_META;
       const hit = memGet(map, cacheKey);
       if (hit?.payloadStr) {
-        // For product-list, guard against poisoned cache (empty payload cached earlier).
-        if (isProductsList) {
-          try {
-            const parsed = JSON.parse(hit.payloadStr);
-            const cnt = productCountFromStrapiData(parsed?.data);
-            if (cnt <= 0) {
-              // drop poisoned cache entry
-              map.delete(cacheKey);
-            } else {
-              const ms = Date.now() - t0;
-              return rawJsonResponse(hit.payloadStr, 200, {
-                ...hit.headers,
-                "cache-control": cacheControl,
-                "CDN-Cache-Control": cacheControl,
-                "x-tdls-proxy-ms": String(ms),
-                "x-tdls-cache": "1",
-                "x-tdls-mem": "1",
-              });
-            }
-          } catch {
-            map.delete(cacheKey);
-          }
-        } else {
-          const ms = Date.now() - t0;
-          return rawJsonResponse(hit.payloadStr, 200, {
-            ...hit.headers,
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-cache": "1",
-            "x-tdls-mem": "1",
-          });
-        }
+        const ms = Date.now() - t0;
+        return rawJsonResponse(hit.payloadStr, 200, {
+          ...hit.headers,
+          "cache-control": cacheControl,
+          "CDN-Cache-Control": cacheControl,
+          "x-tdls-proxy-ms": String(ms),
+          "x-tdls-cache": "1",
+          "x-tdls-mem": "1",
+        });
       }
     }
 
@@ -825,51 +862,103 @@ export async function GET(req) {
         return { ok: false, status: 502, statusText: "Bad Gateway", errorText: "Invalid JSON" };
       }
 
+      // If Strapi claims total>0 but returns empty list, retry once quickly (transient backend/cache edge).
+      if (isProductsList && isSuspectEmptyProductsResponse(data)) {
+        await sleep(160);
+        const res2 = await fetchUpstreamResilient(target, baseHeaders);
+        if (res2.ok) {
+          try {
+            const data2 = await res2.json();
+            if (!isSuspectEmptyProductsResponse(data2)) data = data2;
+          } catch {
+            // keep original
+          }
+        }
+      }
+
       if (isProductEndpoint) {
         data = await patchProductsWithPrismaStock(data);
       }
 
-      const productCount = isProductEndpoint ? productCountFromStrapiData(data) : undefined;
+      // ✅ NEVER RETURN EMPTY PRODUCTS FOR PUBLIC LISTS WHEN WE CAN AVOID IT
+      // This is the key fix for production “No pieces match…” caused by transient empties/fetch glitches:
+      // - If the *current* response is empty, we immediately fall back to:
+      //   1) exact last-known-good for this key
+      //   2) any-known-good products
+      //   3) broad upstream fetch of /products (populate=*) and cache it as any-known-good
+      if (!hasClientSecret && isProductsList && isProductEndpoint) {
+        const countNow = productCountFromStrapiPayload(data);
+        const hasFilters = hasFiltersInPath(effectivePath);
 
-      // ✅ Treat “empty products list” as an anomaly in production/real traffic:
-      // do NOT cache/store it as last-good; allow outer logic to fallback to global products.
-      if (isProductsList && productCount <= 0) {
-        return {
-          ok: false,
-          status: 502,
-          statusText: "Bad Gateway",
-          errorText: "Empty products list (guarded)",
-          emptyProductsGuard: true,
-        };
+        if (countNow === 0 && (hasFilters || isSuspectEmptyProductsResponse(data))) {
+          // 1) exact last-known-good
+          const lgExact = lastGoodGet(lastGoodKey);
+          if (lgExact?.payloadStr) {
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: lgExact.payloadStr,
+              degraded: true,
+              reason: "EMPTY->EXACT_LAST_GOOD",
+            };
+          }
+
+          // 2) any-known-good products
+          const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
+          if (any?.payloadStr) {
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: any.payloadStr,
+              degraded: true,
+              reason: "EMPTY->ANY_PRODUCTS_CACHE",
+            };
+          }
+
+          // 3) broad fetch (only if store actually has products)
+          const broad = await fetchBroaderProductsFallback(baseHeaders);
+          if (broad) {
+            lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: broad,
+              degraded: true,
+              reason: "EMPTY->BROAD_FETCH",
+            };
+          }
+        }
+      }
+
+      // If upstream returns empty products and we have last-good for THIS exact key, prefer last-good
+      if (!hasClientSecret && isProductEndpoint) {
+        const count = productCountFromStrapiPayload(data);
+        if (count === 0) {
+          const lgExact = lastGoodGet(lastGoodKey);
+          if (lgExact?.payloadStr) {
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: lgExact.payloadStr,
+              degraded: true,
+              reason: "EXACT_LAST_GOOD_ON_EMPTY",
+            };
+          }
+        }
       }
 
       const payloadObj = { ok: true, data, ms: Date.now() - t0 };
       const payloadStr = JSON.stringify(payloadObj);
 
-      return { ok: true, status: 200, payloadStr, productCount };
+      return { ok: true, status: 200, payloadStr };
     });
 
     const ms = Date.now() - t0;
 
-    // Handle upstream failure → serve last-known-good (public only)
+    // Handle upstream failure → serve fallbacks (public only)
     if (!result?.ok) {
-      if (!hasClientSecret) {
-        // 1) Prefer global products last-good for /products list (strongest “never blank grid” guarantee)
-        if (isProductsList && globalProductsLastGoodKey) {
-          const lgGlobal = lastGoodGet(globalProductsLastGoodKey);
-          if (lgGlobal?.payloadStr) {
-            return rawJsonResponse(lgGlobal.payloadStr, 200, {
-              "cache-control": cacheControl,
-              "CDN-Cache-Control": cacheControl,
-              "x-tdls-proxy-ms": String(ms),
-              "x-tdls-stale": "1",
-              "x-tdls-fallback": "global:last-good",
-              "x-tdls-upstream-status": String(result?.status || 0),
-            });
-          }
-        }
-
-        // 2) Then try exact-path last-good
+      if (!hasClientSecret && isProductEndpoint) {
+        // 1) exact last-known-good
         const lg = lastGoodGet(lastGoodKey);
         if (lg?.payloadStr) {
           return rawJsonResponse(lg.payloadStr, 200, {
@@ -882,37 +971,51 @@ export async function GET(req) {
           });
         }
 
-        // 3) If still nothing and this is /products list → do a direct global products fetch NOW (real data)
-        if (isProductsList) {
-          const g = await fetchGlobalProductsNow(baseHeaders);
-          if (g?.data) {
-            const payloadObj = { ok: true, data: g.data, ms: Date.now() - t0 };
-            const payloadStr = JSON.stringify(payloadObj);
-
-            // cache + last-good only if non-empty (fetchGlobalProductsNow enforces that)
-            if (CACHE_OK) {
-              memSet(
-                MEM_PROD,
-                `${CACHE_OK ? "pub" : "noc"}|prod|${g.effectivePath}`,
-                payloadStr,
-                { "cache-control": cacheControl, "CDN-Cache-Control": cacheControl },
-                MEM_PROD_TTL_MS
-              );
-            }
-            lastGoodSet(`pub|prod|${g.effectivePath}`, payloadStr);
-
-            return rawJsonResponse(payloadStr, 200, {
-              "cache-control": cacheControl,
-              "CDN-Cache-Control": cacheControl,
-              "x-tdls-proxy-ms": String(Date.now() - t0),
-              "x-tdls-stale": "1",
-              "x-tdls-fallback": "global:refetch",
-              "x-tdls-upstream-status": String(result?.status || 0),
-            });
-          }
+        // 2) any-good products (prevents “blank grid” on first-time filtered keys)
+        const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
+        if (any?.payloadStr) {
+          return rawJsonResponse(any.payloadStr, 200, {
+            "cache-control": cacheControl,
+            "CDN-Cache-Control": cacheControl,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-stale": "1",
+            "x-tdls-fallback": "any-products",
+            "x-tdls-upstream-status": String(result?.status || 0),
+          });
         }
+
+        // 3) broad fallback fetch
+        const broad = await fetchBroaderProductsFallback(baseHeaders);
+        if (broad) {
+          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
+          return rawJsonResponse(broad, 200, {
+            "cache-control": cacheControl,
+            "CDN-Cache-Control": cacheControl,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-stale": "1",
+            "x-tdls-fallback": "broad-fetch",
+            "x-tdls-upstream-status": String(result?.status || 0),
+          });
+        }
+
+        // Absolute last resort: keep 200 + ok:true (UI stays alive), but DO NOT cache empties.
+        const payloadStr = JSON.stringify({
+          ok: true,
+          data: { data: [], meta: { degraded: true } },
+          degraded: true,
+          reason: "PRODUCT_DEGRADED_EMPTY",
+          ms,
+        });
+
+        return rawJsonResponse(payloadStr, 200, {
+          "cache-control": "no-store",
+          "x-tdls-proxy-ms": String(ms),
+          "x-tdls-fallback": "degraded-empty",
+          "x-tdls-upstream-status": String(result?.status || 0),
+        });
       }
 
+      // Non-product / secret calls: keep strict error behavior
       return jsonResponse(
         {
           ok: false,
@@ -937,29 +1040,40 @@ export async function GET(req) {
     // Success path
     const payloadStr = result.payloadStr || JSON.stringify({ ok: true, data: null, ms });
 
-    // Store micro-cache (NEVER cache empty products list — already guarded inside dedupe)
+    // Decide whether this payload is safe to cache as “good”.
+    let productCount = null;
+    if (isProductEndpoint) {
+      const parsed = safeJsonParse(payloadStr);
+      productCount = productCountFromStrapiPayload(parsed?.data);
+    }
+    const isGoodProductPayload = !isProductEndpoint || (Number.isFinite(productCount) && productCount > 0);
+
+    // Store micro-cache (NEVER cache empty product payloads)
     if (CACHE_OK) {
-      const map = isProductEndpoint ? MEM_PROD : MEM_META;
-      memSet(
-        map,
-        cacheKey,
-        payloadStr,
-        {
-          "cache-control": cacheControl,
-          "CDN-Cache-Control": cacheControl,
-        },
-        isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS
-      );
+      if (!isProductEndpoint || isGoodProductPayload) {
+        const map = isProductEndpoint ? MEM_PROD : MEM_META;
+        memSet(
+          map,
+          cacheKey,
+          payloadStr,
+          {
+            "cache-control": cacheControl,
+            "CDN-Cache-Control": cacheControl,
+          },
+          isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS
+        );
+      }
     }
 
-    // Store last-known-good for public reads
+    // Store last-known-good for public reads (NEVER store empty products as last-good)
     if (!hasClientSecret) {
-      // Never poison last-good with empty product list (also already guarded)
-      lastGoodSet(lastGoodKey, payloadStr);
+      if (!isProductEndpoint || isGoodProductPayload) {
+        lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
+      }
 
-      // Keep a global /products last-good as well (best “never blank” fallback)
-      if (isProductsList && globalProductsLastGoodKey) {
-        lastGoodSet(globalProductsLastGoodKey, payloadStr);
+      // Also store “any-good products” when we actually have products
+      if (isProductEndpoint && isGoodProductPayload) {
+        lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
       }
     }
 
@@ -969,7 +1083,8 @@ export async function GET(req) {
       "x-tdls-proxy-ms": String(ms),
       "x-tdls-cache": CACHE_OK ? "1" : "0",
       "x-tdls-mem": "0",
-      "x-tdls-stale": "0",
+      "x-tdls-stale": result?.reason ? "1" : "0",
+      "x-tdls-fallback": result?.reason ? String(result.reason) : "0",
     });
   } catch (err) {
     const ms = Date.now() - t0;
@@ -980,44 +1095,26 @@ export async function GET(req) {
       name.toLowerCase().includes("abort") ||
       String(err?.message || "").toLowerCase().includes("aborted");
 
-    // If timeout/abort → serve last-known-good (public only)
+    // If timeout/abort → serve last-known-good (public only) + any-good products fallback
     try {
       const url = new URL(req.url);
-      const hasSecret = !!(
-        url.searchParams.get("secret") ||
-        req.headers.get("x-strapi-sync-secret") ||
-        req.headers.get("x-strapi-proxy-secret")
-      );
+      const hasSecret =
+        !!(
+          url.searchParams.get("secret") ||
+          req.headers.get("x-strapi-sync-secret") ||
+          req.headers.get("x-strapi-proxy-secret")
+        );
 
       const normalizedPath0 = normalizeStrapiPath(url.searchParams.get("path") || "");
       const effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
       const { pathname } = splitPathAndQuery(effectivePath);
       const isProductEndpoint = pathname === "/products" || pathname.startsWith("/products/");
-      const isProductsList = isProductEndpoint && pathname === "/products";
-
       const lastGoodKey = `${hasSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
-      if (!hasSecret) {
-        // Prefer global /products last-good for product list
-        if (isProductsList) {
-          const globalPath = getGlobalProductsEffectivePath();
-          const globalKey = `pub|prod|${globalPath}`;
-          const lgGlobal = lastGoodGet(globalKey);
-          if (lgGlobal?.payloadStr) {
-            const cacheControl = PRODUCT_CACHE_CONTROL;
-            return rawJsonResponse(lgGlobal.payloadStr, 200, {
-              "cache-control": cacheControl,
-              "CDN-Cache-Control": cacheControl,
-              "x-tdls-proxy-ms": String(ms),
-              "x-tdls-stale": "1",
-              "x-tdls-fallback": isAbort ? "timeout:global:last-good" : "error:global:last-good",
-            });
-          }
-        }
-
+      if (!hasSecret && isProductEndpoint) {
         const lg = lastGoodGet(lastGoodKey);
         if (lg?.payloadStr) {
-          const cacheControl = isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL;
+          const cacheControl = PRODUCT_CACHE_CONTROL;
 
           return rawJsonResponse(lg.payloadStr, 200, {
             "cache-control": cacheControl,
@@ -1025,6 +1122,18 @@ export async function GET(req) {
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": isAbort ? "timeout:last-good" : "error:last-good",
+          });
+        }
+
+        const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
+        if (any?.payloadStr) {
+          const cacheControl = PRODUCT_CACHE_CONTROL;
+          return rawJsonResponse(any.payloadStr, 200, {
+            "cache-control": cacheControl,
+            "CDN-Cache-Control": cacheControl,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-stale": "1",
+            "x-tdls-fallback": isAbort ? "timeout:any-products" : "error:any-products",
           });
         }
       }
