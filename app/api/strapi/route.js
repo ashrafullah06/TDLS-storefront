@@ -40,6 +40,19 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 })();
 
 /**
+ * ✅ Default products populate mode:
+ * - "light" (default): only populates core filter relations with minimal fields (slug/name/order)
+ * - "full": old behavior (populate=*) when caller doesn't specify populate
+ *
+ * This prevents accidental monster queries (populate=*) from callers like homepage bootstrap.
+ */
+const DEFAULT_PRODUCTS_POPULATE_MODE = String(
+  process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE || "light"
+)
+  .trim()
+  .toLowerCase();
+
+/**
  * ✅ CDN caching controls
  * Goal: prevent “empty grid / no pieces match filters” caused by transient upstream failures
  * and/or transient empty product lists in production.
@@ -206,9 +219,41 @@ const DEFAULT_PRODUCTS_PAGESIZE = (() => {
 })();
 
 /**
+ * ✅ Apply a SAFE default populate for product listings:
+ * Only populate core filter relations with minimal fields.
+ * This prevents accidental `populate=*` (which can be extremely slow in production).
+ */
+function applyLightProductsPopulate(params) {
+  // Common filter relationships (minimal fields)
+  const rels = [
+    ["audience_categories", ["slug", "name", "order"]],
+    ["categories", ["slug", "name", "order"]],
+    ["sub_categories", ["slug", "name", "order"]],
+    ["super_categories", ["slug", "name", "order"]],
+    ["age_groups", ["slug", "name", "order"]],
+    ["gender_groups", ["slug", "name", "order"]],
+    ["tiers", ["slug", "name", "order"]],
+    ["brand_tiers", ["slug", "name", "order"]],
+    ["collection_tiers", ["slug", "name", "order"]],
+    ["events_products_collections", ["slug", "name", "order"]],
+    ["product_collections", ["slug", "name", "order"]],
+  ];
+
+  for (const [rel, fields] of rels) {
+    for (let i = 0; i < fields.length; i++) {
+      params.set(`populate[${rel}][fields][${i}]`, String(fields[i]));
+    }
+  }
+}
+
+/**
  * ✅ Normalize product requests so all callers get a consistent dataset.
- * Prevents production-only “random empty filters” caused by default Strapi pagination (25)
- * and missing populate.
+ * Prevents production-only “random empty filters” caused by default Strapi pagination (25).
+ *
+ * IMPORTANT CHANGE (fix, non-breaking):
+ * - We no longer auto-force populate="*" by default.
+ * - Instead we apply a LIGHT populate (slug/name/order only) unless env requests FULL.
+ * - If caller explicitly provides populate (including populate=*), we DO NOT touch it.
  */
 function normalizeProductsPath(p) {
   const { pathname, search } = splitPathAndQuery(p);
@@ -216,9 +261,13 @@ function normalizeProductsPath(p) {
 
   const params = new URLSearchParams(search || "");
 
-  // If no populate at all, ensure listing gets relations.
+  // If no populate at all, apply SAFE default (light) unless explicitly configured to full.
   if (!hasAnyPopulate(params)) {
-    params.set("populate", "*");
+    if (DEFAULT_PRODUCTS_POPULATE_MODE === "full") {
+      params.set("populate", "*");
+    } else {
+      applyLightProductsPopulate(params);
+    }
   }
 
   // Only enforce pagination on LIST endpoint. (Detail endpoints don't need it.)
@@ -703,8 +752,9 @@ function isSuspectEmptyProductsResponse(data) {
 
 async function fetchBroaderProductsFallback(baseHeaders) {
   // Broadest safe browse listing (prevents empty UI if Strapi is up but filtered request is failing).
+  // IMPORTANT: do not hardcode populate=*, because that can be extremely slow in production.
   const fallbackPath = canonicalizePath(
-    normalizeProductsPath(`/products?populate=*&pagination[pageSize]=${DEFAULT_PRODUCTS_PAGESIZE}`)
+    normalizeProductsPath(`/products?pagination[pageSize]=${DEFAULT_PRODUCTS_PAGESIZE}`)
   );
   const target = buildTargetUrl(fallbackPath);
 
@@ -881,11 +931,6 @@ export async function GET(req) {
       }
 
       // ✅ NEVER RETURN EMPTY PRODUCTS FOR PUBLIC LISTS WHEN WE CAN AVOID IT
-      // This is the key fix for production “No pieces match…” caused by transient empties/fetch glitches:
-      // - If the *current* response is empty, we immediately fall back to:
-      //   1) exact last-known-good for this key
-      //   2) any-known-good products
-      //   3) broad upstream fetch of /products (populate=*) and cache it as any-known-good
       if (!hasClientSecret && isProductsList && isProductEndpoint) {
         const countNow = productCountFromStrapiPayload(data);
         const hasFilters = hasFiltersInPath(effectivePath);
@@ -971,7 +1016,7 @@ export async function GET(req) {
           });
         }
 
-        // 2) any-good products (prevents “blank grid” on first-time filtered keys)
+        // 2) any-good products
         const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
         if (any?.payloadStr) {
           return rawJsonResponse(any.payloadStr, 200, {
