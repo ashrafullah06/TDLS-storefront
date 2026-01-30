@@ -1,9 +1,8 @@
-// PATH: app/api/strapi/route.js
+//✅ Corrected full code — app/api/strapi/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
 
 /* ───────── envs ───────── */
 
@@ -16,51 +15,7 @@ const RAW_STRAPI_ORIGIN =
 
 const IS_PROD = process.env.NODE_ENV === "production";
 
-function normalizeOrigin(raw) {
-  let o = (raw || "").trim();
-
-  // Add scheme if someone provided only host
-  if (o && !/^https?:\/\//i.test(o)) {
-    o = `${IS_PROD ? "https" : "http"}://${o}`;
-  }
-
-  // Prefer IPv4 loopback in dev if used
-  o = o.replace(/^http:\/\/localhost(?=[/:]|$)/i, "http://127.0.0.1");
-
-  // strip trailing slashes and accidental trailing /api
-  o = o.replace(/\/+$/, "").replace(/\/api$/, "");
-
-  return o;
-}
-
-function assertNotLocalhostInProd(origin) {
-  if (!IS_PROD) return;
-  try {
-    const h = new URL(origin).hostname;
-    const isLocal =
-      h === "localhost" ||
-      h === "127.0.0.1" ||
-      h === "::1" ||
-      h.endsWith(".local");
-    if (isLocal) {
-      throw new Error(
-        `Invalid STRAPI_URL for production (localhost): ${origin}. Set STRAPI_URL/STRAPI_API_ORIGIN to your real Strapi domain (https://...).`
-      );
-    }
-  } catch {
-    throw new Error(
-      `Invalid STRAPI_URL for production: ${origin}. Set STRAPI_URL/STRAPI_API_ORIGIN to a valid https URL.`
-    );
-  }
-}
-
-const STRAPI_ORIGIN = normalizeOrigin(RAW_STRAPI_ORIGIN);
-assertNotLocalhostInProd(STRAPI_ORIGIN);
-
-// Final REST base = origin + /api
-const STRAPI_API_BASE = STRAPI_ORIGIN + "/api";
-
-// Secret used by internal / cron calls (OPTIONAL for public reads)
+// Optional secret used by internal / cron calls (OPTIONAL for public reads)
 const STRAPI_SYNC_SECRET = (
   process.env.STRAPI_SYNC_SECRET ||
   process.env.STRAPI_PROXY_SECRET ||
@@ -74,10 +29,49 @@ const STRAPI_TOKEN = (
   ""
 ).trim();
 
-/* ───────── helpers ───────── */
+// Hard safety timeout to avoid “hanging streams” and platform timeouts.
+const UPSTREAM_TIMEOUT_MS = (() => {
+  const n = Number(process.env.STRAPI_PROXY_TIMEOUT_MS || 20000);
+  if (!Number.isFinite(n) || n <= 0) return 20000;
+  return Math.min(25000, Math.max(3000, Math.round(n)));
+})();
 
-function j(body, status = 200, extraHeaders = {}) {
-  return new NextResponse(body === undefined ? "null" : JSON.stringify(body), {
+/**
+ * ✅ CDN caching controls
+ * Goal: prevent “empty menu / no pieces match filters” caused by transient upstream failures,
+ * especially on serverless cold starts where in-memory fallback is empty.
+ *
+ * - META endpoints can be cached longer.
+ * - PRODUCTS endpoints get SHORT cache (still safe for browsing) + stale-if-error.
+ * - Callers can force bypass using `noCache=1`.
+ */
+const META_CACHE_CONTROL =
+  "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, stale-if-error=86400";
+
+const PRODUCT_CACHE_CONTROL = (() => {
+  // Defaults tuned for “never blank UI” while keeping stock reasonably fresh for browsing.
+  const maxAge = Number(process.env.TDLS_STRAPI_PRODUCT_MAXAGE_SEC ?? 15); // browser
+  const sMaxAge = Number(process.env.TDLS_STRAPI_PRODUCT_SMAXAGE_SEC ?? 180); // CDN
+  const swr = Number(process.env.TDLS_STRAPI_PRODUCT_SWR_SEC ?? 3600);
+  const sie = Number(process.env.TDLS_STRAPI_PRODUCT_SIE_SEC ?? 86400);
+
+  const clamp = (v, lo, hi, fallback) => {
+    const x = Number(v);
+    if (!Number.isFinite(x)) return fallback;
+    return Math.min(hi, Math.max(lo, Math.round(x)));
+    };
+  const a = clamp(maxAge, 0, 300, 15);
+  const b = clamp(sMaxAge, 0, 3600, 180);
+  const c = clamp(swr, 0, 86400, 3600);
+  const d = clamp(sie, 0, 604800, 86400);
+
+  return `public, max-age=${a}, s-maxage=${b}, stale-while-revalidate=${c}, stale-if-error=${d}`;
+})();
+
+/* ───────── response helpers ───────── */
+
+function jsonResponse(bodyObj, status = 200, extraHeaders = {}) {
+  return new NextResponse(bodyObj === undefined ? "null" : JSON.stringify(bodyObj), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
@@ -87,120 +81,242 @@ function j(body, status = 200, extraHeaders = {}) {
   });
 }
 
+function rawJsonResponse(bodyString, status = 200, extraHeaders = {}) {
+  return new NextResponse(bodyString ?? "null", {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      ...extraHeaders,
+    },
+  });
+}
+
+/* ───────── origin helpers ───────── */
+
+function normalizeOrigin(raw) {
+  let o = (raw || "").trim();
+
+  if (o && !/^https?:\/\//i.test(o)) {
+    o = `${IS_PROD ? "https" : "http"}://${o}`;
+  }
+
+  o = o.replace(/^http:\/\/localhost(?=[/:]|$)/i, "http://127.0.0.1");
+  o = o.replace(/\/+$/, "").replace(/\/api$/, "");
+
+  return o;
+}
+
+function assertNotLocalhostInProd(origin) {
+  if (!IS_PROD) return;
+  const h = new URL(origin).hostname;
+  const isLocal =
+    h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
+  if (isLocal) {
+    throw new Error(
+      `Invalid STRAPI_URL for production (localhost): ${origin}. Set STRAPI_URL/STRAPI_API_ORIGIN to your real Strapi domain (https://...).`
+    );
+  }
+}
+
+// IMPORTANT: never throw at module init in production.
+let STRAPI_ORIGIN = "";
+let STRAPI_API_BASE = "";
+let STRAPI_BOOT_ERROR = "";
+
+try {
+  STRAPI_ORIGIN = normalizeOrigin(RAW_STRAPI_ORIGIN);
+  assertNotLocalhostInProd(STRAPI_ORIGIN);
+  STRAPI_API_BASE = STRAPI_ORIGIN + "/api";
+} catch (e) {
+  STRAPI_BOOT_ERROR = e instanceof Error ? e.message : String(e || "BOOT_ERROR");
+}
+
 /**
  * Hardening: ensure `path` is a relative API path (not a full URL),
  * and does not contain CRLF or protocol tricks.
- *
- * Allowed:
- *  - "/products?populate=*"
- *  - "products?populate=*"
- *  - "/products/123?populate=*"
  */
 function normalizeStrapiPath(input) {
   const p = String(input || "").trim();
-
   if (!p) return "";
-
-  // Reject full URLs to avoid SSRF and odd behavior
   if (/^https?:\/\//i.test(p)) return "";
-
-  // Reject protocol-relative urls like //evil.com
   if (p.startsWith("//")) return "";
-
-  // Reject any CRLF
   if (/[\r\n]/.test(p)) return "";
-
-  // Ensure leading slash
   return p.startsWith("/") ? p : `/${p}`;
 }
 
-/**
- * Extract all Strapi size IDs from a Strapi product payload.
- * Supports both:
- *   - your flattened JSON (row.variants[].sizes[])
- *   - more "raw" Strapi style (row.attributes.variants.data[].attributes.sizes.data[])
- */
-function collectSizeIdsFromStrapiProducts(strapiData) {
-  const itemsRaw = strapiData?.data;
-
-  const items = Array.isArray(itemsRaw)
-    ? itemsRaw
-    : itemsRaw
-    ? [itemsRaw]
-    : [];
-
-  const sizeIds = new Set();
-
-  for (const item of items) {
-    // flattened vs attributes
-    let row = item;
-    const attrs = row.attributes || null;
-
-    let variants = row.variants || attrs?.variants || [];
-
-    // if Strapi-style collection (with .data)
-    if (variants && Array.isArray(variants.data)) {
-      variants = variants.data.map((v) => v.attributes || v);
-    }
-
-    if (!Array.isArray(variants)) continue;
-
-    for (const v of variants) {
-      let sizes = v.sizes || v.attributes?.sizes || [];
-
-      if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s); // keep id + attributes
-      }
-
-      if (!Array.isArray(sizes)) continue;
-
-      for (const s of sizes) {
-        // support multiple styles of id storage
-        const rawId =
-          s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
-
-        const sid = Number(rawId);
-        if (Number.isFinite(sid) && sid > 0) {
-          sizeIds.add(sid);
-        }
-      }
-    }
-  }
-
-  return { items, sizeIds };
+function splitPathAndQuery(p) {
+  const s = String(p || "");
+  const i = s.indexOf("?");
+  if (i === -1) return { pathname: s, search: "" };
+  return { pathname: s.slice(0, i), search: s.slice(i + 1) };
 }
 
 /**
- * Patch Strapi products with live Prisma stock:
- *  - For each size row, override:
- *      s.stock_quantity
- *      s.live_stock
- *      s.is_available
- *    and also mirror to s.attributes.* if present.
+ * ✅ Build upstream URL using URL() so bracket queries (filters[...], populate[...]) are safely encoded.
+ * This eliminates environment-specific fetch URL parsing edge cases.
  */
-async function patchProductsWithPrismaStock(strapiData) {
-  const { items, sizeIds } = collectSizeIdsFromStrapiProducts(strapiData);
+function buildTargetUrl(normalizedPath) {
+  const { pathname, search } = splitPathAndQuery(normalizedPath);
 
-  if (sizeIds.size === 0) {
-    return strapiData; // nothing to patch
+  const base = new URL(STRAPI_API_BASE);
+  const basePath = base.pathname.replace(/\/+$/, "");
+  base.pathname = `${basePath}${pathname}`;
+
+  // Setting `search` via URL ensures encoding is safe for Node fetch environments.
+  base.search = search ? `?${search}` : "";
+
+  return base.toString();
+}
+
+function fetchWithTimeout(url, init) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
+  return fetch(url, {
+    ...init,
+    signal: controller.signal,
+    redirect: "follow",
+  }).finally(() => clearTimeout(t));
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function shouldRetryStatus(status) {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+/* ───────── Prisma lazy-load (stability + speed) ───────── */
+/**
+ * DO NOT import Prisma at module scope.
+ * Only load Prisma when we actually need it (products stock patch).
+ */
+let _prismaPromise = null;
+async function getPrisma() {
+  if (_prismaPromise) return _prismaPromise;
+  _prismaPromise = import("@/lib/prisma").then((m) => m?.default ?? m);
+  return _prismaPromise;
+}
+
+/* ───────── micro-cache + in-flight dedupe ───────── */
+
+const INFLIGHT = new Map(); // key -> Promise<{ ok, status, payloadStr }>
+const MEM_META = new Map(); // key -> { exp, payloadStr, headers }
+const MEM_PROD = new Map(); // key -> { exp, payloadStr, headers }
+
+// Last-known-good payload (public reads only), used when upstream fails.
+const LAST_GOOD = new Map(); // key -> { exp, payloadStr }
+
+// Stock cache (sizeId -> stock) used when Prisma temporarily fails.
+const STOCK_CACHE = new Map(); // sizeId -> { exp, stock }
+
+const MEM_TTL_MS = (() => {
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_TTL_MS || 120000); // 2 min
+  if (!Number.isFinite(n) || n <= 0) return 120000;
+  return Math.min(10 * 60 * 1000, Math.max(10 * 1000, Math.round(n)));
+})();
+
+const MEM_PROD_TTL_MS = (() => {
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 15000); // 15s
+  if (!Number.isFinite(n) || n <= 0) return 15000;
+  return Math.min(120 * 1000, Math.max(2000, Math.round(n)));
+})();
+
+const MEM_MAX_BYTES = (() => {
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES || 1024 * 1024); // 1MB
+  if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
+  return Math.min(6 * 1024 * 1024, Math.max(64 * 1024, Math.round(n)));
+})();
+
+const LAST_GOOD_TTL_MS = (() => {
+  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_TTL_MS || 180000); // 3 min
+  if (!Number.isFinite(n) || n <= 0) return 180000;
+  return Math.min(15 * 60 * 1000, Math.max(30 * 1000, Math.round(n))); // 30s..15m
+})();
+
+const STOCK_CACHE_TTL_MS = (() => {
+  const n = Number(process.env.TDLS_STOCKCACHE_TTL_MS || 300000); // 5 min
+  if (!Number.isFinite(n) || n <= 0) return 300000;
+  return Math.min(30 * 60 * 1000, Math.max(30 * 1000, Math.round(n))); // 30s..30m
+})();
+
+function memGet(map, key) {
+  const v = map.get(key);
+  if (!v) return null;
+  if (v.exp <= Date.now()) {
+    map.delete(key);
+    return null;
   }
+  return v;
+}
 
-  // Load all matching variants from Prisma
-  const prismaVariants = await prisma.productVariant.findMany({
-    where: {
-      strapiSizeId: { in: Array.from(sizeIds) },
-    },
-    select: {
-      strapiSizeId: true,
-      stockAvailable: true,
-    },
-  });
+function memSet(map, key, payloadStr, headers, ttlMs) {
+  if (typeof payloadStr !== "string") return;
+  if (payloadStr.length > MEM_MAX_BYTES) return;
+  const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : MEM_TTL_MS;
+  map.set(key, { exp: Date.now() + ttl, payloadStr, headers });
+}
 
-  const bySizeId = new Map(
-    prismaVariants.map((v) => [v.strapiSizeId, v.stockAvailable])
-  );
+function lastGoodGet(key) {
+  const v = LAST_GOOD.get(key);
+  if (!v) return null;
+  if (v.exp <= Date.now()) {
+    LAST_GOOD.delete(key);
+    return null;
+  }
+  return v;
+}
 
-  // Patch in-place
+function lastGoodSet(key, payloadStr) {
+  if (typeof payloadStr !== "string") return;
+  // Keep last-good even if big; but avoid pathological memory usage:
+  if (payloadStr.length > 8 * 1024 * 1024) return; // hard guard 8MB
+  LAST_GOOD.set(key, { exp: Date.now() + LAST_GOOD_TTL_MS, payloadStr });
+}
+
+function stockCacheGet(sizeId) {
+  const v = STOCK_CACHE.get(sizeId);
+  if (!v) return null;
+  if (v.exp <= Date.now()) {
+    STOCK_CACHE.delete(sizeId);
+    return null;
+  }
+  return v.stock;
+}
+
+function stockCacheSet(sizeId, stock) {
+  if (!Number.isFinite(sizeId) || sizeId <= 0) return;
+  const s = Number(stock);
+  if (!Number.isFinite(s) || s < 0) return;
+  STOCK_CACHE.set(sizeId, { exp: Date.now() + STOCK_CACHE_TTL_MS, stock: s });
+}
+
+async function runDedupe(key, fn) {
+  const existing = INFLIGHT.get(key);
+  if (existing) return existing;
+
+  const p = (async () => {
+    try {
+      return await fn();
+    } finally {
+      INFLIGHT.delete(key);
+    }
+  })();
+
+  INFLIGHT.set(key, p);
+  return p;
+}
+
+/* ───────── stock patch helpers (logic hardened, behavior preserved) ───────── */
+
+function collectSizeIdsFromStrapiProducts(strapiData) {
+  const itemsRaw = strapiData?.data;
+  const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
+
+  const sizeIds = new Set();
+
   for (const item of items) {
     const row = item;
     const attrs = row.attributes || null;
@@ -208,9 +324,143 @@ async function patchProductsWithPrismaStock(strapiData) {
     let variants = row.variants || attrs?.variants || [];
 
     if (variants && Array.isArray(variants.data)) {
-      variants = variants.data.map((v) => v); // keep id + attributes
+      variants = variants.data.map((v) => v.attributes || v);
+    }
+    if (!Array.isArray(variants)) continue;
+
+    for (const v of variants) {
+      let sizes = v.sizes || v.attributes?.sizes || [];
+
+      if (sizes && Array.isArray(sizes.data)) {
+        sizes = sizes.data.map((s) => s);
+      }
+      if (!Array.isArray(sizes)) continue;
+
+      for (const s of sizes) {
+        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
+        const sid = Number(rawId);
+        if (Number.isFinite(sid) && sid > 0) sizeIds.add(sid);
+      }
+    }
+  }
+
+  return { items, sizeIds };
+}
+
+async function getStockMapForSizeIds(sizeIds) {
+  const ids = Array.from(sizeIds || []);
+  if (ids.length === 0) return { bySizeId: new Map(), source: "none", error: null };
+
+  try {
+    const prisma = await getPrisma();
+
+    const prismaVariants = await prisma.productVariant.findMany({
+      where: { strapiSizeId: { in: ids } },
+      select: { strapiSizeId: true, stockAvailable: true },
+    });
+
+    const bySizeId = new Map();
+    for (const v of prismaVariants) {
+      const sid = Number(v?.strapiSizeId);
+      const stock = Number(v?.stockAvailable ?? 0) || 0;
+      if (Number.isFinite(sid) && sid > 0) {
+        bySizeId.set(sid, stock);
+        stockCacheSet(sid, stock);
+      }
     }
 
+    return { bySizeId, source: "prisma", error: null };
+  } catch (e) {
+    // Prisma failed: fall back to cached stock
+    const bySizeId = new Map();
+    let hits = 0;
+
+    for (const sid of ids) {
+      const cached = stockCacheGet(sid);
+      if (cached != null) {
+        bySizeId.set(sid, cached);
+        hits++;
+      }
+    }
+
+    return { bySizeId, source: hits ? "cache" : "none", error: e };
+  }
+}
+
+/**
+ * ✅ Ensure sizes always have `is_available` (prevents client filters from excluding everything
+ * when Prisma is temporarily unavailable on cold starts).
+ */
+function ensureAvailabilityDefaultsOnProducts(strapiData) {
+  const itemsRaw = strapiData?.data;
+  const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
+
+  for (const item of items) {
+    const row = item;
+    const attrs = row.attributes || null;
+
+    let variants = row.variants || attrs?.variants || [];
+    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v);
+    if (!Array.isArray(variants)) continue;
+
+    for (const v of variants) {
+      const vAttrs = v.attributes || null;
+
+      let sizes = v.sizes || vAttrs?.sizes || [];
+      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
+      if (!Array.isArray(sizes)) continue;
+
+      for (const s of sizes) {
+        const sAttrs = s.attributes || null;
+
+        const hasBool =
+          typeof s.is_available === "boolean" || (sAttrs && typeof sAttrs.is_available === "boolean");
+
+        if (hasBool) continue;
+
+        const stockRaw =
+          s.live_stock ??
+          s.stock_quantity ??
+          (sAttrs ? (sAttrs.live_stock ?? sAttrs.stock_quantity) : undefined);
+
+        const stockNum = Number(stockRaw);
+        const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true; // ✅ optimistic when unknown
+
+        s.is_available = isAvailable;
+        if (sAttrs) {
+          s.attributes = { ...sAttrs, is_available: isAvailable };
+        }
+      }
+    }
+  }
+
+  return strapiData;
+}
+
+/**
+ * Patch Strapi products with live Prisma stock.
+ * If Prisma is temporarily down, we use cached stock (prevents products “disappearing”).
+ */
+async function patchProductsWithPrismaStock(strapiData) {
+  const { items, sizeIds } = collectSizeIdsFromStrapiProducts(strapiData);
+  if (sizeIds.size === 0) return ensureAvailabilityDefaultsOnProducts(strapiData);
+
+  const { bySizeId, source, error } = await getStockMapForSizeIds(sizeIds);
+
+  if (source === "none" && error) {
+    // Prisma/cache cold: DO NOT throw; but ensure availability defaults exist.
+    return ensureAvailabilityDefaultsOnProducts(strapiData);
+  }
+
+  for (const item of items) {
+    const row = item;
+    const attrs = row.attributes || null;
+
+    let variants = row.variants || attrs?.variants || [];
+
+    if (variants && Array.isArray(variants.data)) {
+      variants = variants.data.map((v) => v);
+    }
     if (!Array.isArray(variants)) continue;
 
     for (const v of variants) {
@@ -219,31 +469,33 @@ async function patchProductsWithPrismaStock(strapiData) {
       let sizes = v.sizes || vAttrs?.sizes || [];
 
       if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s); // keep id + attributes
+        sizes = sizes.data.map((s) => s);
       }
-
       if (!Array.isArray(sizes)) continue;
 
       for (const s of sizes) {
         const sAttrs = s.attributes || null;
 
         const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? sAttrs?.id;
-
         const sid = Number(rawId);
         if (!Number.isFinite(sid) || sid <= 0) continue;
 
-        const live = bySizeId.get(sid);
-        if (live == null) continue;
+        if (!bySizeId.has(sid)) {
+          // Ensure boolean exists even when we didn’t patch this specific size
+          if (typeof s.is_available !== "boolean" && !(sAttrs && typeof sAttrs.is_available === "boolean")) {
+            s.is_available = true;
+            if (sAttrs) s.attributes = { ...sAttrs, is_available: true };
+          }
+          continue;
+        }
 
-        const liveStock = Number(live) || 0;
+        const liveStock = Number(bySizeId.get(sid)) || 0;
         const isAvailable = liveStock > 0;
 
-        // Direct fields (flattened / custom JSON)
         s.stock_quantity = liveStock;
         s.live_stock = liveStock;
         s.is_available = isAvailable;
 
-        // If Strapi nested attributes exists, mirror there as well
         if (sAttrs) {
           s.attributes = {
             ...sAttrs,
@@ -256,16 +508,72 @@ async function patchProductsWithPrismaStock(strapiData) {
     }
   }
 
-  return strapiData;
+  return ensureAvailabilityDefaultsOnProducts(strapiData);
+}
+
+/* ───────── upstream fetch (retry hardened) ───────── */
+
+async function fetchUpstreamResilient(target, baseHeaders) {
+  const attempt = async () => {
+    let res;
+
+    if (STRAPI_TOKEN) {
+      res = await fetchWithTimeout(target, {
+        method: "GET",
+        headers: { ...baseHeaders, Authorization: `Bearer ${STRAPI_TOKEN}` },
+        cache: "no-store",
+      });
+
+      if (res.status === 401) {
+        res = await fetchWithTimeout(target, {
+          method: "GET",
+          headers: baseHeaders,
+          cache: "no-store",
+        });
+      }
+    } else {
+      res = await fetchWithTimeout(target, {
+        method: "GET",
+        headers: baseHeaders,
+        cache: "no-store",
+      });
+    }
+
+    return res;
+  };
+
+  // First attempt
+  try {
+    const res1 = await attempt();
+    if (shouldRetryStatus(res1.status)) {
+      await sleep(220);
+      const res2 = await attempt();
+      return res2;
+    }
+    return res1;
+  } catch (e) {
+    // Network/timeout/abort → one retry
+    await sleep(220);
+    return await attempt();
+  }
 }
 
 /* ───────── main handler ───────── */
 
 export async function GET(req) {
+  const t0 = Date.now();
+
   try {
+    if (STRAPI_BOOT_ERROR) {
+      return jsonResponse(
+        { ok: false, error: "SERVER_MISCONFIGURED", message: STRAPI_BOOT_ERROR },
+        500,
+        { "cache-control": "no-store" }
+      );
+    }
+
     const url = new URL(req.url);
 
-    // Optional secret – only validated when actually provided
     const clientSecretRaw =
       url.searchParams.get("secret") ||
       req.headers.get("x-strapi-sync-secret") ||
@@ -276,8 +584,7 @@ export async function GET(req) {
 
     if (hasClientSecret) {
       if (!STRAPI_SYNC_SECRET) {
-        console.error("STRAPI_SYNC_SECRET is not set in environment");
-        return j(
+        return jsonResponse(
           {
             ok: false,
             error: "SERVER_MISCONFIGURED",
@@ -289,116 +596,230 @@ export async function GET(req) {
 
       const clientSecret = clientSecretRaw.trim();
       if (clientSecret !== STRAPI_SYNC_SECRET) {
-        return j(
+        return jsonResponse(
           { ok: false, error: "UNAUTHORIZED", message: "Invalid proxy secret" },
           401
         );
       }
     }
 
-    // Extract Strapi path (like /products?populate=*)
     const rawPath = url.searchParams.get("path") || "";
     const normalizedPath = normalizeStrapiPath(rawPath);
 
     if (!normalizedPath) {
-      return j(
+      return jsonResponse(
         {
           ok: false,
           error: "BAD_REQUEST",
-          message:
-            "Invalid or missing `path` query parameter (must be a relative Strapi API path).",
+          message: "Invalid or missing `path` query parameter (must be a relative Strapi API path).",
         },
         400
       );
     }
 
-    // Detect product endpoints so we can patch stock from Prisma
     const isProductEndpoint =
-      normalizedPath.startsWith("/products") ||
-      normalizedPath.startsWith("/products/");
+      normalizedPath.startsWith("/products") || normalizedPath.startsWith("/products/");
 
-    // Compose final Strapi URL: https://<strapi>/api/products?populate=*
-    const target = `${STRAPI_API_BASE}${normalizedPath}`;
+    const target = buildTargetUrl(normalizedPath);
+    const baseHeaders = { Accept: "application/json" };
 
-    // Prepare headers (with optional token)
-    const baseHeaders = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    };
+    const noCache = url.searchParams.get("noCache") === "1";
 
-    let res;
+    // ✅ Allow CDN caching for PUBLIC reads (including products) unless caller forces noCache=1.
+    const CACHE_OK = !noCache && !hasClientSecret;
 
-    if (STRAPI_TOKEN) {
-      const headersWithToken = {
-        ...baseHeaders,
-        Authorization: `Bearer ${STRAPI_TOKEN}`,
-      };
+    const cacheControl = CACHE_OK
+      ? isProductEndpoint
+        ? PRODUCT_CACHE_CONTROL
+        : META_CACHE_CONTROL
+      : "no-store";
 
-      res = await fetch(target, {
-        method: "GET",
-        headers: headersWithToken,
-        cache: "no-store",
-      });
+    const cacheKey = `${CACHE_OK ? "pub" : "noc"}|${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}`;
 
-      // If Strapi says "Missing or invalid credentials", retry WITHOUT Authorization
-      if (res.status === 401) {
-        console.warn(
-          "[strapi-proxy] Got 401 with token, retrying without Authorization header"
-        );
-        res = await fetch(target, {
-          method: "GET",
-          headers: baseHeaders,
-          cache: "no-store",
+    // Key for last-known-good fallback (public only)
+    const lastGoodKey = `${hasClientSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}`;
+
+    // 1) in-memory micro-cache
+    if (CACHE_OK) {
+      const map = isProductEndpoint ? MEM_PROD : MEM_META;
+      const hit = memGet(map, cacheKey);
+      if (hit?.payloadStr) {
+        const ms = Date.now() - t0;
+        return rawJsonResponse(hit.payloadStr, 200, {
+          ...hit.headers,
+          "cache-control": cacheControl,
+          "CDN-Cache-Control": cacheControl,
+          "x-tdls-proxy-ms": String(ms),
+          "x-tdls-cache": "1",
+          "x-tdls-mem": "1",
         });
       }
-    } else {
-      // No token configured – just call public endpoint
-      res = await fetch(target, {
-        method: "GET",
-        headers: baseHeaders,
-        cache: "no-store",
-      });
     }
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return j(
+    // 2) dedupe concurrent requests for same key
+    const dedupeKey = `${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}|${
+      hasClientSecret ? "sec" : "pub"
+    }|${STRAPI_TOKEN ? "tok" : "notok"}|${noCache ? "nc1" : "nc0"}`;
+
+    const result = await runDedupe(dedupeKey, async () => {
+      const res = await fetchUpstreamResilient(target, baseHeaders);
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ok: false,
+          status: res.status,
+          statusText: res.statusText,
+          errorText: text || null,
+        };
+      }
+
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        // invalid JSON → treat as upstream error so stale-if-error paths can kick in
+        return { ok: false, status: 502, statusText: "Bad Gateway", errorText: "Invalid JSON" };
+      }
+
+      if (isProductEndpoint) {
+        data = await patchProductsWithPrismaStock(data);
+      }
+
+      const payloadObj = { ok: true, data, ms: Date.now() - t0 };
+      const payloadStr = JSON.stringify(payloadObj);
+
+      return { ok: true, status: 200, payloadStr };
+    });
+
+    const ms = Date.now() - t0;
+
+    // Handle upstream failure → serve last-known-good (public only)
+    if (!result?.ok) {
+      if (!hasClientSecret) {
+        const lg = lastGoodGet(lastGoodKey);
+        if (lg?.payloadStr) {
+          return rawJsonResponse(lg.payloadStr, 200, {
+            "cache-control": cacheControl, // ✅ allow CDN to keep serving stale
+            "CDN-Cache-Control": cacheControl,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-stale": "1",
+            "x-tdls-fallback": "last-good",
+            "x-tdls-upstream-status": String(result?.status || 0),
+          });
+        }
+      }
+
+      return jsonResponse(
         {
           ok: false,
           error: "STRAPI_PROXY_ERROR",
-          status: res.status,
-          statusText: res.statusText,
+          status: result?.status || 502,
+          statusText: result?.statusText || "Bad Gateway",
           message: "Strapi request failed",
-          details: text || null,
-          target: IS_PROD ? undefined : target, // avoid leaking internal target in prod
+          details: result?.errorText || null,
+          ms,
+          target: IS_PROD ? undefined : target,
         },
-        502
+        502,
+        {
+          "cache-control": "no-store",
+          "x-tdls-upstream-status": String(result?.status || 0),
+          "x-tdls-proxy-ms": String(ms),
+          "x-tdls-cache": "0",
+        }
       );
     }
 
-    let data = await res.json();
+    // Success path
+    const payloadStr = result.payloadStr || JSON.stringify({ ok: true, data: null, ms });
 
-    // OVERRIDE STOCK WITH PRISMA (OPTION A)
-    if (isProductEndpoint) {
-      try {
-        data = await patchProductsWithPrismaStock(data);
-      } catch (e) {
-        console.error(
-          "[strapi-proxy] Failed to patch stock from Prisma – falling back to raw Strapi response",
-          e
-        );
-      }
+    // Store micro-cache
+    if (CACHE_OK) {
+      const map = isProductEndpoint ? MEM_PROD : MEM_META;
+      memSet(
+        map,
+        cacheKey,
+        payloadStr,
+        {
+          "cache-control": cacheControl,
+          "CDN-Cache-Control": cacheControl,
+        },
+        isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS
+      );
     }
 
-    // IMPORTANT:
-    // We wrap Strapi's raw payload in { ok: true, data }
-    // This keeps compatibility with fetchProductsFromStrapi and other helpers.
-    return j({ ok: true, data }, 200);
+    // Store last-known-good for public reads
+    if (!hasClientSecret) {
+      lastGoodSet(lastGoodKey, payloadStr);
+    }
+
+    return rawJsonResponse(payloadStr, 200, {
+      "cache-control": cacheControl,
+      "CDN-Cache-Control": cacheControl,
+      "x-tdls-proxy-ms": String(ms),
+      "x-tdls-cache": CACHE_OK ? "1" : "0",
+      "x-tdls-mem": "0",
+      "x-tdls-stale": "0",
+    });
   } catch (err) {
+    const ms = Date.now() - t0;
+
+    const name = String(err?.name || "");
+    const isAbort =
+      name === "AbortError" ||
+      name.toLowerCase().includes("abort") ||
+      String(err?.message || "").toLowerCase().includes("aborted");
+
+    // If timeout/abort → serve last-known-good (public only)
+    try {
+      const url = new URL(req.url);
+      const hasSecret =
+        !!(url.searchParams.get("secret") ||
+           req.headers.get("x-strapi-sync-secret") ||
+           req.headers.get("x-strapi-proxy-secret"));
+      const normalizedPath = normalizeStrapiPath(url.searchParams.get("path") || "");
+      const isProductEndpoint =
+        normalizedPath.startsWith("/products") || normalizedPath.startsWith("/products/");
+      const lastGoodKey = `${hasSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}`;
+
+      if (!hasSecret) {
+        const lg = lastGoodGet(lastGoodKey);
+        if (lg?.payloadStr) {
+          // Use product/meta cache controls to let CDN keep serving stale during incidents
+          const cacheControl = isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL;
+
+          return rawJsonResponse(lg.payloadStr, 200, {
+            "cache-control": cacheControl,
+            "CDN-Cache-Control": cacheControl,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-stale": "1",
+            "x-tdls-fallback": isAbort ? "timeout:last-good" : "error:last-good",
+          });
+        }
+      }
+    } catch {
+      // ignore fallback parse errors; fall through to normal error response
+    }
+
+    if (isAbort) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "UPSTREAM_TIMEOUT",
+          message: `Strapi did not respond within ${UPSTREAM_TIMEOUT_MS}ms`,
+          ms,
+        },
+        504,
+        { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
+      );
+    }
+
     console.error("STRAPI PROXY FATAL ERROR:", err);
-    return j(
-      { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed" },
-      500
+    return jsonResponse(
+      { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed", ms },
+      500,
+      { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
     );
   }
 }
