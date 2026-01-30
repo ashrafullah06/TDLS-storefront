@@ -1,4 +1,4 @@
-//✅ Corrected full code — app/api/strapi/route.js
+// FILE: app/api/strapi/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -16,18 +16,10 @@ const RAW_STRAPI_ORIGIN =
 const IS_PROD = process.env.NODE_ENV === "production";
 
 // Optional secret used by internal / cron calls (OPTIONAL for public reads)
-const STRAPI_SYNC_SECRET = (
-  process.env.STRAPI_SYNC_SECRET ||
-  process.env.STRAPI_PROXY_SECRET ||
-  ""
-).trim();
+const STRAPI_SYNC_SECRET = (process.env.STRAPI_SYNC_SECRET || process.env.STRAPI_PROXY_SECRET || "").trim();
 
 // Token for Strapi REST (optional; will be ignored if invalid)
-const STRAPI_TOKEN = (
-  process.env.STRAPI_API_TOKEN ||
-  process.env.STRAPI_GRAPHQL_TOKEN ||
-  ""
-).trim();
+const STRAPI_TOKEN = (process.env.STRAPI_API_TOKEN || process.env.STRAPI_GRAPHQL_TOKEN || "").trim();
 
 // Hard safety timeout to avoid “hanging streams” and platform timeouts.
 const UPSTREAM_TIMEOUT_MS = (() => {
@@ -59,7 +51,8 @@ const PRODUCT_CACHE_CONTROL = (() => {
     const x = Number(v);
     if (!Number.isFinite(x)) return fallback;
     return Math.min(hi, Math.max(lo, Math.round(x)));
-    };
+  };
+
   const a = clamp(maxAge, 0, 300, 15);
   const b = clamp(sMaxAge, 0, 3600, 180);
   const c = clamp(swr, 0, 86400, 3600);
@@ -110,8 +103,7 @@ function normalizeOrigin(raw) {
 function assertNotLocalhostInProd(origin) {
   if (!IS_PROD) return;
   const h = new URL(origin).hostname;
-  const isLocal =
-    h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
+  const isLocal = h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
   if (isLocal) {
     throw new Error(
       `Invalid STRAPI_URL for production (localhost): ${origin}. Set STRAPI_URL/STRAPI_API_ORIGIN to your real Strapi domain (https://...).`
@@ -153,6 +145,104 @@ function splitPathAndQuery(p) {
 }
 
 /**
+ * ✅ Canonicalize query params (stable cache keys in production)
+ */
+function canonicalizePath(p) {
+  const { pathname, search } = splitPathAndQuery(p);
+  if (!search) return pathname;
+
+  const params = new URLSearchParams(search);
+  const entries = Array.from(params.entries());
+  entries.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+
+  const out = new URLSearchParams();
+  for (const [k, v] of entries) out.append(k, v);
+
+  const qs = out.toString();
+  return qs ? `${pathname}?${qs}` : pathname;
+}
+
+function hasAnyPopulate(params) {
+  if (params.has("populate")) return true;
+  for (const k of params.keys()) {
+    if (k.startsWith("populate[")) return true;
+  }
+  return false;
+}
+
+function hasPopulateBranch(params, branch) {
+  const prefix = `populate[${branch}]`;
+  for (const k of params.keys()) {
+    if (k === prefix || k.startsWith(prefix + "[")) return true;
+  }
+  return false;
+}
+
+function ensureDeepPopulate(params, branch, nestedKey) {
+  const k = `populate[${branch}][populate][${nestedKey}]`;
+  if (!params.has(k)) params.set(k, "*");
+}
+
+/**
+ * ✅ Normalize product LIST requests so all callers get a consistent dataset.
+ * This prevents production-only “random empty filters” caused by:
+ * - default Strapi pagination (25)
+ * - missing deep relations (variants/sizes) in some callers
+ */
+const DEFAULT_PRODUCTS_PAGESIZE = (() => {
+  const n = Number(process.env.TDLS_STRAPI_PRODUCTS_PAGESIZE ?? 1000);
+  if (!Number.isFinite(n) || n <= 0) return 1000;
+  return Math.min(1500, Math.max(25, Math.round(n)));
+})();
+
+function normalizeProductsPath(p) {
+  const { pathname, search } = splitPathAndQuery(p);
+  if (!pathname.startsWith("/products")) return p;
+
+  const params = new URLSearchParams(search || "");
+
+  // If no populate at all, ensure listing gets relations.
+  if (!hasAnyPopulate(params)) {
+    params.set("populate", "*");
+  }
+
+  // Always ensure deep populate for sizes under variants to prevent client-side filters from excluding everything.
+  // Supports both schemas: product_variants (new) and variants (legacy).
+  // Even if populate="*" exists, Strapi won't necessarily deep-populate nested relations.
+  ensureDeepPopulate(params, "product_variants", "sizes");
+  ensureDeepPopulate(params, "variants", "sizes");
+
+  // If caller explicitly populates variant branches but not sizes, also force sizes.
+  if (hasPopulateBranch(params, "product_variants")) ensureDeepPopulate(params, "product_variants", "sizes");
+  if (hasPopulateBranch(params, "variants")) ensureDeepPopulate(params, "variants", "sizes");
+
+  // Ensure pagination[pageSize] exists for product LIST calls.
+  // (Safe even if caller already provided filters — it just increases page size.)
+  const pageSizeKey = "pagination[pageSize]";
+  const existing = params.get(pageSizeKey);
+
+  if (!existing) {
+    params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
+  } else {
+    const x = Number(existing);
+    if (!Number.isFinite(x) || x <= 0) {
+      params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
+    }
+  }
+
+  // Avoid “random empty” from callers accidentally paging deep
+  const pageKey = "pagination[page]";
+  const pageVal = params.get(pageKey);
+  if (pageVal) {
+    const n = Number(pageVal);
+    if (!Number.isFinite(n) || n < 1) params.delete(pageKey);
+  }
+
+  const qs = params.toString();
+  return qs ? `${pathname}?${qs}` : pathname;
+}
+
+/**
  * ✅ Build upstream URL using URL() so bracket queries (filters[...], populate[...]) are safely encoded.
  * This eliminates environment-specific fetch URL parsing edge cases.
  */
@@ -163,9 +253,7 @@ function buildTargetUrl(normalizedPath) {
   const basePath = base.pathname.replace(/\/+$/, "");
   base.pathname = `${basePath}${pathname}`;
 
-  // Setting `search` via URL ensures encoding is safe for Node fetch environments.
   base.search = search ? `?${search}` : "";
-
   return base.toString();
 }
 
@@ -202,11 +290,12 @@ async function getPrisma() {
 
 /* ───────── micro-cache + in-flight dedupe ───────── */
 
-const INFLIGHT = new Map(); // key -> Promise<{ ok, status, payloadStr }>
+const INFLIGHT = new Map(); // key -> Promise<{ ok, status, payloadStr, productCount? }>
 const MEM_META = new Map(); // key -> { exp, payloadStr, headers }
 const MEM_PROD = new Map(); // key -> { exp, payloadStr, headers }
 
 // Last-known-good payload (public reads only), used when upstream fails.
+// NOTE: we intentionally do NOT store “empty products list” as last-good.
 const LAST_GOOD = new Map(); // key -> { exp, payloadStr }
 
 // Stock cache (sizeId -> stock) used when Prisma temporarily fails.
@@ -271,7 +360,6 @@ function lastGoodGet(key) {
 
 function lastGoodSet(key, payloadStr) {
   if (typeof payloadStr !== "string") return;
-  // Keep last-good even if big; but avoid pathological memory usage:
   if (payloadStr.length > 8 * 1024 * 1024) return; // hard guard 8MB
   LAST_GOOD.set(key, { exp: Date.now() + LAST_GOOD_TTL_MS, payloadStr });
 }
@@ -311,6 +399,40 @@ async function runDedupe(key, fn) {
 
 /* ───────── stock patch helpers (logic hardened, behavior preserved) ───────── */
 
+function normalizeRelArray(x) {
+  if (!x) return [];
+  if (Array.isArray(x)) return x;
+  if (Array.isArray(x.data)) return x.data;
+  if (x.data) return [x.data];
+  return [];
+}
+
+function getProductVariantsContainers(row) {
+  const attrs = row?.attributes || null;
+
+  // Support BOTH field names (production sometimes differs): product_variants and variants
+  const raw =
+    row?.product_variants ??
+    row?.variants ??
+    (attrs ? attrs.product_variants ?? attrs.variants : null) ??
+    [];
+
+  return normalizeRelArray(raw);
+}
+
+function getVariantSizesContainers(variant) {
+  const vAttrs = variant?.attributes || null;
+  const raw = variant?.sizes ?? (vAttrs ? vAttrs.sizes : null) ?? [];
+  return normalizeRelArray(raw);
+}
+
+function getSizeId(sizeObj) {
+  const sAttrs = sizeObj?.attributes || null;
+  const rawId = sizeObj?.id ?? sizeObj?.size_id ?? sizeObj?.strapiSizeId ?? (sAttrs ? sAttrs.id : undefined);
+  const sid = Number(rawId);
+  return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
 function collectSizeIdsFromStrapiProducts(strapiData) {
   const itemsRaw = strapiData?.data;
   const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
@@ -318,28 +440,12 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
   const sizeIds = new Set();
 
   for (const item of items) {
-    const row = item;
-    const attrs = row.attributes || null;
-
-    let variants = row.variants || attrs?.variants || [];
-
-    if (variants && Array.isArray(variants.data)) {
-      variants = variants.data.map((v) => v.attributes || v);
-    }
-    if (!Array.isArray(variants)) continue;
-
+    const variants = getProductVariantsContainers(item);
     for (const v of variants) {
-      let sizes = v.sizes || v.attributes?.sizes || [];
-
-      if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s);
-      }
-      if (!Array.isArray(sizes)) continue;
-
+      const sizes = getVariantSizesContainers(v);
       for (const s of sizes) {
-        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
-        const sid = Number(rawId);
-        if (Number.isFinite(sid) && sid > 0) sizeIds.add(sid);
+        const sid = getSizeId(s);
+        if (sid) sizeIds.add(sid);
       }
     }
   }
@@ -388,30 +494,21 @@ async function getStockMapForSizeIds(sizeIds) {
 }
 
 /**
- * ✅ Ensure sizes always have `is_available` (prevents client filters from excluding everything
- * when Prisma is temporarily unavailable on cold starts).
+ * ✅ Ensure sizes always have `is_available`
+ * (prevents client filters from excluding everything when stock patching can’t run)
  */
 function ensureAvailabilityDefaultsOnProducts(strapiData) {
   const itemsRaw = strapiData?.data;
   const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
 
   for (const item of items) {
-    const row = item;
-    const attrs = row.attributes || null;
-
-    let variants = row.variants || attrs?.variants || [];
-    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v);
-    if (!Array.isArray(variants)) continue;
+    const variants = getProductVariantsContainers(item);
 
     for (const v of variants) {
-      const vAttrs = v.attributes || null;
-
-      let sizes = v.sizes || vAttrs?.sizes || [];
-      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
-      if (!Array.isArray(sizes)) continue;
+      const sizes = getVariantSizesContainers(v);
 
       for (const s of sizes) {
-        const sAttrs = s.attributes || null;
+        const sAttrs = s?.attributes || null;
 
         const hasBool =
           typeof s.is_available === "boolean" || (sAttrs && typeof sAttrs.is_available === "boolean");
@@ -421,10 +518,10 @@ function ensureAvailabilityDefaultsOnProducts(strapiData) {
         const stockRaw =
           s.live_stock ??
           s.stock_quantity ??
-          (sAttrs ? (sAttrs.live_stock ?? sAttrs.stock_quantity) : undefined);
+          (sAttrs ? sAttrs.live_stock ?? sAttrs.stock_quantity : undefined);
 
         const stockNum = Number(stockRaw);
-        const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true; // ✅ optimistic when unknown
+        const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true; // optimistic when unknown
 
         s.is_available = isAvailable;
         if (sAttrs) {
@@ -448,41 +545,26 @@ async function patchProductsWithPrismaStock(strapiData) {
   const { bySizeId, source, error } = await getStockMapForSizeIds(sizeIds);
 
   if (source === "none" && error) {
-    // Prisma/cache cold: DO NOT throw; but ensure availability defaults exist.
     return ensureAvailabilityDefaultsOnProducts(strapiData);
   }
 
   for (const item of items) {
-    const row = item;
-    const attrs = row.attributes || null;
-
-    let variants = row.variants || attrs?.variants || [];
-
-    if (variants && Array.isArray(variants.data)) {
-      variants = variants.data.map((v) => v);
-    }
-    if (!Array.isArray(variants)) continue;
+    const variants = getProductVariantsContainers(item);
 
     for (const v of variants) {
-      const vAttrs = v.attributes || null;
-
-      let sizes = v.sizes || vAttrs?.sizes || [];
-
-      if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s);
-      }
-      if (!Array.isArray(sizes)) continue;
+      const sizes = getVariantSizesContainers(v);
 
       for (const s of sizes) {
-        const sAttrs = s.attributes || null;
+        const sAttrs = s?.attributes || null;
 
-        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? sAttrs?.id;
-        const sid = Number(rawId);
-        if (!Number.isFinite(sid) || sid <= 0) continue;
+        const sid = getSizeId(s);
+        if (!sid) continue;
 
         if (!bySizeId.has(sid)) {
-          // Ensure boolean exists even when we didn’t patch this specific size
-          if (typeof s.is_available !== "boolean" && !(sAttrs && typeof sAttrs.is_available === "boolean")) {
+          if (
+            typeof s.is_available !== "boolean" &&
+            !(sAttrs && typeof sAttrs.is_available === "boolean")
+          ) {
             s.is_available = true;
             if (sAttrs) s.attributes = { ...sAttrs, is_available: true };
           }
@@ -542,7 +624,6 @@ async function fetchUpstreamResilient(target, baseHeaders) {
     return res;
   };
 
-  // First attempt
   try {
     const res1 = await attempt();
     if (shouldRetryStatus(res1.status)) {
@@ -551,11 +632,50 @@ async function fetchUpstreamResilient(target, baseHeaders) {
       return res2;
     }
     return res1;
-  } catch (e) {
-    // Network/timeout/abort → one retry
+  } catch {
     await sleep(220);
     return await attempt();
   }
+}
+
+function isProductsListPath(pathname) {
+  return pathname === "/products";
+}
+
+function productCountFromStrapiData(strapiData) {
+  const d = strapiData?.data;
+  if (Array.isArray(d)) return d.length;
+  return d ? 1 : 0;
+}
+
+/**
+ * Global products fallback path (used to avoid “random empty grid” in production).
+ * We keep this minimal and normalized to ensure it succeeds and returns a full dataset for client filters.
+ */
+function getGlobalProductsEffectivePath() {
+  return canonicalizePath(normalizeProductsPath("/products"));
+}
+
+async function fetchGlobalProductsNow(baseHeaders) {
+  const effectivePath = getGlobalProductsEffectivePath();
+  const target = buildTargetUrl(effectivePath);
+
+  const res = await fetchUpstreamResilient(target, baseHeaders);
+  if (!res.ok) return null;
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    return null;
+  }
+
+  data = await patchProductsWithPrismaStock(data);
+
+  const cnt = productCountFromStrapiData(data);
+  if (cnt <= 0) return null;
+
+  return { effectivePath, data, cnt };
 }
 
 /* ───────── main handler ───────── */
@@ -579,8 +699,7 @@ export async function GET(req) {
       req.headers.get("x-strapi-sync-secret") ||
       req.headers.get("x-strapi-proxy-secret");
 
-    const hasClientSecret =
-      typeof clientSecretRaw === "string" && clientSecretRaw.trim().length > 0;
+    const hasClientSecret = typeof clientSecretRaw === "string" && clientSecretRaw.trim().length > 0;
 
     if (hasClientSecret) {
       if (!STRAPI_SYNC_SECRET) {
@@ -596,17 +715,14 @@ export async function GET(req) {
 
       const clientSecret = clientSecretRaw.trim();
       if (clientSecret !== STRAPI_SYNC_SECRET) {
-        return jsonResponse(
-          { ok: false, error: "UNAUTHORIZED", message: "Invalid proxy secret" },
-          401
-        );
+        return jsonResponse({ ok: false, error: "UNAUTHORIZED", message: "Invalid proxy secret" }, 401);
       }
     }
 
     const rawPath = url.searchParams.get("path") || "";
-    const normalizedPath = normalizeStrapiPath(rawPath);
+    const normalizedPath0 = normalizeStrapiPath(rawPath);
 
-    if (!normalizedPath) {
+    if (!normalizedPath0) {
       return jsonResponse(
         {
           ok: false,
@@ -617,47 +733,75 @@ export async function GET(req) {
       );
     }
 
-    const isProductEndpoint =
-      normalizedPath.startsWith("/products") || normalizedPath.startsWith("/products/");
+    // ✅ Normalize product list requests + canonicalize query order for stable caching
+    const effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
+    const { pathname: effPathname } = splitPathAndQuery(effectivePath);
 
-    const target = buildTargetUrl(normalizedPath);
+    const isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
+    const isProductsList = isProductEndpoint && isProductsListPath(effPathname);
+
+    const target = buildTargetUrl(effectivePath);
     const baseHeaders = { Accept: "application/json" };
 
     const noCache = url.searchParams.get("noCache") === "1";
 
-    // ✅ Allow CDN caching for PUBLIC reads (including products) unless caller forces noCache=1.
+    // Allow CDN caching for PUBLIC reads unless caller forces noCache=1.
     const CACHE_OK = !noCache && !hasClientSecret;
 
-    const cacheControl = CACHE_OK
-      ? isProductEndpoint
-        ? PRODUCT_CACHE_CONTROL
-        : META_CACHE_CONTROL
-      : "no-store";
+    const cacheControl = CACHE_OK ? (isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL) : "no-store";
 
-    const cacheKey = `${CACHE_OK ? "pub" : "noc"}|${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}`;
+    const cacheKey = `${CACHE_OK ? "pub" : "noc"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
     // Key for last-known-good fallback (public only)
-    const lastGoodKey = `${hasClientSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}`;
+    const lastGoodKey = `${hasClientSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
-    // 1) in-memory micro-cache
+    // Also keep a global products last-good key (public) to avoid blank grids when a filtered/list request glitches.
+    const globalProductsEffectivePath = isProductsList ? getGlobalProductsEffectivePath() : "";
+    const globalProductsLastGoodKey = globalProductsEffectivePath ? `pub|prod|${globalProductsEffectivePath}` : "";
+
+    // 1) in-memory micro-cache (NEVER serve cached empty products list)
     if (CACHE_OK) {
       const map = isProductEndpoint ? MEM_PROD : MEM_META;
       const hit = memGet(map, cacheKey);
       if (hit?.payloadStr) {
-        const ms = Date.now() - t0;
-        return rawJsonResponse(hit.payloadStr, 200, {
-          ...hit.headers,
-          "cache-control": cacheControl,
-          "CDN-Cache-Control": cacheControl,
-          "x-tdls-proxy-ms": String(ms),
-          "x-tdls-cache": "1",
-          "x-tdls-mem": "1",
-        });
+        // For product-list, guard against poisoned cache (empty payload cached earlier).
+        if (isProductsList) {
+          try {
+            const parsed = JSON.parse(hit.payloadStr);
+            const cnt = productCountFromStrapiData(parsed?.data);
+            if (cnt <= 0) {
+              // drop poisoned cache entry
+              map.delete(cacheKey);
+            } else {
+              const ms = Date.now() - t0;
+              return rawJsonResponse(hit.payloadStr, 200, {
+                ...hit.headers,
+                "cache-control": cacheControl,
+                "CDN-Cache-Control": cacheControl,
+                "x-tdls-proxy-ms": String(ms),
+                "x-tdls-cache": "1",
+                "x-tdls-mem": "1",
+              });
+            }
+          } catch {
+            map.delete(cacheKey);
+          }
+        } else {
+          const ms = Date.now() - t0;
+          return rawJsonResponse(hit.payloadStr, 200, {
+            ...hit.headers,
+            "cache-control": cacheControl,
+            "CDN-Cache-Control": cacheControl,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-cache": "1",
+            "x-tdls-mem": "1",
+          });
+        }
       }
     }
 
     // 2) dedupe concurrent requests for same key
-    const dedupeKey = `${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}|${
+    const dedupeKey = `${isProductEndpoint ? "prod" : "meta"}|${effectivePath}|${
       hasClientSecret ? "sec" : "pub"
     }|${STRAPI_TOKEN ? "tok" : "notok"}|${noCache ? "nc1" : "nc0"}`;
 
@@ -678,7 +822,6 @@ export async function GET(req) {
       try {
         data = await res.json();
       } catch {
-        // invalid JSON → treat as upstream error so stale-if-error paths can kick in
         return { ok: false, status: 502, statusText: "Bad Gateway", errorText: "Invalid JSON" };
       }
 
@@ -686,10 +829,24 @@ export async function GET(req) {
         data = await patchProductsWithPrismaStock(data);
       }
 
+      const productCount = isProductEndpoint ? productCountFromStrapiData(data) : undefined;
+
+      // ✅ Treat “empty products list” as an anomaly in production/real traffic:
+      // do NOT cache/store it as last-good; allow outer logic to fallback to global products.
+      if (isProductsList && productCount <= 0) {
+        return {
+          ok: false,
+          status: 502,
+          statusText: "Bad Gateway",
+          errorText: "Empty products list (guarded)",
+          emptyProductsGuard: true,
+        };
+      }
+
       const payloadObj = { ok: true, data, ms: Date.now() - t0 };
       const payloadStr = JSON.stringify(payloadObj);
 
-      return { ok: true, status: 200, payloadStr };
+      return { ok: true, status: 200, payloadStr, productCount };
     });
 
     const ms = Date.now() - t0;
@@ -697,16 +854,62 @@ export async function GET(req) {
     // Handle upstream failure → serve last-known-good (public only)
     if (!result?.ok) {
       if (!hasClientSecret) {
+        // 1) Prefer global products last-good for /products list (strongest “never blank grid” guarantee)
+        if (isProductsList && globalProductsLastGoodKey) {
+          const lgGlobal = lastGoodGet(globalProductsLastGoodKey);
+          if (lgGlobal?.payloadStr) {
+            return rawJsonResponse(lgGlobal.payloadStr, 200, {
+              "cache-control": cacheControl,
+              "CDN-Cache-Control": cacheControl,
+              "x-tdls-proxy-ms": String(ms),
+              "x-tdls-stale": "1",
+              "x-tdls-fallback": "global:last-good",
+              "x-tdls-upstream-status": String(result?.status || 0),
+            });
+          }
+        }
+
+        // 2) Then try exact-path last-good
         const lg = lastGoodGet(lastGoodKey);
         if (lg?.payloadStr) {
           return rawJsonResponse(lg.payloadStr, 200, {
-            "cache-control": cacheControl, // ✅ allow CDN to keep serving stale
+            "cache-control": cacheControl,
             "CDN-Cache-Control": cacheControl,
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": "last-good",
             "x-tdls-upstream-status": String(result?.status || 0),
           });
+        }
+
+        // 3) If still nothing and this is /products list → do a direct global products fetch NOW (real data)
+        if (isProductsList) {
+          const g = await fetchGlobalProductsNow(baseHeaders);
+          if (g?.data) {
+            const payloadObj = { ok: true, data: g.data, ms: Date.now() - t0 };
+            const payloadStr = JSON.stringify(payloadObj);
+
+            // cache + last-good only if non-empty (fetchGlobalProductsNow enforces that)
+            if (CACHE_OK) {
+              memSet(
+                MEM_PROD,
+                `${CACHE_OK ? "pub" : "noc"}|prod|${g.effectivePath}`,
+                payloadStr,
+                { "cache-control": cacheControl, "CDN-Cache-Control": cacheControl },
+                MEM_PROD_TTL_MS
+              );
+            }
+            lastGoodSet(`pub|prod|${g.effectivePath}`, payloadStr);
+
+            return rawJsonResponse(payloadStr, 200, {
+              "cache-control": cacheControl,
+              "CDN-Cache-Control": cacheControl,
+              "x-tdls-proxy-ms": String(Date.now() - t0),
+              "x-tdls-stale": "1",
+              "x-tdls-fallback": "global:refetch",
+              "x-tdls-upstream-status": String(result?.status || 0),
+            });
+          }
         }
       }
 
@@ -734,7 +937,7 @@ export async function GET(req) {
     // Success path
     const payloadStr = result.payloadStr || JSON.stringify({ ok: true, data: null, ms });
 
-    // Store micro-cache
+    // Store micro-cache (NEVER cache empty products list — already guarded inside dedupe)
     if (CACHE_OK) {
       const map = isProductEndpoint ? MEM_PROD : MEM_META;
       memSet(
@@ -751,7 +954,13 @@ export async function GET(req) {
 
     // Store last-known-good for public reads
     if (!hasClientSecret) {
+      // Never poison last-good with empty product list (also already guarded)
       lastGoodSet(lastGoodKey, payloadStr);
+
+      // Keep a global /products last-good as well (best “never blank” fallback)
+      if (isProductsList && globalProductsLastGoodKey) {
+        lastGoodSet(globalProductsLastGoodKey, payloadStr);
+      }
     }
 
     return rawJsonResponse(payloadStr, 200, {
@@ -774,19 +983,40 @@ export async function GET(req) {
     // If timeout/abort → serve last-known-good (public only)
     try {
       const url = new URL(req.url);
-      const hasSecret =
-        !!(url.searchParams.get("secret") ||
-           req.headers.get("x-strapi-sync-secret") ||
-           req.headers.get("x-strapi-proxy-secret"));
-      const normalizedPath = normalizeStrapiPath(url.searchParams.get("path") || "");
-      const isProductEndpoint =
-        normalizedPath.startsWith("/products") || normalizedPath.startsWith("/products/");
-      const lastGoodKey = `${hasSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${normalizedPath}`;
+      const hasSecret = !!(
+        url.searchParams.get("secret") ||
+        req.headers.get("x-strapi-sync-secret") ||
+        req.headers.get("x-strapi-proxy-secret")
+      );
+
+      const normalizedPath0 = normalizeStrapiPath(url.searchParams.get("path") || "");
+      const effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
+      const { pathname } = splitPathAndQuery(effectivePath);
+      const isProductEndpoint = pathname === "/products" || pathname.startsWith("/products/");
+      const isProductsList = isProductEndpoint && pathname === "/products";
+
+      const lastGoodKey = `${hasSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
       if (!hasSecret) {
+        // Prefer global /products last-good for product list
+        if (isProductsList) {
+          const globalPath = getGlobalProductsEffectivePath();
+          const globalKey = `pub|prod|${globalPath}`;
+          const lgGlobal = lastGoodGet(globalKey);
+          if (lgGlobal?.payloadStr) {
+            const cacheControl = PRODUCT_CACHE_CONTROL;
+            return rawJsonResponse(lgGlobal.payloadStr, 200, {
+              "cache-control": cacheControl,
+              "CDN-Cache-Control": cacheControl,
+              "x-tdls-proxy-ms": String(ms),
+              "x-tdls-stale": "1",
+              "x-tdls-fallback": isAbort ? "timeout:global:last-good" : "error:global:last-good",
+            });
+          }
+        }
+
         const lg = lastGoodGet(lastGoodKey);
         if (lg?.payloadStr) {
-          // Use product/meta cache controls to let CDN keep serving stale during incidents
           const cacheControl = isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL;
 
           return rawJsonResponse(lg.payloadStr, 200, {
@@ -799,7 +1029,7 @@ export async function GET(req) {
         }
       }
     } catch {
-      // ignore fallback parse errors; fall through to normal error response
+      // ignore fallback parse errors; fall through
     }
 
     if (isAbort) {

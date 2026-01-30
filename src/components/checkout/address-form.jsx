@@ -1,3 +1,4 @@
+//src/components/checkout/address-form.jsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -1312,17 +1313,21 @@ export default function AddressForm({
 
           .ca-safe-wrap[data-safe="1"] {
             /* HARD SAFETY: 0.5 inch top & bottom */
-            padding-top: calc(0.5in + 10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            padding-top: calc(
+              0.5in + 10px + env(safe-area-inset-top) + max(var(--navbar-h, var(--nav-h, 96px)), 72px)
+            );
             padding-bottom: calc(
               0.5in + 14px + env(safe-area-inset-bottom) +
-                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+                max(var(--bottom-floating-h, 0px), var(--bfbar-h, 0px), var(--bottom-safe-pad, 120px))
             );
 
             /* Keep scrollIntoView behavior consistent when this wrapper is inside a scroller */
-            scroll-padding-top: calc(0.5in + 10px + env(safe-area-inset-top) + var(--navbar-h, 96px));
+            scroll-padding-top: calc(
+              0.5in + 10px + env(safe-area-inset-top) + max(var(--navbar-h, var(--nav-h, 96px)), 72px)
+            );
             scroll-padding-bottom: calc(
               0.5in + 14px + env(safe-area-inset-bottom) +
-                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+                max(var(--bottom-floating-h, 0px), var(--bfbar-h, 0px), var(--bottom-safe-pad, 120px))
             );
           }
 
@@ -1491,7 +1496,7 @@ export default function AddressForm({
             scroll-margin-top: calc(0.5in + 16px + var(--navbar-h, 96px) + env(safe-area-inset-top));
             scroll-margin-bottom: calc(
               0.5in + 16px +
-                max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px)) +
+                max(var(--bottom-floating-h, 0px), var(--bfbar-h, 0px), var(--bottom-safe-pad, 120px)) +
                 env(safe-area-inset-bottom)
             );
           }
@@ -1634,7 +1639,7 @@ export default function AddressForm({
               padding-top: calc(0.5in + 8px + env(safe-area-inset-top) + var(--navbar-h, 84px));
               padding-bottom: calc(
                 0.5in + 14px + env(safe-area-inset-bottom) +
-                  max(var(--bottom-floating-h, 0px), var(--bottom-safe-pad, 84px))
+                  max(var(--bottom-floating-h, 0px), var(--bfbar-h, 0px), var(--bottom-safe-pad, 120px))
               );
             }
 

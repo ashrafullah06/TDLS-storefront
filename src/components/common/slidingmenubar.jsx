@@ -643,7 +643,21 @@ async function fetchAndBuildFresh() {
     _fromCache: false,
   };
 
-  saveToLocalStorage({ audienceRows, products });
+  // ✅ Cache safety: only persist/overwrite cache when we fetched meaningful data.
+  // If upstream blips return null/empty, keep last-good cache instead of wiping.
+  const meaningful = audienceRows.length > 0 && products.length > 0;
+
+  if (meaningful) {
+    saveToLocalStorage({ audienceRows, products });
+    return built;
+  }
+
+  const fallback = __tdlsMenuPreloadData || loadFromLocalStorage();
+  if (fallback && Array.isArray(fallback.audienceRows) && fallback.audienceRows.length > 0) {
+    return fallback;
+  }
+
+  // No prior cache available; return what we have (but do NOT write it).
   return built;
 }
 

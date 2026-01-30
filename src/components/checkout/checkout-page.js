@@ -592,22 +592,16 @@ function persistSnapshot(snapshot) {
 
 /* ---------------- API wrappers (ACCOUNT MODE ONLY) ---------------- */
 const book = {
-  async list() {
-    const r = await fetch("/api/customers/address-book", {
-      credentials: "include",
-      cache: "no-store",
-    });
-    if (!r.ok) return [];
-    const j = await r.json().catch(() => ({}));
-    const raw = Array.isArray(j?.data)
-      ? j.data
-      : Array.isArray(j?.addresses)
-      ? j.addresses
-      : Array.isArray(j)
-      ? j
-      : [];
-    return raw.map((a, i) => normalizeAddress(a, i)).filter(Boolean);
+  async listWithMeta() {
+    return fetchAddressBookMeta();
   },
+
+  async list() {
+    const meta = await fetchAddressBookMeta();
+    return meta.list;
+  },
+
+  // Fallback only (should be unnecessary if /address-book returns defaultAddress)
   async getDefault() {
     const opts = { credentials: "include", cache: "no-store" };
     let r = await fetch("/api/customers/address-book/default", opts);
@@ -664,6 +658,93 @@ const book = {
     return { ok: r.ok, status: r.status, j };
   },
 };
+
+/**
+ * Address book "meta" fetch:
+ * - Single request returns {addresses, defaultAddress, defaultId, ...} per your API conventions.
+ * - Eliminates the extra /default round-trip (biggest source of "wait for address").
+ */
+async function fetchAddressBookMeta() {
+  const r = await fetch("/api/customers/address-book", {
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  const status = r.status;
+
+  if (!r.ok) {
+    return { list: [], defaultAddr: null, defaultId: null, _status: status };
+  }
+
+  const j = await r.json().catch(() => ({}));
+
+  const rawList = Array.isArray(j?.addresses)
+    ? j.addresses
+    : Array.isArray(j?.data)
+    ? j.data
+    : Array.isArray(j)
+    ? j
+    : [];
+
+  const list = rawList.map((a, i) => normalizeAddress(a, i)).filter(Boolean);
+
+  const rawDef = j?.defaultAddress ?? j?.default_address ?? j?.default ?? j?.address ?? null;
+  const defaultAddr = normalizeAddress(rawDef, -1);
+
+  const defaultId =
+    j?.defaultId ??
+    j?.defaultAddressId ??
+    j?.default_address_id ??
+    (defaultAddr?.id ?? null);
+
+  return { list, defaultAddr, defaultId, _status: status };
+}
+
+/* ---------- eager preload + tiny in-memory cache (SPA fast path) ---------- */
+let _addrMetaPrime = null;
+let _addrMetaPrimeAt = 0;
+const ADDR_META_PRIME_TTL_MS = 25_000;
+
+function invalidateAddressBookMeta() {
+  _addrMetaPrime = null;
+  _addrMetaPrimeAt = 0;
+}
+
+function primeAddressBookMeta({ force = false } = {}) {
+  if (typeof window === "undefined") {
+    return Promise.resolve({ list: [], defaultAddr: null, defaultId: null, _status: 0 });
+  }
+
+  const now = Date.now();
+  if (!force && _addrMetaPrime && now - _addrMetaPrimeAt < ADDR_META_PRIME_TTL_MS) return _addrMetaPrime;
+
+  _addrMetaPrimeAt = now;
+
+  _addrMetaPrime = fetchAddressBookMeta()
+    .then((m) => {
+      // Do NOT cache "not logged in" results; allow retry immediately after login.
+      if (m?._status === 401) invalidateAddressBookMeta();
+      return m;
+    })
+    .catch(() => {
+      invalidateAddressBookMeta();
+      return { list: [], defaultAddr: null, defaultId: null, _status: 0 };
+    });
+
+  return _addrMetaPrime;
+}
+
+function seedAddressBookMeta(meta) {
+  if (!meta) return;
+  _addrMetaPrimeAt = Date.now();
+  _addrMetaPrime = Promise.resolve(meta);
+}
+
+// Start fetching as early as possible (overlaps with session fetch + render).
+if (typeof window !== "undefined") {
+  primeAddressBookMeta().catch(() => null);
+}
+
 
 const profile = {
   async read() {
@@ -1751,12 +1832,66 @@ function CheckoutAddressForm({
   );
 }
 
-export default function CheckoutPage() {
+export default function CheckoutPage({ initialAddressMeta = null } = {}) {
+  // Optional SSR/route-level preload (pass the /api/customers/address-book JSON here)
+  // so addresses are already rendered on first paint.
+  const seededMeta = (() => {
+    if (!initialAddressMeta) return null;
+
+    // Accept either server JSON shape or already-normalized internal shape.
+    const rawList = Array.isArray(initialAddressMeta?.list)
+      ? initialAddressMeta.list
+      : Array.isArray(initialAddressMeta?.addresses)
+      ? initialAddressMeta.addresses
+      : Array.isArray(initialAddressMeta?.data)
+      ? initialAddressMeta.data
+      : [];
+
+    const list = rawList.map((a, i) => normalizeAddress(a, i)).filter(Boolean);
+
+    const rawDef =
+      initialAddressMeta?.defaultAddr ??
+      initialAddressMeta?.defaultAddress ??
+      initialAddressMeta?.default ??
+      initialAddressMeta?.address ??
+      null;
+
+    const defaultAddr = normalizeAddress(rawDef, -1);
+
+    const defaultId =
+      initialAddressMeta?.defaultId ??
+      initialAddressMeta?.defaultAddressId ??
+      initialAddressMeta?.default_address_id ??
+      (defaultAddr?.id ?? null);
+
+    return { list, defaultAddr, defaultId, _status: 200 };
+  })();
+
+  const seededDefault = (() => {
+    if (!seededMeta) return null;
+    const byDefaultId =
+      seededMeta?.defaultId != null
+        ? (seededMeta.list || []).find(
+            (a) => a?.id != null && String(a.id) === String(seededMeta.defaultId)
+          ) || null
+        : null;
+    return seededMeta.defaultAddr || byDefaultId || (seededMeta.list || []).find((a) => a?.isDefault) || null;
+  })();
+
+  const seededDefaultKey = seededDefault?._key ?? null;
+
+  // Seed the in-memory prime cache once (avoids immediate re-fetch after SSR).
+  const _seededOnce = useRef(false);
+  if (!_seededOnce.current && seededMeta) {
+    _seededOnce.current = true;
+    seedAddressBookMeta(seededMeta);
+  }
+
   // ACCOUNT MODE STATE
-  const [addresses, setAddresses] = useState([]);
-  const [selectedKey, setSelectedKey] = useState(null);
-  const [shipping, setShipping] = useState(null);
-  const [billing, setBilling] = useState(null);
+  const [addresses, setAddresses] = useState(() => (seededMeta?.list ? seededMeta.list : []));
+  const [selectedKey, setSelectedKey] = useState(() => seededDefaultKey);
+  const [shipping, setShipping] = useState(() => seededDefault || null);
+  const [billing, setBilling] = useState(() => seededDefault || null);
 
   const [shippingDifferent, setShippingDifferent] = useState(false);
   const [billingDifferent, setBillingDifferent] = useState(false);
@@ -1772,7 +1907,7 @@ export default function CheckoutPage() {
     phone: "",
     phoneVerified: false,
   });
-  const [defaultKey, setDefaultKey] = useState(null);
+  const [defaultKey, setDefaultKey] = useState(() => seededDefaultKey);
   const [defaultEditing, setDefaultEditing] = useState(false);
 
   // BOTH MODES
@@ -1970,6 +2105,10 @@ export default function CheckoutPage() {
         setUserInfo((prev) => ({ ...prev, ...profOverride }));
       }
 
+      // Start address-book fetch immediately (overlaps with session fetch + render).
+      // NOTE: primeAddressBookMeta does NOT cache 401 (not-logged-in) results.
+      primeAddressBookMeta().catch(() => null);
+
       const sessionUser = await fetchSessionUserNoRedirect();
       if (sessionUser?.id) {
         setCheckoutMode("account");
@@ -2009,11 +2148,23 @@ export default function CheckoutPage() {
   }, [checkoutMode]);
 
   async function hydrateAccount({ sessionUser, keepSelection = true } = {}) {
-    const [defRaw, allRaw, me] = await Promise.all([
-      initialLoaded.current ? Promise.resolve(null) : book.getDefault().catch(() => null),
-      book.list().catch(() => []),
+    const [meta, me] = await Promise.all([
+      primeAddressBookMeta().catch(() => ({ list: [], defaultAddr: null, defaultId: null })),
       profile.read().catch(() => ({})),
     ]);
+
+    const allRaw = Array.isArray(meta?.list) ? meta.list : [];
+    const byDefaultId =
+      meta?.defaultId != null
+        ? allRaw.find((a) => a?.id != null && String(a.id) === String(meta.defaultId)) || null
+        : null;
+
+    let defRaw = meta?.defaultAddr || byDefaultId || allRaw.find((a) => a?.isDefault) || null;
+
+    // Last-resort fallback if API didn't include default info (kept for backward compatibility)
+    if (!defRaw && !initialLoaded.current) {
+      defRaw = await book.getDefault().catch(() => null);
+    }
 
     let currentUser = { ...userInfo };
     if (sessionUser?.id) currentUser = { ...currentUser, ...sessionUser };
@@ -2201,6 +2352,8 @@ export default function CheckoutPage() {
     if (!res.localOnly) {
       clearAccountProfileOverride();
       setDefaultEditing(false);
+      invalidateAddressBookMeta();
+      primeAddressBookMeta({ force: true }).catch(() => null);
       await hydrateAccount({ sessionUser: null, keepSelection: true });
       setToast("Default profile & address updated.");
       return { ok: true };
@@ -2240,6 +2393,8 @@ export default function CheckoutPage() {
     } catch {}
 
     if (!res.localOnly) {
+      invalidateAddressBookMeta();
+      primeAddressBookMeta({ force: true }).catch(() => null);
       await hydrateAccount({ sessionUser: null, keepSelection: true });
     }
 
@@ -2268,6 +2423,8 @@ export default function CheckoutPage() {
     } catch {}
 
     if (!res.localOnly) {
+      invalidateAddressBookMeta();
+      primeAddressBookMeta({ force: true }).catch(() => null);
       await hydrateAccount({ sessionUser: null, keepSelection: true });
     }
 
@@ -2306,6 +2463,8 @@ export default function CheckoutPage() {
       }
 
       setToast(res.j?.error || "Could not delete address.");
+      invalidateAddressBookMeta();
+      primeAddressBookMeta({ force: true }).catch(() => null);
       await hydrateAccount({ sessionUser: null, keepSelection: true });
       return;
     }
@@ -2338,7 +2497,8 @@ export default function CheckoutPage() {
       return filtered;
     });
 
-    setToast("Address deleted.");
+    invalidateAddressBookMeta();
+        setToast("Address deleted.");
   }
 
   function isAddressComplete(a) {
@@ -3051,25 +3211,44 @@ export default function CheckoutPage() {
             border-radius: 999px;
           }
 
+          :root {
+            --navbar-h: var(--nav-h, 88px);
+            --tdls-safe-top: calc(0.5in + 10px + env(safe-area-inset-top) + max(var(--navbar-h, 88px), 72px));
+            --tdls-safe-bottom: calc(
+              0.5in + 14px + env(safe-area-inset-bottom) + max(var(--bottom-floating-h, 0px), 120px)
+            );
+          }
+
           .co-modal {
             position: fixed;
             inset: 0;
             background: rgba(0, 0, 0, 0.25);
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             z-index: 160;
-            padding: 12px;
+
+            /* HARD GUARANTEE: sheet never sits under navbar/bfbar */
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: var(--tdls-safe-top);
+            padding-bottom: var(--tdls-safe-bottom);
+
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
           }
+
           .co-sheet {
-            width: min(760px, calc(100vw - 32px));
-            max-height: calc(100dvh - 72px);
+            width: min(760px, calc(100vw - 24px));
+            max-height: calc(100dvh - var(--tdls-safe-top) - var(--tdls-safe-bottom));
             overflow: auto;
             background: #fff;
             border-radius: 16px;
             padding: 16px;
             box-shadow: 0 12px 36px rgba(15, 33, 71, 0.25);
             border: 1px solid ${BORDER};
+          }
+;
           }
           .co-sheet-head {
             display: flex;

@@ -38,8 +38,15 @@ function cleanSlug(v) {
 }
 
 function pickFirst(searchParams, keys) {
+  const sp = searchParams || {};
+  const isUSP = typeof sp?.get === "function"; // URLSearchParams-like
+
   for (const k of keys) {
-    const v = searchParams?.[k];
+    let v = isUSP ? sp.get(k) : sp?.[k];
+
+    // Next can provide repeated query params as arrays
+    if (Array.isArray(v)) v = v[0];
+
     if (typeof v === "string" && v.trim()) return v;
   }
   return "";
@@ -56,17 +63,32 @@ function parsePackedS(searchParams) {
   return parts;
 }
 
-export default function CollectionsRootPage({ searchParams }) {
-  const tier = cleanSlug(pickFirst(searchParams, ["tier", "tierSlug", "tier_slug", "collection", "collectionSlug", "collection_slug"]));
+export default async function CollectionsRootPage({ searchParams }) {
+  // Next.js can pass searchParams as a Promise in newer versions
+  const sp = await Promise.resolve(searchParams);
+
+  const tier = cleanSlug(
+    pickFirst(sp, ["tier", "tierSlug", "tier_slug", "collection", "collectionSlug", "collection_slug"])
+  );
 
   // Canonical audience/category/subCategory/genderGroup/ageGroup
-  const audience = cleanSlug(pickFirst(searchParams, ["audience", "audienceSlug", "aud", "audSlug", "audienceCategory", "audience_category"]));
-  const category = cleanSlug(pickFirst(searchParams, ["category", "categorySlug", "cat", "product_category", "productCategory"]));
-  const subCategory = cleanSlug(pickFirst(searchParams, ["subCategory", "subCategorySlug", "sub_category", "sub_category_slug"]));
-  const genderGroup = cleanSlug(pickFirst(searchParams, ["genderGroup", "genderGroupSlug", "gender_group", "gender_group_slug"]));
-  const ageGroup = cleanSlug(pickFirst(searchParams, ["ageGroup", "ageGroupSlug", "age_group", "age_group_slug"]));
+  const audience = cleanSlug(
+    pickFirst(sp, ["audience", "audienceSlug", "aud", "audSlug", "audienceCategory", "audience_category"])
+  );
+  const category = cleanSlug(
+    pickFirst(sp, ["category", "categorySlug", "cat", "product_category", "productCategory"])
+  );
+  const subCategory = cleanSlug(
+    pickFirst(sp, ["subCategory", "subCategorySlug", "sub_category", "sub_category_slug"])
+  );
+  const genderGroup = cleanSlug(
+    pickFirst(sp, ["genderGroup", "genderGroupSlug", "gender_group", "gender_group_slug"])
+  );
+  const ageGroup = cleanSlug(
+    pickFirst(sp, ["ageGroup", "ageGroupSlug", "age_group", "age_group_slug"])
+  );
 
-  const packed = parsePackedS(searchParams);
+  const packed = parsePackedS(sp);
 
   // If packed includes tier as first segment (common in your old URL), drop it.
   let segs = packed.slice();

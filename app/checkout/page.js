@@ -2,7 +2,7 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import prisma from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 
@@ -48,6 +48,55 @@ async function getActiveCart({ userId, sid }) {
   });
 }
 
+/**
+ * Build a same-origin base URL (works in prod + local).
+ * Next.js 15: headers() must be awaited.
+ */
+async function getBaseUrl() {
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") || "http";
+  const host = h.get("x-forwarded-host") || h.get("host");
+
+  // Dev fallback (host can be missing in some edge test contexts)
+  if (!host) return "http://localhost:3000";
+
+  return `${proto}://${host}`;
+}
+
+/**
+ * SSR preload address-book meta so the checkout page can render addresses immediately.
+ * Uses your canonical API: /api/customers/address-book
+ *
+ * Returns null on any failure (client can still re-fetch as fallback).
+ */
+async function preloadAddressBookMeta() {
+  const h = await headers();
+  const cookieHeader = h.get("cookie") || "";
+  const baseUrl = await getBaseUrl();
+
+  const res = await fetch(`${baseUrl}/api/customers/address-book`, {
+    method: "GET",
+    cache: "no-store",
+    headers: {
+      // forward auth cookies to the API route
+      cookie: cookieHeader,
+    },
+  }).catch(() => null);
+
+  if (!res || !res.ok) return null;
+
+  const json = await res.json().catch(() => null);
+  if (!json || !Array.isArray(json.addresses)) return null;
+
+  // Keep the shape stable for the client
+  return {
+    ok: !!json.ok,
+    addresses: json.addresses,
+    defaultAddress: json.defaultAddress ?? null,
+    defaultId: json.defaultId ?? null,
+  };
+}
+
 export default async function Checkout() {
   // 1) read session (if signed in)
   const session = await auth().catch(() => null);
@@ -56,9 +105,17 @@ export default async function Checkout() {
   // 2) read guest cookie (if it exists)
   const sid = await readGuestCookie();
 
-  // 3) Best-effort resolve ACTIVE cart (don’t redirect if missing)
-  const cart = await getActiveCart({ userId, sid }).catch(() => null);
+  // 3) Preload cart + address-book in parallel (address-book only for logged-in user)
+  const [cart, initialAddressMeta] = await Promise.all([
+    getActiveCart({ userId, sid }).catch(() => null),
+    userId ? preloadAddressBookMeta().catch(() => null) : Promise.resolve(null),
+  ]);
 
-  // 4) Render your existing client UI. We pass serverCartId for future use.
-  return <CheckoutPage serverCartId={cart?.id || null} />;
+  // 4) Render client UI with serverCartId + preloaded addresses
+  return (
+    <CheckoutPage
+      serverCartId={cart?.id || null}
+      initialAddressMeta={initialAddressMeta}
+    />
+  );
 }

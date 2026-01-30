@@ -145,6 +145,51 @@ async function customerHardSignOut({ broadcast = true } = {}) {
   } catch {}
 }
 
+/* ===================== GLOBAL SESSION CHECK DEDUPE (CRITICAL FIX) ===================== */
+/**
+ * If AutoSignoutGuard is mounted more than once (or remounted frequently),
+ * per-instance refs reset and can cause /api/auth/session hammering.
+ *
+ * This gate guarantees:
+ * - one in-flight getSession() at a time (shared)
+ * - one real fetch per 30s (shared)
+ */
+const SESSION_CHECK_EVERY_MS = 30_000;
+
+let _globalSessionCheckAt = 0;
+let _globalSessionAuthed = false;
+/** @type {Promise<boolean> | null} */
+let _globalSessionInFlight = null;
+
+async function getCustomerAuthedShared(now) {
+  const t = Number(now || Date.now());
+  const ts = Number.isFinite(t) ? t : Date.now();
+
+  // If a request is already running, everybody awaits the same promise.
+  if (_globalSessionInFlight) return _globalSessionInFlight;
+
+  // Throttle shared across all instances/mounts.
+  if (ts - _globalSessionCheckAt < SESSION_CHECK_EVERY_MS) return _globalSessionAuthed;
+
+  _globalSessionCheckAt = ts;
+
+  _globalSessionInFlight = (async () => {
+    try {
+      const s = await getSession();
+      const authed = !!s?.user;
+      _globalSessionAuthed = authed;
+      return authed;
+    } catch {
+      // Preserve last-known shared state on transient failures.
+      return _globalSessionAuthed;
+    } finally {
+      _globalSessionInFlight = null;
+    }
+  })();
+
+  return _globalSessionInFlight;
+}
+
 export default function AutoSignoutGuard() {
   const nextPathname = usePathname();
 
@@ -205,28 +250,28 @@ export default function AutoSignoutGuard() {
   };
 
   const ensureCustomerSession = async (now = Date.now()) => {
+    const t = Number(now || Date.now());
+    const ts = Number.isFinite(t) ? t : Date.now();
+
+    // Keep the existing per-instance throttle (cheap fast-path),
+    // but the real protection is the shared global gate.
     const CHECK_EVERY_MS = 30_000;
-    if (now - lastSessionCheckRef.current < CHECK_EVERY_MS) {
+    if (ts - lastSessionCheckRef.current < CHECK_EVERY_MS) {
       return sessionKnownAuthedRef.current;
     }
-    lastSessionCheckRef.current = now;
+    lastSessionCheckRef.current = ts;
 
-    try {
-      const s = await getSession();
-      const authed = !!s?.user;
+    // Shared dedupe prevents hammering across mounts/instances/event storms.
+    const authed = await getCustomerAuthedShared(ts);
 
-      // If we just became authed, reset baseline activity to avoid instant idle signout.
-      if (authed && !sessionKnownAuthedRef.current) {
-        lastActivityRef.current = Date.now();
-        pendingSignoutRef.current = 0;
-      }
-
-      sessionKnownAuthedRef.current = authed;
-      return authed;
-    } catch {
-      // Preserve last-known state; do NOT disable guard due to transient fetch failures.
-      return sessionKnownAuthedRef.current;
+    // If we just became authed, reset baseline activity to avoid instant idle signout.
+    if (authed && !sessionKnownAuthedRef.current) {
+      lastActivityRef.current = Date.now();
+      pendingSignoutRef.current = 0;
     }
+
+    sessionKnownAuthedRef.current = authed;
+    return authed;
   };
 
   const markActivity = async () => {

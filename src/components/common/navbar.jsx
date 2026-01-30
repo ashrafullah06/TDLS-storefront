@@ -99,13 +99,33 @@ function escapeRegExp(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * ✅ FIX (Hooks-safe + Hydration-safe):
+ * - Navbar calls ONE hook and can safely return null for admin routes.
+ * - All heavy child components mount ONLY after client hydration (mounted=true),
+ *   preventing server/client hook-count mismatches from children that use window/document guards.
+ * - HomePanel/Slidingmenubar are conditionally mounted only when open (so they never render "closed" states).
+ */
 export default function Navbar() {
+  const pathname = usePathname() || "";
+  const isAdminRoute = typeof pathname === "string" && pathname.startsWith("/admin");
+  if (isAdminRoute) return null;
+
+  return <NavbarInner pathname={pathname} />;
+}
+
+function NavbarInner({ pathname }) {
   const router = useRouter();
-  const pathname = usePathname();
+  const [mounted, setMounted] = useState(false);
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [categories, setCategories] = useState([]);
   const [homePanelOpen, setHomePanelOpen] = useState(false);
   const headerRef = useRef(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     try {
@@ -143,11 +163,10 @@ export default function Navbar() {
   };
 
   /**
-   * Brand normalizer:
-   * - Converts any legacy on-page text to TDLS / The DNA Lab Store (covers “big text” overlay rendered elsewhere).
-   * - Also keeps the splash/overlay dismissor behavior preserved.
+   * Brand normalizer + splash dismiss
    */
   useEffect(() => {
+    if (!mounted) return;
     if (typeof document === "undefined") return;
 
     // Legacy tokens (runtime-constructed so none remain in source)
@@ -162,23 +181,16 @@ export default function Navbar() {
 
     const normalizeText = (input) => {
       if (!input) return input;
-
       let out = String(input);
-
-      // Replace abbreviation in common cases
       out = out.replace(new RegExp(escapeRegExp(LEGACY_ABBR), "g"), NEW_ABBR);
       out = out.replace(new RegExp(escapeRegExp(LEGACY_ABBR_LO), "g"), NEW_ABBR.toLowerCase());
-
-      // Replace long name (case-insensitive)
       out = out.replace(new RegExp(escapeRegExp(LEGACY_LONG), "gi"), NEW_LONG);
-
       return out;
     };
 
     const normalizeDomBranding = (root = document.body) => {
       if (!root) return;
 
-      // Text nodes
       const walker = document.createTreeWalker(
         root,
         NodeFilter.SHOW_TEXT,
@@ -204,7 +216,6 @@ export default function Navbar() {
         n = walker.nextNode();
       }
 
-      // Selected attributes (light-touch, safe)
       const ATTRS = ["title", "aria-label", "placeholder"];
       const els = root.querySelectorAll?.("*");
       if (!els) return;
@@ -221,9 +232,8 @@ export default function Navbar() {
       }
     };
 
-    // Splash/overlay selectors (supports both current + legacy IDs/classes without legacy tokens in source)
-    const legacyLower = LEGACY_ABBR_LO; // "tdlc" at runtime
-    const newLower = NEW_ABBR.toLowerCase(); // "tdls"
+    const legacyLower = LEGACY_ABBR_LO; // runtime
+    const newLower = NEW_ABBR.toLowerCase(); // tdls
 
     const selectorsFor = (t) => [
       `#big-${t}`,
@@ -241,15 +251,14 @@ export default function Navbar() {
     const hideBigSplash = () => {
       const nodes = document.querySelectorAll(SELECTORS.join(","));
       nodes.forEach((el) => {
-        // Ensure if it must appear, it never shows the legacy brand
         try {
           normalizeDomBranding(el);
         } catch {}
 
-        // Preserve previous behavior: hide/dismiss
         try {
           if (typeof el.close === "function" && el.open) el.close();
         } catch {}
+
         el.style.opacity = "0";
         el.style.visibility = "hidden";
         el.style.pointerEvents = "none";
@@ -259,7 +268,6 @@ export default function Navbar() {
         el.classList.remove("open", "opened", "visible", "show", "active", "modal", "mounted");
       });
 
-      // Remove both potential body/html toggles (legacy + new)
       const removeClasses = (node) => {
         if (!node?.classList?.remove) return;
         node.classList.remove(
@@ -276,7 +284,6 @@ export default function Navbar() {
       removeClasses(document.documentElement);
     };
 
-    // Initial normalize + dismiss
     const t0 = requestAnimationFrame(() => {
       try {
         normalizeDomBranding(document.body);
@@ -285,7 +292,6 @@ export default function Navbar() {
       }
     });
 
-    // Observe changes: if overlay/text gets injected later, normalize again
     let rafId = 0;
     const schedule = () => {
       if (rafId) return;
@@ -353,19 +359,34 @@ export default function Navbar() {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("scroll", onScroll);
     };
-  }, [pathname]);
+  }, [mounted, pathname]);
 
   // Maintain layout space below fixed navbar
   useEffect(() => {
+    if (!mounted) return;
+
+    const prevBodyPaddingTop = typeof document !== "undefined" ? document.body.style.paddingTop : "";
+    const prevNavH =
+      typeof document !== "undefined" ? document.documentElement.style.getPropertyValue("--nav-h") : "";
+
     const setHeights = () => {
       const h = headerRef.current?.offsetHeight || 88;
       document.documentElement.style.setProperty("--nav-h", `${h}px`);
       document.body.style.paddingTop = `${h}px`;
     };
+
     setHeights();
     window.addEventListener("resize", setHeights, { passive: true });
-    return () => window.removeEventListener("resize", setHeights);
-  }, []);
+
+    return () => {
+      window.removeEventListener("resize", setHeights);
+      try {
+        document.body.style.paddingTop = prevBodyPaddingTop || "";
+        if (prevNavH) document.documentElement.style.setProperty("--nav-h", prevNavH);
+        else document.documentElement.style.removeProperty("--nav-h");
+      } catch {}
+    };
+  }, [mounted]);
 
   return (
     <>
@@ -450,8 +471,8 @@ export default function Navbar() {
                 minWidth: 0,
               }}
             >
-              {/* Keep Logorotator size as-is on mobile (do NOT downscale) */}
-              <Logorotator size={36} />
+              {/* Hydration-safe: show the rotator only after mount */}
+              {mounted ? <Logorotator size={36} /> : <span aria-hidden style={{ width: 36, height: 36, display: "inline-block" }} />}
               <span
                 className="tdls-brand-text"
                 style={{
@@ -480,10 +501,17 @@ export default function Navbar() {
               gap: 18,
             }}
           >
-            {/* Search stays for desktop/tablet; hidden on mobile via CSS below */}
-            <NavSearchbar className="tdls-navsearch" />
+            {/* Hydration-safe: reserve space, mount search only after client hydration */}
+            {mounted ? (
+              <NavSearchbar className="tdls-navsearch" />
+            ) : (
+              <div className="tdls-navsearch" aria-hidden />
+            )}
 
-            <div className="tdls-menublock" style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}>
+            <div
+              className="tdls-menublock"
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 0 }}
+            >
               <button
                 aria-label="Open menu"
                 className="tdls-menu-btn"
@@ -564,6 +592,12 @@ export default function Navbar() {
             max-width: min(54vw, 560px);
           }
 
+          /* Reserve space for search placeholder too */
+          :global(.tdls-navsearch) {
+            width: clamp(180px, 28vw, 360px);
+            min-width: 0;
+          }
+
           /* Large screens: constrain heavy rules through shared token */
           @media (min-width: 1280px) {
             .tdls-header {
@@ -592,7 +626,6 @@ export default function Navbar() {
               text-overflow: ellipsis;
             }
 
-            /* Keep this resilient: set width on the NavSearchbar root */
             :global(.tdls-navsearch) {
               width: clamp(160px, 24vw, 220px) !important;
               min-width: 0 !important;
@@ -679,7 +712,6 @@ export default function Navbar() {
               margin-top: 2px !important;
             }
 
-            /* Home button: reduce footprint (touch-safe, premium) */
             :global(.tdls-homebtn) {
               width: clamp(46px, 13vw, 56px) !important;
               margin-right: clamp(10px, 3vw, 14px) !important;
@@ -695,7 +727,6 @@ export default function Navbar() {
               height: clamp(20px, 6.2vw, 24px) !important;
             }
 
-            /* Menu button: reduce footprint + SVG scale down */
             :global(.tdls-menu-btn) {
               width: clamp(42px, 12.5vw, 50px) !important;
               height: clamp(34px, 10.5vw, 40px) !important;
@@ -708,7 +739,6 @@ export default function Navbar() {
               height: clamp(18px, 5.8vw, 22px) !important;
             }
 
-            /* Prevent horizontal overflow in ultra-small / landscape */
             .tdls-navgrid {
               column-gap: clamp(8px, 2vw, 12px) !important;
             }
@@ -718,21 +748,26 @@ export default function Navbar() {
             }
           }
 
-          /* Extra safety: very small landscape (e.g., 568x320) */
           @media (max-width: 639px) and (max-height: 420px) {
             .tdls-header {
               height: clamp(58px, 14.5vh, 68px);
             }
             .tdls-home-label,
             .tdls-menu-label {
-              display: none !important; /* prevents vertical crowding only in tiny landscape */
+              display: none !important;
             }
           }
         `}</style>
       </header>
 
-      <Slidingmenubar open={menuOpen} onClose={() => setMenuOpen(false)} categories={categories} />
-      <HomePanel open={homePanelOpen} onClose={() => setHomePanelOpen(false)} />
+      {/* ✅ Mount overlays only when open (avoids hook-mismatch patterns inside those components) */}
+      {mounted && menuOpen ? (
+        <Slidingmenubar open={menuOpen} onClose={() => setMenuOpen(false)} categories={categories} />
+      ) : null}
+
+      {mounted && homePanelOpen ? (
+        <HomePanel open={homePanelOpen} onClose={() => setHomePanelOpen(false)} />
+      ) : null}
     </>
   );
 }
