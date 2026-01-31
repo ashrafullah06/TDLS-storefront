@@ -73,9 +73,16 @@ function normSlug(input) {
 }
 
 function titleizeSlug(slug) {
-  const s = (slug || "").toString().trim();
+  const s = String(slug || "").trim();
   if (!s) return "";
-  return s.replace(/[-_]/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+  // turn "men-tshirts" / "men_tshirts" into "Men Tshirts"
+  return s
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ""))
+    .join(" ");
 }
 
 function pickTextForSlug(x) {
@@ -185,22 +192,28 @@ function unwrapStrapiList(payload) {
 }
 
 async function fetchAudienceCategoriesWithProducts() {
+  // NOTE: Menu stability/perf hardening:
+  // We no longer rely on audience -> products deep populate (it is heavy and can fail in production).
+  // Products are fetched separately and used to derive audience/category/product groupings.
   const payload = await fetchFromStrapi(
-    "/audience-categories?pagination[pageSize]=500&populate[products][populate]=*&populate[tiers][populate]=*&populate[brand_tiers][populate]=*&populate[collection_tiers][populate]=*&populate[events_products_collections][populate]=*&populate[product_collections][populate]=*"
+    "/audience-categories?pagination[pageSize]=500&populate[tiers]=*&populate[brand_tiers]=*&populate[collection_tiers]=*&populate[events_products_collections]=*&populate[product_collections]=*"
   );
   const rows = unwrapStrapiList(payload);
   return rows.map(normalizeEntity).filter(Boolean);
 }
 
 async function fetchProductsForIndex() {
+  // Keep payload light; the Strapi proxy normalizes /products lists and applies safe "light" populate
+  // when populate is not explicitly provided.
   const payload = await fetchFromStrapi(
-    "/products?pagination[pageSize]=1000&populate=*&populate[tiers]=*&populate[brand_tiers]=*&populate[collection_tiers]=*&populate[categories]=*&populate[audience_categories]=*&populate[sub_categories]=*&populate[gender_groups]=*&populate[age_groups]=*&populate[events_products_collections]=*&populate[product_collections]=*"
+    "/products?pagination[pageSize]=1000&fields[0]=slug&fields[1]=name&fields[2]=title"
   );
   const rows = unwrapStrapiList(payload);
   return rows.map(normalizeEntity).filter(Boolean);
 }
 
 /* ------------------------------- Derivations -------------------------------- */
+
 
 function buildProductIndex(products) {
   const m = new Map();
@@ -229,6 +242,28 @@ function buildProductIndex(products) {
   return m;
 }
 
+function getAudienceProducts({ audience, productIndex }) {
+  // Primary (Strapi): audience -> products relation
+  const a = normalizeEntity(audience) || {};
+  const rel = unwrapStrapiArray(a?.products);
+  if (rel.length) return rel;
+
+  // Fallback: derive from productIndex (stable even if Strapi populate is stripped / upstream flakes)
+  const aSlug = normSlug(a.slug || "");
+  if (!aSlug) return [];
+  if (!(productIndex instanceof Map) || productIndex.size === 0) return [];
+
+  const out = [];
+  for (const pIdx of productIndex.values()) {
+    const audSlugs = Array.isArray(pIdx?.audienceSlugs) ? pIdx.audienceSlugs : [];
+    if (audSlugs.includes(aSlug)) {
+      out.push(pIdx.raw || pIdx);
+    }
+  }
+  return out;
+}
+
+
 function computeAnyTierSignals(productIndex, audienceRows) {
   const productHasTiers = Array.from(productIndex.values()).some((p) => (p?.tierSlugs || []).length > 0);
   const audienceHasTiers = (audienceRows || []).some((a) => extractRelSlugs(a, "tiers").length > 0);
@@ -251,7 +286,7 @@ function productBelongsToTier({ tier, productIdx, productEntity, audienceTierMat
 function audienceTierVerdict({ audience, tierSlug, productIndex, anyTierSignals }) {
   const tier = normSlug(tierSlug);
   const a = normalizeEntity(audience) || {};
-  const prodRel = unwrapStrapiArray(a?.products);
+  const prodRel = getAudienceProducts({ audience: a, productIndex });
   if (!prodRel.length) return { ok: false, count: 0 };
 
   const audienceTierSlugs = extractRelSlugs(a, "tiers");
@@ -273,7 +308,7 @@ function audienceTierVerdict({ audience, tierSlug, productIndex, anyTierSignals 
 function deriveCategories({ tierSlug, audience, productIndex, anyTierSignals }) {
   const tier = normSlug(tierSlug);
   const a = normalizeEntity(audience) || {};
-  const prodRel = unwrapStrapiArray(a?.products);
+  const prodRel = getAudienceProducts({ audience: a, productIndex });
 
   const audienceTierSlugs = extractRelSlugs(a, "tiers");
   const audienceTierMatch = audienceTierSlugs.length ? audienceTierSlugs.includes(tier) : false;
@@ -300,7 +335,7 @@ function deriveProducts({ tierSlug, audience, categorySlug, productIndex, anyTie
   const tier = normSlug(tierSlug);
   const cat = categorySlug ? normSlug(categorySlug) : "";
   const a = normalizeEntity(audience) || {};
-  const prodRel = unwrapStrapiArray(a?.products);
+  const prodRel = getAudienceProducts({ audience: a, productIndex });
 
   const audienceTierSlugs = extractRelSlugs(a, "tiers");
   const audienceTierMatch = audienceTierSlugs.length ? audienceTierSlugs.includes(tier) : false;
@@ -633,43 +668,107 @@ function saveToLocalStorage({ audienceRows, products }) {
 }
 
 async function fetchAndBuildFresh() {
-  const [aud, prods] = await Promise.all([fetchAudienceCategoriesWithProducts(), fetchProductsForIndex()]);
-  const audienceRows = (aud || []).map(normalizeEntity).filter(Boolean);
-  const products = (prods || []).map(normalizeEntity).filter(Boolean);
+  // Fetch both concurrently (fast). We intentionally keep the audience request LIGHT
+  // (no deep products populate) and derive audience→products from the products index.
+  const [audienceRowsRaw, productsRaw] = await Promise.all([
+    fetchAudienceCategoriesWithProducts(),
+    fetchProductsForIndex(),
+  ]);
+
+  let audienceRows = Array.isArray(audienceRowsRaw)
+    ? audienceRowsRaw.map(normalizeEntity).filter(Boolean)
+    : [];
+
+  const products = Array.isArray(productsRaw)
+    ? productsRaw.map(normalizeEntity).filter(Boolean)
+    : [];
+
+  const productIndex = buildProductIndex(products);
+
+  // ✅ If audience fetch returns empty (transient prod issue), synthesize from productIndex
+  // so the menu never renders blank.
+  if (audienceRows.length === 0 && productIndex instanceof Map && productIndex.size > 0) {
+    const slugs = new Set();
+    for (const pIdx of productIndex.values()) {
+      const aSlugs = Array.isArray(pIdx?.audienceSlugs) ? pIdx.audienceSlugs : [];
+      for (const s of aSlugs) if (s) slugs.add(String(s));
+    }
+
+    const synth = Array.from(slugs)
+      .map(normSlug)
+      .filter(Boolean)
+      .sort()
+      .map((slug, i) => ({
+        id: `synthetic:${slug}`,
+        slug,
+        name: titleizeSlug(slug) || slug,
+        order: 10000 + i,
+        _synthetic: true,
+      }));
+
+    if (synth.length) audienceRows = synth;
+  }
 
   const built = {
     audienceRows,
-    productIndex: buildProductIndex(products),
+    products,
+    productIndex,
+    _loadedAt: Date.now(),
     _fromCache: false,
   };
 
-  // ✅ Cache safety: only persist/overwrite cache when we fetched meaningful data.
-  // If upstream blips return null/empty, keep last-good cache instead of wiping.
-  const meaningful = audienceRows.length > 0 && products.length > 0;
+  const builtIsMeaningful =
+    Array.isArray(audienceRows) &&
+    audienceRows.length > 0 &&
+    Array.isArray(products) &&
+    products.length > 0 &&
+    productIndex instanceof Map &&
+    productIndex.size > 0;
 
-  if (meaningful) {
-    saveToLocalStorage({ audienceRows, products });
+  // Only persist meaningful payloads (never overwrite cache with partial/empty results).
+  if (builtIsMeaningful) {
+    try {
+      saveToLocalStorage(built);
+    } catch {
+      // ignore
+    }
     return built;
   }
 
-  const fallback = __tdlsMenuPreloadData || loadFromLocalStorage();
-  if (fallback && Array.isArray(fallback.audienceRows) && fallback.audienceRows.length > 0) {
-    return fallback;
-  }
+  // If we couldn't build a meaningful payload, fall back to any last-known-good cache.
+  const fallback = loadFromLocalStorage() || __tdlsMenuPreloadData;
+  const fallbackIsMeaningful =
+    Array.isArray(fallback?.audienceRows) &&
+    fallback.audienceRows.length > 0 &&
+    fallback?.productIndex instanceof Map &&
+    fallback.productIndex.size > 0;
 
-  // No prior cache available; return what we have (but do NOT write it).
+  if (fallbackIsMeaningful) return fallback;
+
+  // No prior cache available; return what we have (caller will decide whether to show skeleton).
   return built;
 }
 
+
+function isMeaningfulMenuData(d) {
+  const aLen = Array.isArray(d?.audienceRows) ? d.audienceRows.length : 0;
+  const pSize = d?.productIndex instanceof Map ? d.productIndex.size : 0;
+  return aLen > 0 && pSize > 0;
+}
+
 async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
-  if (__tdlsMenuPreloadData) {
+  // 1) If we already have meaningful data, return it immediately.
+  if (__tdlsMenuPreloadData && isMeaningfulMenuData(__tdlsMenuPreloadData)) {
+    // Optional background refresh (non-blocking)
     if (backgroundRefresh && !__tdlsMenuPreloadPromise) {
       __tdlsMenuPreloadPromise = fetchAndBuildFresh()
         .then((fresh) => {
-          __tdlsMenuPreloadData = fresh;
+          if (isMeaningfulMenuData(fresh)) {
+            __tdlsMenuPreloadData = fresh;
+          }
           return fresh;
         })
-        .catch(() => __tdlsMenuPreloadData)
+        .catch(() => null)
         .finally(() => {
           __tdlsMenuPreloadPromise = null;
         });
@@ -677,17 +776,20 @@ async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
     return __tdlsMenuPreloadData;
   }
 
+  // 2) Recover from LocalStorage (fast path on refresh).
   const cached = loadFromLocalStorage();
-  if (cached) {
+  if (cached && isMeaningfulMenuData(cached)) {
     __tdlsMenuPreloadData = cached;
 
-    if (backgroundRefresh) {
+    if (backgroundRefresh && !__tdlsMenuPreloadPromise) {
       __tdlsMenuPreloadPromise = fetchAndBuildFresh()
         .then((fresh) => {
-          __tdlsMenuPreloadData = fresh;
+          if (isMeaningfulMenuData(fresh)) {
+            __tdlsMenuPreloadData = fresh;
+          }
           return fresh;
         })
-        .catch(() => __tdlsMenuPreloadData)
+        .catch(() => null)
         .finally(() => {
           __tdlsMenuPreloadPromise = null;
         });
@@ -696,22 +798,43 @@ async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
     return __tdlsMenuPreloadData;
   }
 
-  if (__tdlsMenuPreloadPromise) return __tdlsMenuPreloadPromise;
+  // 3) If a fetch is already in-flight, await it (prevents returning blank while refresh runs).
+  if (__tdlsMenuPreloadPromise) {
+    try {
+      const inFlight = await __tdlsMenuPreloadPromise;
+      if (inFlight) {
+        __tdlsMenuPreloadData = inFlight;
+        return inFlight;
+      }
+    } catch {
+      // fall through to new fetch
+    }
+  }
 
+  // 4) No good cache → do a blocking fetch (callers awaiting this should NEVER get a blank menu).
   __tdlsMenuPreloadPromise = fetchAndBuildFresh()
     .then((fresh) => {
       __tdlsMenuPreloadData = fresh;
       return fresh;
     })
     .catch(() => {
-      __tdlsMenuPreloadData = { audienceRows: [], productIndex: new Map(), _fromCache: false };
-      return __tdlsMenuPreloadData;
+      // Last resort: if we had any prior data, keep it; otherwise return an explicit empty sentinel.
+      const fallback =
+        cached ||
+        __tdlsMenuPreloadData || {
+          audienceRows: [],
+          productIndex: new Map(),
+          _fromCache: false,
+          _error: true,
+        };
+      __tdlsMenuPreloadData = fallback;
+      return fallback;
     })
     .finally(() => {
       __tdlsMenuPreloadPromise = null;
     });
 
-  return __tdlsMenuPreloadPromise;
+  return await __tdlsMenuPreloadPromise;
 }
 
 function runIdle(fn, timeout = 900) {

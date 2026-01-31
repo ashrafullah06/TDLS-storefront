@@ -813,6 +813,33 @@ function productCountFromStrapiPayload(data) {
   return 0;
 }
 
+/* ───────── NAV META anti-blank helpers ───────── */
+
+function metaCountFromStrapiPayload(data) {
+  const itemsRaw = data?.data;
+  if (Array.isArray(itemsRaw)) return itemsRaw.length;
+  if (itemsRaw) return 1;
+  return 0;
+}
+
+const NAV_META_PATHS = new Set([
+  "/audience-categories",
+  "/categories",
+  "/sub-categories",
+  "/super-categories",
+  "/tiers",
+  "/brand-tiers",
+  "/collection-tiers",
+  "/events-products-collections",
+  "/product-collections",
+  "/age-groups",
+  "/gender-groups",
+]);
+
+function isNavMetaPath(pathname) {
+  return NAV_META_PATHS.has(String(pathname || ""));
+}
+
 function isSuspectEmptyProductsResponse(data) {
   const items = data?.data;
   if (!Array.isArray(items)) return false;
@@ -934,6 +961,7 @@ export async function GET(req) {
     let { pathname: effPathname } = splitPathAndQuery(effectivePath);
     let isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
     let isProductsList = isProductEndpoint && effPathname === "/products";
+    let isNavMetaEndpoint = !isProductEndpoint && isNavMetaPath(effPathname);
 
     /**
      * ✅ Heavy-guard (PUBLIC only)
@@ -958,6 +986,7 @@ export async function GET(req) {
       ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
       isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
       isProductsList = isProductEndpoint && effPathname === "/products";
+      isNavMetaEndpoint = !isProductEndpoint && isNavMetaPath(effPathname);
     }
 
     const target = buildTargetUrl(effectivePath);
@@ -1032,6 +1061,35 @@ export async function GET(req) {
         }
       }
 
+      // ✅ NAV META: prevent transient empty payloads from blanking menus
+      if (!hasClientSecret && isNavMetaEndpoint) {
+        const metaCountNow = metaCountFromStrapiPayload(data);
+        if (metaCountNow === 0) {
+          const lgExact = lastGoodGet(lastGoodKey);
+          if (lgExact?.payloadStr) {
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: lgExact.payloadStr,
+              degraded: true,
+              reason: "NAV_META_EMPTY->LAST_GOOD",
+            };
+          }
+
+          // quick retry once (empty nav-meta is almost always transient)
+          await sleep(160);
+          const res2 = await fetchUpstreamResilient(target, baseHeaders);
+          if (res2.ok) {
+            try {
+              const data2 = await res2.json();
+              if (metaCountFromStrapiPayload(data2) > 0) data = data2;
+            } catch {
+              // keep original
+            }
+          }
+        }
+      }
+
       if (isProductEndpoint) {
         data = await patchProductsWithPrismaStock(data);
       }
@@ -1044,18 +1102,36 @@ export async function GET(req) {
         if (countNow === 0 && (hasFilters || isSuspectEmptyProductsResponse(data))) {
           const lgExact = lastGoodGet(lastGoodKey);
           if (lgExact?.payloadStr) {
-            return { ok: true, status: 200, payloadStr: lgExact.payloadStr, degraded: true, reason: "EMPTY->EXACT_LAST_GOOD" };
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: lgExact.payloadStr,
+              degraded: true,
+              reason: "EMPTY->EXACT_LAST_GOOD",
+            };
           }
 
           const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
           if (any?.payloadStr) {
-            return { ok: true, status: 200, payloadStr: any.payloadStr, degraded: true, reason: "EMPTY->ANY_PRODUCTS_CACHE" };
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: any.payloadStr,
+              degraded: true,
+              reason: "EMPTY->ANY_PRODUCTS_CACHE",
+            };
           }
 
           const broad = await fetchBroaderProductsFallback(baseHeaders);
           if (broad) {
             lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
-            return { ok: true, status: 200, payloadStr: broad, degraded: true, reason: "EMPTY->BROAD_FETCH" };
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: broad,
+              degraded: true,
+              reason: "EMPTY->BROAD_FETCH",
+            };
           }
         }
       }
@@ -1200,11 +1276,21 @@ export async function GET(req) {
       const parsed = safeJsonParse(payloadStr);
       productCount = productCountFromStrapiPayload(parsed?.data);
     }
-    const isGoodProductPayload = !isProductEndpoint || (Number.isFinite(productCount) && productCount > 0);
+    const isGoodProductPayload =
+      !isProductEndpoint || (Number.isFinite(productCount) && productCount > 0);
+
+    let metaCount = null;
+    if (!isProductEndpoint && isNavMetaEndpoint) {
+      const parsed = safeJsonParse(payloadStr);
+      metaCount = metaCountFromStrapiPayload(parsed?.data);
+    }
+    const isGoodMetaPayload = !isNavMetaEndpoint || (Number.isFinite(metaCount) && metaCount > 0);
+
+    const shouldCacheAsGood = isProductEndpoint ? isGoodProductPayload : isGoodMetaPayload;
 
     // micro-cache
     if (CACHE_OK) {
-      if (!isProductEndpoint || isGoodProductPayload) {
+      if (shouldCacheAsGood) {
         const map = isProductEndpoint ? MEM_PROD : MEM_META;
         memSet(
           map,
@@ -1221,7 +1307,7 @@ export async function GET(req) {
 
     // last-known-good (public)
     if (!hasClientSecret) {
-      if (!isProductEndpoint || isGoodProductPayload) {
+      if (shouldCacheAsGood) {
         lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
       }
       if (isProductEndpoint && isGoodProductPayload) {
@@ -1248,98 +1334,125 @@ export async function GET(req) {
       name.toLowerCase().includes("abort") ||
       String(err?.message || "").toLowerCase().includes("aborted");
 
-    // STRICT: misconfig or secret issues should remain strict
-    // PUBLIC: never red-link; return 200 degraded if possible
+    // Re-derive request context (never trust partially computed outer state here)
+    let hasSecret = false;
+    let noCache = false;
+    let allowHeavy = false;
+    let normalizedPath0 = "";
     try {
       const url = new URL(req.url);
-      const hasSecret =
-        !!(
-          url.searchParams.get("secret") ||
-          req.headers.get("x-strapi-sync-secret") ||
-          req.headers.get("x-strapi-proxy-secret")
-        );
-
-      const normalizedPath0 = normalizeStrapiPath(url.searchParams.get("path") || "");
-      if (normalizedPath0 && !hasSecret) {
-        let effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
-        let { pathname } = splitPathAndQuery(effectivePath);
-        const isProductEndpoint = pathname === "/products" || pathname.startsWith("/products/");
-
-        // heavy guard on crash path too
-        if (HEAVY_GUARD_ENABLED && isHeavyPopulateRequest(effectivePath)) {
-          if (!isProductEndpoint) effectivePath = canonicalizePath(sanitizeMetaPathForPublic(effectivePath));
-          else if (pathname === "/products") effectivePath = canonicalizePath(sanitizeProductsListPathForPublic(effectivePath));
-        }
-
-        const lastGoodKey = `pub|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
-        const lg = lastGoodGet(lastGoodKey);
-        if (lg?.payloadStr) {
-          const cacheControl = isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL;
-          return rawJsonResponse(lg.payloadStr, 200, {
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-stale": "1",
-            "x-tdls-fallback": isAbort ? "timeout:last-good" : "error:last-good",
-          });
-        }
-
-        if (isProductEndpoint) {
-          const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
-          if (any?.payloadStr) {
-            const cacheControl = PRODUCT_CACHE_CONTROL;
-            return rawJsonResponse(any.payloadStr, 200, {
-              "cache-control": cacheControl,
-              "CDN-Cache-Control": cacheControl,
-              "x-tdls-proxy-ms": String(ms),
-              "x-tdls-stale": "1",
-              "x-tdls-fallback": isAbort ? "timeout:any-products" : "error:any-products",
-            });
-          }
-        }
-
-        const payloadStr = softOkPayload({
-          data: { data: [], meta: { degraded: true } },
-          reason: isProductEndpoint
-            ? isAbort
-              ? "PUBLIC_PRODUCTS_TIMEOUT_DEGRADED_EMPTY"
-              : "PUBLIC_PRODUCTS_ERROR_DEGRADED_EMPTY"
-            : isAbort
-              ? "PUBLIC_META_TIMEOUT_DEGRADED_EMPTY"
-              : "PUBLIC_META_ERROR_DEGRADED_EMPTY",
-          ms,
-        });
-
-        return rawJsonResponse(payloadStr, 200, {
-          "cache-control": "no-store",
-          "x-tdls-proxy-ms": String(ms),
-          "x-tdls-stale": "1",
-          "x-tdls-fallback": isAbort ? "timeout:degraded-empty" : "error:degraded-empty",
-        });
-      }
+      hasSecret = !!(
+        url.searchParams.get("secret") ||
+        req.headers.get("x-strapi-sync-secret") ||
+        req.headers.get("x-strapi-proxy-secret")
+      );
+      noCache = url.searchParams.get("noCache") === "1";
+      allowHeavy = url.searchParams.get("allowHeavy") === "1";
+      normalizedPath0 = normalizeStrapiPath(url.searchParams.get("path") || "");
     } catch {
       // ignore
     }
 
-    // Secret call or unknown: keep strict errors
-    if (isAbort) {
+    // SECRET calls: stay strict
+    if (hasSecret) {
+      if (isAbort) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: "UPSTREAM_TIMEOUT",
+            message: `Strapi did not respond within ${UPSTREAM_TIMEOUT_MS}ms`,
+            ms,
+          },
+          504,
+          { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
+        );
+      }
+
+      console.error("STRAPI PROXY FATAL ERROR (secret):", err);
       return jsonResponse(
-        {
-          ok: false,
-          error: "UPSTREAM_TIMEOUT",
-          message: `Strapi did not respond within ${UPSTREAM_TIMEOUT_MS}ms`,
-          ms,
-        },
-        504,
+        { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed", ms },
+        500,
         { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
       );
     }
 
-    console.error("STRAPI PROXY FATAL ERROR:", err);
-    return jsonResponse(
-      { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed", ms },
-      500,
-      { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
-    );
+    // PUBLIC calls: prefer last-known-good; NEVER red-link
+    let guarded = false;
+    let isProductEndpoint = false;
+
+    if (normalizedPath0) {
+      let effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
+
+      let { pathname } = splitPathAndQuery(effectivePath);
+      isProductEndpoint = pathname === "/products" || pathname.startsWith("/products/");
+      let isProductsList = isProductEndpoint && pathname === "/products";
+
+      if (
+        HEAVY_GUARD_ENABLED &&
+        !allowHeavy &&
+        isHeavyPopulateRequest(effectivePath)
+      ) {
+        if (!isProductEndpoint) {
+          effectivePath = canonicalizePath(sanitizeMetaPathForPublic(effectivePath));
+          guarded = true;
+        } else if (isProductsList) {
+          effectivePath = canonicalizePath(sanitizeProductsListPathForPublic(effectivePath));
+          guarded = true;
+        }
+
+        ({ pathname } = splitPathAndQuery(effectivePath));
+        isProductEndpoint = pathname === "/products" || pathname.startsWith("/products/");
+      }
+
+      const cacheControl =
+        !noCache ? (isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL) : "no-store";
+
+      const lastGoodKey = `pub|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
+
+      const lg = lastGoodGet(lastGoodKey);
+      if (lg?.payloadStr) {
+        return rawJsonResponse(lg.payloadStr, 200, {
+          "cache-control": cacheControl,
+          "CDN-Cache-Control": cacheControl,
+          "x-tdls-proxy-ms": String(ms),
+          "x-tdls-stale": "1",
+          "x-tdls-fallback": isAbort ? "timeout:last-good" : "error:last-good",
+          "x-tdls-guard": guarded ? "1" : "0",
+        });
+      }
+
+      if (isProductEndpoint) {
+        const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
+        if (any?.payloadStr) {
+          return rawJsonResponse(any.payloadStr, 200, {
+            "cache-control": PRODUCT_CACHE_CONTROL,
+            "CDN-Cache-Control": PRODUCT_CACHE_CONTROL,
+            "x-tdls-proxy-ms": String(ms),
+            "x-tdls-stale": "1",
+            "x-tdls-fallback": isAbort ? "timeout:any-products" : "error:any-products",
+            "x-tdls-guard": guarded ? "1" : "0",
+          });
+        }
+      }
+    }
+
+    // Final public fallback: soft degraded (HTTP 200)
+    const payloadStr = softOkPayload({
+      data: { data: [], meta: { degraded: true } },
+      reason: isAbort
+        ? "PUBLIC_TIMEOUT_DEGRADED_EMPTY"
+        : "PUBLIC_ERROR_DEGRADED_EMPTY",
+      ms,
+    });
+
+    // only log non-abort (abort is expected under load / upstream latency)
+    if (!isAbort) console.error("STRAPI PROXY FATAL ERROR (public):", err);
+
+    return rawJsonResponse(payloadStr, 200, {
+      "cache-control": "no-store",
+      "x-tdls-proxy-ms": String(ms),
+      "x-tdls-stale": "1",
+      "x-tdls-fallback": "degraded-empty",
+    });
   }
 }
