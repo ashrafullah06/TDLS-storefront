@@ -41,11 +41,12 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 
 /**
  * ✅ Default products populate mode:
- * - "light" (default): only applies when caller provides NO populate
- * - "full": old behavior (populate=*) when caller doesn't specify populate
+ * - "filtersafe" (recommended): includes all relations your filters need (taxonomy + variants.sizes)
+ * - "light": taxonomy only (NOT recommended for your current UI; causes empty-filter false negatives)
+ * - "full": populate=*
  */
 const DEFAULT_PRODUCTS_POPULATE_MODE = String(
-  process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE || "light"
+  process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE || "filtersafe"
 )
   .trim()
   .toLowerCase();
@@ -53,10 +54,6 @@ const DEFAULT_PRODUCTS_POPULATE_MODE = String(
 /**
  * ✅ Heavy-query guard (PUBLIC only)
  * Protect production from deep populate monsters that time out / 502.
- *
- * If the incoming `path` has too many populate keys or is very long, we sanitize:
- * - META endpoints: strip populate entirely
- * - PRODUCTS LIST: strip deep populate[...] keys, keep only populate=*
  */
 const HEAVY_GUARD_ENABLED =
   String(process.env.TDLS_STRAPI_HEAVY_GUARD ?? "1").trim().toLowerCase() !== "0";
@@ -251,7 +248,6 @@ function isHeavyPopulateRequest(path) {
   const popCount = countPopulateKeys(params);
   if (popCount > HEAVY_MAX_POPULATE_KEYS) return true;
 
-  // `populate=*` combined with many populate[...] is the typical “monster” signature
   const pop = params.get("populate");
   if (pop === "*" && popCount > Math.max(10, Math.floor(HEAVY_MAX_POPULATE_KEYS / 2))) return true;
 
@@ -264,10 +260,12 @@ const DEFAULT_PRODUCTS_PAGESIZE = (() => {
   return Math.min(1500, Math.max(25, Math.round(n)));
 })();
 
+/* ───────── products populate profiles ───────── */
+
 /**
- * ✅ Apply LIGHT product populate (only when caller provides NO populate)
+ * Taxonomy relations used by your filter UI (keep these stable).
  */
-function applyLightProductsPopulate(params) {
+function applyProductsTaxonomyPopulate(params) {
   const rels = [
     ["audience_categories", ["slug", "name", "order"]],
     ["categories", ["slug", "name", "order"]],
@@ -290,10 +288,32 @@ function applyLightProductsPopulate(params) {
 }
 
 /**
+ * ✅ FILTER-SAFE populate for /products list:
+ * - taxonomy relations (slugs) for filtering
+ * - variants -> sizes (critical for size/availability filters)
+ *
+ * This is the missing piece that causes “No pieces match…” randomly in production
+ * when a payload arrives without these nested relations.
+ */
+function applyProductsFilterSafePopulate(params) {
+  applyProductsTaxonomyPopulate(params);
+
+  // Ensure variants + sizes exist for filter logic (Strapi ignores unknown keys safely).
+  params.set("populate[variants][populate][sizes]", "*");
+
+  // If your UI uses variant images/colors, you can uncomment these safely:
+  // params.set("populate[variants][populate][images]", "*");
+
+  // If your UI needs product images for grid cards, you can also uncomment:
+  // params.set("populate[images]", "*");
+  // params.set("populate[thumbnail]", "*");
+}
+
+/**
  * ✅ Normalize product requests so all callers get a consistent dataset.
  *
  * IMPORTANT:
- * - LIST endpoint defaults to "light" populate ONLY when caller provides NO populate.
+ * - LIST endpoint defaults to FILTER-SAFE populate when caller provides NO populate.
  * - DETAIL endpoints default to populate=* when caller provides NO populate (PDP safety).
  */
 function normalizeProductsPath(p) {
@@ -305,20 +325,21 @@ function normalizeProductsPath(p) {
   const isList = pathname === "/products";
   const isDetail = !isList;
 
-  // If no populate at all:
   if (!hasAnyPopulate(params)) {
     if (isDetail) {
       params.set("populate", "*");
     } else {
       if (DEFAULT_PRODUCTS_POPULATE_MODE === "full") {
         params.set("populate", "*");
+      } else if (DEFAULT_PRODUCTS_POPULATE_MODE === "light") {
+        applyProductsTaxonomyPopulate(params);
       } else {
-        applyLightProductsPopulate(params);
+        // default: filtersafe
+        applyProductsFilterSafePopulate(params);
       }
     }
   }
 
-  // Only enforce pagination on LIST endpoint.
   if (isList) {
     const pageSizeKey = "pagination[pageSize]";
     const existing = params.get(pageSizeKey);
@@ -327,23 +348,18 @@ function normalizeProductsPath(p) {
       params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
     } else {
       const x = Number(existing);
-      if (!Number.isFinite(x) || x <= 0) {
-        params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
-      }
+      if (!Number.isFinite(x) || x <= 0) params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
     }
 
-    if (!params.get("pagination[page]")) {
-      params.set("pagination[page]", "1");
-    }
+    if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
   }
 
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
 }
 
-/**
- * ✅ PUBLIC heavy-guard sanitizers
- */
+/* ───────── PUBLIC heavy-guard sanitizers ───────── */
+
 function sanitizeMetaPathForPublic(p) {
   const { pathname, search } = splitPathAndQuery(p);
   if (!search) return pathname;
@@ -355,22 +371,22 @@ function sanitizeMetaPathForPublic(p) {
   return qs ? `${pathname}?${qs}` : pathname;
 }
 
+/**
+ * ✅ IMPORTANT FIX:
+ * When a products-list request is “heavy”, do NOT collapse to populate=*
+ * (that’s the exact thing that triggers 502/timeout and then your UI sees empty).
+ *
+ * Instead sanitize to the SAME filter-safe baseline populate.
+ */
 function sanitizeProductsListPathForPublic(p) {
   const { pathname, search } = splitPathAndQuery(p);
   if (pathname !== "/products") return p;
 
   const params = new URLSearchParams(search || "");
-
-  // Remove deep populate[...] keys, keep only a single 1-level populate=*
-  const hadAnyPopulate = hasAnyPopulate(params);
   stripPopulateParams(params);
 
-  if (hadAnyPopulate) {
-    params.set("populate", "*");
-  } else {
-    const tmp = normalizeProductsPath(`${pathname}?${params.toString()}`);
-    return canonicalizePath(tmp);
-  }
+  // Apply stable baseline populate that your filter UI needs:
+  applyProductsFilterSafePopulate(params);
 
   // Keep pagination stable
   const pageSizeKey = "pagination[pageSize]";
@@ -436,6 +452,7 @@ function shouldRetryStatus(status) {
 }
 
 /* ───────── Prisma lazy-load (stability + speed) ───────── */
+
 let _prismaPromise = null;
 async function getPrisma() {
   if (_prismaPromise) return _prismaPromise;
@@ -443,55 +460,52 @@ async function getPrisma() {
   return _prismaPromise;
 }
 
-/* ───────── micro-cache + in-flight dedupe ───────── */
+/* ───────── micro-cache + in-flight dedupe (persist per runtime instance) ───────── */
 
-const INFLIGHT = new Map(); // key -> Promise<{ ok, status, payloadStr, reason?, degraded? }>
-const MEM_META = new Map(); // key -> { exp, payloadStr, headers }
-const MEM_PROD = new Map(); // key -> { exp, payloadStr, headers }
+const G = globalThis;
 
-// Last-known-good payload (public reads only), used when upstream fails.
-const LAST_GOOD = new Map(); // key -> { exp, payloadStr }
+const INFLIGHT = G.__TDLS_STRAPI_INFLIGHT__ ?? (G.__TDLS_STRAPI_INFLIGHT__ = new Map());
+const MEM_META = G.__TDLS_STRAPI_MEM_META__ ?? (G.__TDLS_STRAPI_MEM_META__ = new Map());
+const MEM_PROD = G.__TDLS_STRAPI_MEM_PROD__ ?? (G.__TDLS_STRAPI_MEM_PROD__ = new Map());
+const LAST_GOOD = G.__TDLS_STRAPI_LAST_GOOD__ ?? (G.__TDLS_STRAPI_LAST_GOOD__ = new Map());
+const STOCK_CACHE = G.__TDLS_STRAPI_STOCK__ ?? (G.__TDLS_STRAPI_STOCK__ = new Map());
 
-// “Any good products” fallback for cases where a specific filtered key has no cached LKG yet.
 const LAST_GOOD_ANY_PRODUCTS_KEY = "pub|prod|__any__";
 
-// Stock cache (sizeId -> stock) used when Prisma temporarily fails.
-const STOCK_CACHE = new Map(); // sizeId -> { exp, stock }
-
 const MEM_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_TTL_MS || 120000); // 2 min
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_TTL_MS || 120000);
   if (!Number.isFinite(n) || n <= 0) return 120000;
   return Math.min(10 * 60 * 1000, Math.max(10 * 1000, Math.round(n)));
 })();
 
 const MEM_PROD_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 15000); // 15s
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 15000);
   if (!Number.isFinite(n) || n <= 0) return 15000;
   return Math.min(120 * 1000, Math.max(2000, Math.round(n)));
 })();
 
 const MEM_MAX_BYTES = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES || 1024 * 1024); // 1MB
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES || 1024 * 1024);
   if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
   return Math.min(6 * 1024 * 1024, Math.max(64 * 1024, Math.round(n)));
 })();
 
 const LAST_GOOD_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_TTL_MS || 180000); // 3 min
+  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_TTL_MS || 180000);
   if (!Number.isFinite(n) || n <= 0) return 180000;
-  return Math.min(15 * 60 * 1000, Math.max(30 * 1000, Math.round(n))); // 30s..15m
+  return Math.min(15 * 60 * 1000, Math.max(30 * 1000, Math.round(n)));
 })();
 
 const LAST_GOOD_ANY_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_ANY_TTL_MS || 600000); // 10 min
+  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_ANY_TTL_MS || 600000);
   if (!Number.isFinite(n) || n <= 0) return 600000;
-  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.round(n))); // 1m..60m
+  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.round(n)));
 })();
 
 const STOCK_CACHE_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STOCKCACHE_TTL_MS || 300000); // 5 min
+  const n = Number(process.env.TDLS_STOCKCACHE_TTL_MS || 300000);
   if (!Number.isFinite(n) || n <= 0) return 300000;
-  return Math.min(30 * 60 * 1000, Math.max(30 * 1000, Math.round(n))); // 30s..30m
+  return Math.min(30 * 60 * 1000, Math.max(30 * 1000, Math.round(n)));
 })();
 
 function memGet(map, key) {
@@ -523,7 +537,7 @@ function lastGoodGet(key) {
 
 function lastGoodSet(key, payloadStr, ttlMs = LAST_GOOD_TTL_MS) {
   if (typeof payloadStr !== "string") return;
-  if (payloadStr.length > 8 * 1024 * 1024) return; // hard guard 8MB
+  if (payloadStr.length > 8 * 1024 * 1024) return;
   const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LAST_GOOD_TTL_MS;
   LAST_GOOD.set(key, { exp: Date.now() + ttl, payloadStr });
 }
@@ -566,7 +580,6 @@ async function runDedupe(key, fn) {
 function collectSizeIdsFromStrapiProducts(strapiData) {
   const itemsRaw = strapiData?.data;
   const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
-
   const sizeIds = new Set();
 
   for (const item of items) {
@@ -574,18 +587,12 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
     const attrs = row.attributes || null;
 
     let variants = row.variants || attrs?.variants || [];
-
-    if (variants && Array.isArray(variants.data)) {
-      variants = variants.data.map((v) => v.attributes || v);
-    }
+    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v.attributes || v);
     if (!Array.isArray(variants)) continue;
 
     for (const v of variants) {
       let sizes = v.sizes || v.attributes?.sizes || [];
-
-      if (sizes && Array.isArray(sizes.data)) {
-        sizes = sizes.data.map((s) => s);
-      }
+      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
       if (!Array.isArray(sizes)) continue;
 
       for (const s of sizes) {
@@ -605,7 +612,6 @@ async function getStockMapForSizeIds(sizeIds) {
 
   try {
     const prisma = await getPrisma();
-
     const prismaVariants = await prisma.productVariant.findMany({
       where: { strapiSizeId: { in: ids } },
       select: { strapiSizeId: true, stockAvailable: true },
@@ -623,10 +629,8 @@ async function getStockMapForSizeIds(sizeIds) {
 
     return { bySizeId, source: "prisma", error: null };
   } catch (e) {
-    // Prisma failed: fall back to cached stock
     const bySizeId = new Map();
     let hits = 0;
-
     for (const sid of ids) {
       const cached = stockCacheGet(sid);
       if (cached != null) {
@@ -634,7 +638,6 @@ async function getStockMapForSizeIds(sizeIds) {
         hits++;
       }
     }
-
     return { bySizeId, source: hits ? "cache" : "none", error: e };
   }
 }
@@ -673,12 +676,10 @@ function ensureAvailabilityDefaultsOnProducts(strapiData) {
           (sAttrs ? (sAttrs.live_stock ?? sAttrs.stock_quantity) : undefined);
 
         const stockNum = Number(stockRaw);
-        const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true; // optimistic when unknown
+        const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true;
 
         s.is_available = isAvailable;
-        if (sAttrs) {
-          s.attributes = { ...sAttrs, is_available: isAvailable };
-        }
+        if (sAttrs) s.attributes = { ...sAttrs, is_available: isAvailable };
       }
     }
   }
@@ -691,10 +692,7 @@ async function patchProductsWithPrismaStock(strapiData) {
   if (sizeIds.size === 0) return ensureAvailabilityDefaultsOnProducts(strapiData);
 
   const { bySizeId, source, error } = await getStockMapForSizeIds(sizeIds);
-
-  if (source === "none" && error) {
-    return ensureAvailabilityDefaultsOnProducts(strapiData);
-  }
+  if (source === "none" && error) return ensureAvailabilityDefaultsOnProducts(strapiData);
 
   for (const item of items) {
     const row = item;
@@ -764,7 +762,6 @@ async function fetchUpstreamResilient(target, baseHeaders) {
         cache: "no-store",
       });
 
-      // token invalid → retry without auth
       if (res.status === 401) {
         res = await fetchWithTimeout(target, {
           method: "GET",
@@ -783,7 +780,6 @@ async function fetchUpstreamResilient(target, baseHeaders) {
     return res;
   };
 
-  // Fast retry profile: 3 attempts with small backoff + jitter.
   const delays = [0, 140, 320];
 
   let lastErr = null;
@@ -791,10 +787,7 @@ async function fetchUpstreamResilient(target, baseHeaders) {
     if (delays[i]) await sleep(delays[i] + Math.floor(Math.random() * 60));
     try {
       const res = await attemptOnce();
-
-      // retry only on retryable statuses
       if (shouldRetryStatus(res.status) && i < delays.length - 1) continue;
-
       return res;
     } catch (e) {
       lastErr = e;
@@ -822,9 +815,8 @@ function isSuspectEmptyProductsResponse(data) {
 }
 
 async function fetchBroaderProductsFallback(baseHeaders) {
-  const fallbackPath = canonicalizePath(
-    normalizeProductsPath(`/products?pagination[pageSize]=${DEFAULT_PRODUCTS_PAGESIZE}`)
-  );
+  // IMPORTANT: use normalizeProductsPath on /products so fallback also has filter-safe populate.
+  const fallbackPath = canonicalizePath(normalizeProductsPath(`/products?pagination[pageSize]=${DEFAULT_PRODUCTS_PAGESIZE}`));
   const target = buildTargetUrl(fallbackPath);
 
   const res = await fetchUpstreamResilient(target, baseHeaders);
@@ -849,19 +841,6 @@ async function fetchBroaderProductsFallback(baseHeaders) {
   return payloadStr;
 }
 
-/* ───────── soft-success helpers (prevents red links) ───────── */
-
-function softOkPayload({ data, reason, ms, extra = {} }) {
-  return JSON.stringify({
-    ok: true,
-    data: data ?? { data: [], meta: { degraded: true } },
-    degraded: true,
-    reason: reason || "DEGRADED",
-    ms,
-    ...extra,
-  });
-}
-
 /* ───────── main handler ───────── */
 
 export async function GET(req) {
@@ -870,7 +849,6 @@ export async function GET(req) {
 
   try {
     if (STRAPI_BOOT_ERROR) {
-      // misconfig is real server error (keep strict)
       return jsonResponse(
         { ok: false, error: "SERVER_MISCONFIGURED", message: STRAPI_BOOT_ERROR },
         500,
@@ -888,7 +866,6 @@ export async function GET(req) {
     const hasClientSecret =
       typeof clientSecretRaw === "string" && clientSecretRaw.trim().length > 0;
 
-    // secret validation (strict)
     if (hasClientSecret) {
       if (!STRAPI_SYNC_SECRET) {
         return jsonResponse(
@@ -927,7 +904,7 @@ export async function GET(req) {
     const noCache = url.searchParams.get("noCache") === "1";
     const allowHeavy = url.searchParams.get("allowHeavy") === "1";
 
-    // Normalize product requests + canonicalize
+    // Normalize + canonicalize
     let effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
 
     // Determine endpoint type
@@ -935,11 +912,7 @@ export async function GET(req) {
     let isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
     let isProductsList = isProductEndpoint && effPathname === "/products";
 
-    /**
-     * ✅ Heavy-guard (PUBLIC only)
-     * IMPORTANT FIX: do NOT skip heavy-guard when noCache=1.
-     * Heavy requests must be sanitized regardless of caching intent.
-     */
+    // Heavy-guard (PUBLIC only) — do NOT skip when noCache=1
     if (
       HEAVY_GUARD_ENABLED &&
       !allowHeavy &&
@@ -954,7 +927,6 @@ export async function GET(req) {
         guarded = true;
       }
 
-      // recompute flags after guard
       ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
       isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
       isProductsList = isProductEndpoint && effPathname === "/products";
@@ -963,7 +935,6 @@ export async function GET(req) {
     const target = buildTargetUrl(effectivePath);
     const baseHeaders = { Accept: "application/json" };
 
-    // Allow CDN caching for PUBLIC reads unless caller forces noCache=1.
     const CACHE_OK = !noCache && !hasClientSecret;
 
     const cacheControl = CACHE_OK
@@ -975,12 +946,15 @@ export async function GET(req) {
     const cacheKey = `${CACHE_OK ? "pub" : "noc"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
     const lastGoodKey = `${hasClientSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
 
-    // 1) in-memory micro-cache
+    // 1) micro-cache
     if (CACHE_OK) {
       const map = isProductEndpoint ? MEM_PROD : MEM_META;
       const hit = memGet(map, cacheKey);
       if (hit?.payloadStr) {
         const ms = Date.now() - t0;
+        const parsed = isProductEndpoint ? safeJsonParse(hit.payloadStr) : null;
+        const cnt = isProductEndpoint ? productCountFromStrapiPayload(parsed?.data) : null;
+
         return rawJsonResponse(hit.payloadStr, 200, {
           ...hit.headers,
           "cache-control": cacheControl,
@@ -989,6 +963,7 @@ export async function GET(req) {
           "x-tdls-cache": "1",
           "x-tdls-mem": "1",
           "x-tdls-guard": guarded ? "1" : "0",
+          ...(isProductEndpoint ? { "x-tdls-products-count": String(cnt ?? 0) } : {}),
         });
       }
     }
@@ -1018,7 +993,7 @@ export async function GET(req) {
         return { ok: false, status: 502, statusText: "Bad Gateway", errorText: "Invalid JSON" };
       }
 
-      // Products: fix transient “total>0 but empty list”
+      // Products list: fix transient “total>0 but empty list”
       if (isProductsList && isSuspectEmptyProductsResponse(data)) {
         await sleep(120);
         const res2 = await fetchUpstreamResilient(target, baseHeaders);
@@ -1026,9 +1001,7 @@ export async function GET(req) {
           try {
             const data2 = await res2.json();
             if (!isSuspectEmptyProductsResponse(data2)) data = data2;
-          } catch {
-            // keep original
-          }
+          } catch {}
         }
       }
 
@@ -1036,7 +1009,7 @@ export async function GET(req) {
         data = await patchProductsWithPrismaStock(data);
       }
 
-      // ✅ PUBLIC PRODUCTS LIST: never return empty if we can avoid it
+      // PUBLIC products list: never return empty if we can avoid it
       if (!hasClientSecret && isProductsList) {
         const countNow = productCountFromStrapiPayload(data);
         const hasFilters = hasFiltersInPath(effectivePath);
@@ -1044,18 +1017,36 @@ export async function GET(req) {
         if (countNow === 0 && (hasFilters || isSuspectEmptyProductsResponse(data))) {
           const lgExact = lastGoodGet(lastGoodKey);
           if (lgExact?.payloadStr) {
-            return { ok: true, status: 200, payloadStr: lgExact.payloadStr, degraded: true, reason: "EMPTY->EXACT_LAST_GOOD" };
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: lgExact.payloadStr,
+              degraded: true,
+              reason: "EMPTY->EXACT_LAST_GOOD",
+            };
           }
 
           const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
           if (any?.payloadStr) {
-            return { ok: true, status: 200, payloadStr: any.payloadStr, degraded: true, reason: "EMPTY->ANY_PRODUCTS_CACHE" };
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: any.payloadStr,
+              degraded: true,
+              reason: "EMPTY->ANY_PRODUCTS_CACHE",
+            };
           }
 
           const broad = await fetchBroaderProductsFallback(baseHeaders);
           if (broad) {
             lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
-            return { ok: true, status: 200, payloadStr: broad, degraded: true, reason: "EMPTY->BROAD_FETCH" };
+            return {
+              ok: true,
+              status: 200,
+              payloadStr: broad,
+              degraded: true,
+              reason: "EMPTY->BROAD_FETCH",
+            };
           }
         }
       }
@@ -1068,9 +1059,8 @@ export async function GET(req) {
 
     const ms = Date.now() - t0;
 
-    // ── Upstream failure handling ──────────────────────────────
+    // Upstream failure handling
     if (!result?.ok) {
-      // SECRET calls remain strict errors
       if (hasClientSecret) {
         return jsonResponse(
           {
@@ -1094,16 +1084,11 @@ export async function GET(req) {
         );
       }
 
-      /**
-       * ✅ PUBLIC calls: NEVER return 5xx (prevents red links).
-       * Fallback chain:
-       * 1) exact last-good
-       * 2) meta: retry stripped-populate (even if already guarded)
-       * 3) products: any-products + broad fetch
-       * 4) final: degraded empty (HTTP 200)
-       */
       const lg = lastGoodGet(lastGoodKey);
       if (lg?.payloadStr) {
+        const parsed = isProductEndpoint ? safeJsonParse(lg.payloadStr) : null;
+        const cnt = isProductEndpoint ? productCountFromStrapiPayload(parsed?.data) : null;
+
         return rawJsonResponse(lg.payloadStr, 200, {
           "cache-control": cacheControl,
           "CDN-Cache-Control": cacheControl,
@@ -1112,12 +1097,16 @@ export async function GET(req) {
           "x-tdls-fallback": "last-good",
           "x-tdls-upstream-status": String(result?.status || 0),
           "x-tdls-guard": guarded ? "1" : "0",
+          ...(isProductEndpoint ? { "x-tdls-products-count": String(cnt ?? 0) } : {}),
         });
       }
 
       if (isProductEndpoint) {
         const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
         if (any?.payloadStr) {
+          const parsed = safeJsonParse(any.payloadStr);
+          const cnt = productCountFromStrapiPayload(parsed?.data);
+
           return rawJsonResponse(any.payloadStr, 200, {
             "cache-control": cacheControl,
             "CDN-Cache-Control": cacheControl,
@@ -1126,12 +1115,17 @@ export async function GET(req) {
             "x-tdls-fallback": "any-products",
             "x-tdls-upstream-status": String(result?.status || 0),
             "x-tdls-guard": guarded ? "1" : "0",
+            "x-tdls-products-count": String(cnt ?? 0),
           });
         }
 
         const broad = await fetchBroaderProductsFallback(baseHeaders);
         if (broad) {
           lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
+
+          const parsed = safeJsonParse(broad);
+          const cnt = productCountFromStrapiPayload(parsed?.data);
+
           return rawJsonResponse(broad, 200, {
             "cache-control": cacheControl,
             "CDN-Cache-Control": cacheControl,
@@ -1140,43 +1134,16 @@ export async function GET(req) {
             "x-tdls-fallback": "broad-fetch",
             "x-tdls-upstream-status": String(result?.status || 0),
             "x-tdls-guard": guarded ? "1" : "0",
+            "x-tdls-products-count": String(cnt ?? 0),
           });
-        }
-      } else {
-        // META retry once with stripped populate (fast)
-        try {
-          const retryPath = canonicalizePath(sanitizeMetaPathForPublic(effectivePath));
-          const retryTarget = buildTargetUrl(retryPath);
-          const res2 = await fetchUpstreamResilient(retryTarget, baseHeaders);
-          if (res2.ok) {
-            const data2 = await res2.json();
-            const payloadStr2 = JSON.stringify({
-              ok: true,
-              data: data2,
-              degraded: true,
-              reason: "META_STRIP_POPULATE_RETRY",
-              ms,
-            });
-            lastGoodSet(lastGoodKey, payloadStr2, LAST_GOOD_TTL_MS);
-
-            return rawJsonResponse(payloadStr2, 200, {
-              "cache-control": cacheControl,
-              "CDN-Cache-Control": cacheControl,
-              "x-tdls-proxy-ms": String(ms),
-              "x-tdls-stale": "1",
-              "x-tdls-fallback": "meta:strip-populate-retry",
-              "x-tdls-upstream-status": String(result?.status || 0),
-              "x-tdls-guard": "1",
-            });
-          }
-        } catch {
-          // ignore
         }
       }
 
-      // FINAL: degraded empty (HTTP 200, no-store so it won't poison caches)
-      const payloadStr = softOkPayload({
+      // Final: soft degraded empty (200, no-store)
+      const payloadStr = JSON.stringify({
+        ok: true,
         data: { data: [], meta: { degraded: true } },
+        degraded: true,
         reason: isProductEndpoint ? "PUBLIC_PRODUCTS_DEGRADED_EMPTY" : "PUBLIC_META_DEGRADED_EMPTY",
         ms,
       });
@@ -1188,21 +1155,22 @@ export async function GET(req) {
         "x-tdls-fallback": "degraded-empty",
         "x-tdls-upstream-status": String(result?.status || 0),
         "x-tdls-guard": guarded ? "1" : "0",
+        ...(isProductEndpoint ? { "x-tdls-products-count": "0" } : {}),
       });
     }
 
-    // ── Success path ───────────────────────────────────────────
+    // Success path
     const payloadStr = result.payloadStr || JSON.stringify({ ok: true, data: null, ms });
 
-    // Decide whether safe to cache as “good”.
+    // Cache safety check (never store empty products as good)
     let productCount = null;
     if (isProductEndpoint) {
       const parsed = safeJsonParse(payloadStr);
       productCount = productCountFromStrapiPayload(parsed?.data);
     }
-    const isGoodProductPayload = !isProductEndpoint || (Number.isFinite(productCount) && productCount > 0);
+    const isGoodProductPayload =
+      !isProductEndpoint || (Number.isFinite(productCount) && productCount > 0);
 
-    // micro-cache
     if (CACHE_OK) {
       if (!isProductEndpoint || isGoodProductPayload) {
         const map = isProductEndpoint ? MEM_PROD : MEM_META;
@@ -1210,16 +1178,12 @@ export async function GET(req) {
           map,
           cacheKey,
           payloadStr,
-          {
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
-          },
+          { "cache-control": cacheControl, "CDN-Cache-Control": cacheControl },
           isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS
         );
       }
     }
 
-    // last-known-good (public)
     if (!hasClientSecret) {
       if (!isProductEndpoint || isGoodProductPayload) {
         lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
@@ -1238,6 +1202,7 @@ export async function GET(req) {
       "x-tdls-stale": result?.reason ? "1" : "0",
       "x-tdls-fallback": result?.reason ? String(result.reason) : "0",
       "x-tdls-guard": guarded ? "1" : "0",
+      ...(isProductEndpoint ? { "x-tdls-products-count": String(productCount ?? 0) } : {}),
     });
   } catch (err) {
     const ms = Date.now() - t0;
@@ -1248,80 +1213,6 @@ export async function GET(req) {
       name.toLowerCase().includes("abort") ||
       String(err?.message || "").toLowerCase().includes("aborted");
 
-    // STRICT: misconfig or secret issues should remain strict
-    // PUBLIC: never red-link; return 200 degraded if possible
-    try {
-      const url = new URL(req.url);
-      const hasSecret =
-        !!(
-          url.searchParams.get("secret") ||
-          req.headers.get("x-strapi-sync-secret") ||
-          req.headers.get("x-strapi-proxy-secret")
-        );
-
-      const normalizedPath0 = normalizeStrapiPath(url.searchParams.get("path") || "");
-      if (normalizedPath0 && !hasSecret) {
-        let effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
-        let { pathname } = splitPathAndQuery(effectivePath);
-        const isProductEndpoint = pathname === "/products" || pathname.startsWith("/products/");
-
-        // heavy guard on crash path too
-        if (HEAVY_GUARD_ENABLED && isHeavyPopulateRequest(effectivePath)) {
-          if (!isProductEndpoint) effectivePath = canonicalizePath(sanitizeMetaPathForPublic(effectivePath));
-          else if (pathname === "/products") effectivePath = canonicalizePath(sanitizeProductsListPathForPublic(effectivePath));
-        }
-
-        const lastGoodKey = `pub|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
-        const lg = lastGoodGet(lastGoodKey);
-        if (lg?.payloadStr) {
-          const cacheControl = isProductEndpoint ? PRODUCT_CACHE_CONTROL : META_CACHE_CONTROL;
-          return rawJsonResponse(lg.payloadStr, 200, {
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-stale": "1",
-            "x-tdls-fallback": isAbort ? "timeout:last-good" : "error:last-good",
-          });
-        }
-
-        if (isProductEndpoint) {
-          const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
-          if (any?.payloadStr) {
-            const cacheControl = PRODUCT_CACHE_CONTROL;
-            return rawJsonResponse(any.payloadStr, 200, {
-              "cache-control": cacheControl,
-              "CDN-Cache-Control": cacheControl,
-              "x-tdls-proxy-ms": String(ms),
-              "x-tdls-stale": "1",
-              "x-tdls-fallback": isAbort ? "timeout:any-products" : "error:any-products",
-            });
-          }
-        }
-
-        const payloadStr = softOkPayload({
-          data: { data: [], meta: { degraded: true } },
-          reason: isProductEndpoint
-            ? isAbort
-              ? "PUBLIC_PRODUCTS_TIMEOUT_DEGRADED_EMPTY"
-              : "PUBLIC_PRODUCTS_ERROR_DEGRADED_EMPTY"
-            : isAbort
-              ? "PUBLIC_META_TIMEOUT_DEGRADED_EMPTY"
-              : "PUBLIC_META_ERROR_DEGRADED_EMPTY",
-          ms,
-        });
-
-        return rawJsonResponse(payloadStr, 200, {
-          "cache-control": "no-store",
-          "x-tdls-proxy-ms": String(ms),
-          "x-tdls-stale": "1",
-          "x-tdls-fallback": isAbort ? "timeout:degraded-empty" : "error:degraded-empty",
-        });
-      }
-    } catch {
-      // ignore
-    }
-
-    // Secret call or unknown: keep strict errors
     if (isAbort) {
       return jsonResponse(
         {
