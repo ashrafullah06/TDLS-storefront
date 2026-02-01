@@ -21,7 +21,7 @@ const PORTAL_ID = "tdls-wa-portal-root";
 /** Requested “safe distance” */
 const SAFE_GAP_INCH = 0.5;
 
-/** User request: move icon 0.8 inch upward from current position */
+/** Base lift (desktop/tablet). Mobile will be moved 0.4in DOWN from the current position via CSS override. */
 const FAB_LIFT_INCH = 0.8;
 
 export default function Whatsappchatbutton({ pageProduct, sku, size }) {
@@ -684,9 +684,7 @@ export default function Whatsappchatbutton({ pageProduct, sku, size }) {
   return (
     <>
       {/* FAB is portaled to body-level overlay to avoid being clipped/hidden by BFBar/stacking contexts */}
-      {portalEl
-        ? createPortal(<div style={{ pointerEvents: "auto" }}>{fabTree}</div>, portalEl)
-        : fabTree}
+      {portalEl ? createPortal(<div style={{ pointerEvents: "auto" }}>{fabTree}</div>, portalEl) : fabTree}
 
       {portalEl && modalTree ? createPortal(<div style={{ pointerEvents: "auto" }}>{modalTree}</div>, portalEl) : null}
 
@@ -847,13 +845,16 @@ const styles = `
     --tdls-wa-bfbar-offset: 0px;
 
     --tdls-wa-gap-in: ${SAFE_GAP_INCH}in;
-    --tdls-wa-fab-lift-in: ${FAB_LIFT_INCH}in;
+
+    /* base (desktop/tablet) + effective (can be overridden for mobile) */
+    --tdls-wa-fab-lift-base: ${FAB_LIFT_INCH}in;
+    --tdls-wa-fab-lift-in: var(--tdls-wa-fab-lift-base);
 
     /* derived safe paddings */
     --tdls-wa-safe-top: calc(env(safe-area-inset-top) + var(--tdls-wa-nav-offset) + var(--tdls-wa-gap-in));
     --tdls-wa-safe-bottom: calc(env(safe-area-inset-bottom) + var(--tdls-wa-bfbar-offset) + var(--tdls-wa-gap-in));
 
-    /* FAB bottom: safe bottom + requested extra lift + a small responsive cushion */
+    /* FAB bottom: safe bottom + lift + a small responsive cushion */
     --tdls-wa-fab-bottom: calc(var(--tdls-wa-safe-bottom) + var(--tdls-wa-fab-lift-in) + clamp(10px, 2.4vw, 18px));
 
     --tdls-wa-safe-x: calc(14px + env(safe-area-inset-left));
@@ -891,21 +892,46 @@ const styles = `
       0 0 0 1px rgba(0,0,0,0.06) inset;
 
     transition: transform .16s ease, box-shadow .18s ease, filter .18s ease;
+    isolation: isolate;
   }
+
+  /* refined “glass highlight” (all views) */
+  .tdls-wa-fab::before{
+    content:"";
+    position:absolute;
+    inset: 1px;
+    border-radius: inherit;
+    pointer-events:none;
+    background:
+      radial-gradient(65% 65% at 28% 22%, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0.00) 62%),
+      radial-gradient(90% 80% at 70% 85%, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.00) 55%);
+    mix-blend-mode: soft-light;
+    opacity: 0.9;
+  }
+
+  /* keep contents above highlight */
+  .tdls-wa-fab > *{ position: relative; z-index: 1; }
 
   .tdls-wa-fab:hover,
   .tdls-wa-fab:focus-visible{
     transform: translateY(-1px) scale(1.03);
-    filter: saturate(1.04);
+    filter: saturate(1.05);
     box-shadow:
       0 22px 74px rgba(22,204,79,0.26),
       0 0 0 6px rgba(25,230,153,0.12);
+  }
+
+  .tdls-wa-fab:active{
+    transform: translateY(0px) scale(0.985);
   }
 
   .tdls-wa-icon{
     width: clamp(26px, 5vw, 30px);
     height: clamp(26px, 5vw, 30px);
     color: #ffffff;
+    display: block;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.18));
+    transform: translateY(-0.25px); /* optical centering */
   }
 
   .tdls-wa-dot{
@@ -936,24 +962,39 @@ const styles = `
     white-space: nowrap;
     backdrop-filter: blur(8px);
   }
+
   @media (max-width: 520px){
+    /* move FAB 0.4in DOWN from the current position (i.e. reduce lift by 0.4in) */
+    :root{
+      --tdls-wa-fab-lift-in: clamp(0in, calc(var(--tdls-wa-fab-lift-base) - 0.4in), 2in);
+    }
+
     .tdls-wa-labelFab{ display:none; }
 
-    /* smaller FAB on mobile */
+    /* smaller + cleaner FAB on mobile */
     .tdls-wa-fab{
-      width: 50px;
-      height: 50px;
+      width: 46px;
+      height: 46px;
       right: calc(env(safe-area-inset-right) + 14px);
+      box-shadow:
+        0 16px 46px rgba(8, 74, 42, 0.20),
+        0 2px 0 rgba(255,255,255,0.26) inset,
+        0 0 0 1px rgba(0,0,0,0.06) inset;
     }
+
     .tdls-wa-icon{
-      width: 24px;
-      height: 24px;
+      width: 21px;
+      height: 21px;
+      transform: translateY(-0.15px);
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.16));
     }
+
     .tdls-wa-dot{
-      top: 9px;
-      right: 9px;
-      width: 9px;
-      height: 9px;
+      top: 8px;
+      right: 8px;
+      width: 8px;
+      height: 8px;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.98);
     }
   }
 

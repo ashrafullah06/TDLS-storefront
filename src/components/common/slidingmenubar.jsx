@@ -144,16 +144,41 @@ function extractRelSlugs(entity, canonicalKey) {
 
 /* ------------------------------ Strapi proxy IO ------------------------------ */
 
+function fetchWithAbort(url, init, timeoutMs = 15000) {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const t =
+    controller && timeoutMs > 0
+      ? window.setTimeout(() => {
+          try {
+            controller.abort();
+          } catch {
+            // ignore
+          }
+        }, timeoutMs)
+      : null;
+
+  return fetch(url, {
+    ...init,
+    signal: controller ? controller.signal : undefined,
+  }).finally(() => {
+    if (t) window.clearTimeout(t);
+  });
+}
+
 async function fetchFromStrapi(path) {
   try {
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const q = encodeURIComponent(normalizedPath);
 
-    const res = await fetch(`/api/strapi?path=${q}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "default",
-    });
+    const res = await fetchWithAbort(
+      `/api/strapi?path=${q}`,
+      {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "default",
+      },
+      15000
+    );
 
     if (!res.ok) return null;
     const raw = await res.json().catch(() => null);
@@ -594,14 +619,37 @@ function safeJsonParse(s) {
   }
 }
 
+/**
+ * ✅ IMPORTANT: localStorage can throw (Safari/private/blocked storage).
+ * If it throws, we must not crash render => “blank menu”.
+ */
+function lsGet(key) {
+  if (!canUseLS()) return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function lsSet(key, value) {
+  if (!canUseLS()) return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
 function loadFromLocalStorage() {
   if (!canUseLS()) return null;
-  const tsRaw = window.localStorage.getItem(LS_TS);
+
+  const tsRaw = lsGet(LS_TS);
   const ts = tsRaw ? parseInt(tsRaw, 10) : 0;
   if (!Number.isFinite(ts) || ts <= 0) return null;
   if (Date.now() - ts > LS_TTL_MS) return null;
 
-  const raw = window.localStorage.getItem(LS_KEY);
+  const raw = lsGet(LS_KEY);
   if (!raw) return null;
 
   const parsed = safeJsonParse(raw);
@@ -619,8 +667,8 @@ function loadFromLocalStorage() {
 function saveToLocalStorage({ audienceRows, products }) {
   if (!canUseLS()) return;
   try {
-    window.localStorage.setItem(LS_TS, String(Date.now()));
-    window.localStorage.setItem(
+    lsSet(LS_TS, String(Date.now()));
+    lsSet(
       LS_KEY,
       JSON.stringify({
         audienceRows: (audienceRows || []).slice(0, 1200),
@@ -630,6 +678,25 @@ function saveToLocalStorage({ audienceRows, products }) {
   } catch {
     // ignore
   }
+}
+
+function isMeaningfulMenuData(d) {
+  const ar = d?.audienceRows;
+  const pi = d?.productIndex;
+  const okA = Array.isArray(ar) && ar.length > 0;
+  const okP = pi instanceof Map && pi.size > 0;
+  return okA && okP;
+}
+
+function getWarmSnapshot() {
+  // Prefer in-memory (already built Map)
+  if (__tdlsMenuPreloadData && (isMeaningfulMenuData(__tdlsMenuPreloadData) || __tdlsMenuPreloadData?._fromCache)) {
+    return __tdlsMenuPreloadData;
+  }
+  // Then LS
+  const cached = loadFromLocalStorage();
+  if (cached) return cached;
+  return null;
 }
 
 async function fetchAndBuildFresh() {
@@ -661,41 +728,75 @@ async function fetchAndBuildFresh() {
   return built;
 }
 
-async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
+/**
+ * ✅ CRITICAL FIX FOR “BLANK SOMETIMES”:
+ * Previously, when cache existed, backgroundRefresh started but this function returned the cached snapshot
+ * immediately, so callers who awaited it never received the fresh result (and UI could stay empty).
+ *
+ * New:
+ * - If awaitFresh=true and a refresh promise exists (or we start one), we await it and return the freshest snapshot.
+ * - Default behavior stays the same for callers that want “instant snapshot”.
+ */
+async function preloadMenuDataOnce({ backgroundRefresh = true, awaitFresh = false } = {}) {
+  // If we already have data, optionally start/await a refresh
   if (__tdlsMenuPreloadData) {
-    if (backgroundRefresh && !__tdlsMenuPreloadPromise) {
-      __tdlsMenuPreloadPromise = fetchAndBuildFresh()
-        .then((fresh) => {
-          __tdlsMenuPreloadData = fresh;
-          return fresh;
-        })
-        .catch(() => __tdlsMenuPreloadData)
-        .finally(() => {
-          __tdlsMenuPreloadPromise = null;
-        });
+    if (backgroundRefresh) {
+      if (!__tdlsMenuPreloadPromise) {
+        __tdlsMenuPreloadPromise = fetchAndBuildFresh()
+          .then((fresh) => {
+            __tdlsMenuPreloadData = fresh;
+            return fresh;
+          })
+          .catch(() => __tdlsMenuPreloadData)
+          .finally(() => {
+            __tdlsMenuPreloadPromise = null;
+          });
+      }
+
+      if (awaitFresh && __tdlsMenuPreloadPromise) {
+        try {
+          await __tdlsMenuPreloadPromise;
+        } catch {
+          // ignore
+        }
+        return __tdlsMenuPreloadData;
+      }
     }
     return __tdlsMenuPreloadData;
   }
 
+  // Try localStorage immediately
   const cached = loadFromLocalStorage();
   if (cached) {
     __tdlsMenuPreloadData = cached;
 
     if (backgroundRefresh) {
-      __tdlsMenuPreloadPromise = fetchAndBuildFresh()
-        .then((fresh) => {
-          __tdlsMenuPreloadData = fresh;
-          return fresh;
-        })
-        .catch(() => __tdlsMenuPreloadData)
-        .finally(() => {
-          __tdlsMenuPreloadPromise = null;
-        });
+      if (!__tdlsMenuPreloadPromise) {
+        __tdlsMenuPreloadPromise = fetchAndBuildFresh()
+          .then((fresh) => {
+            __tdlsMenuPreloadData = fresh;
+            return fresh;
+          })
+          .catch(() => __tdlsMenuPreloadData)
+          .finally(() => {
+            __tdlsMenuPreloadPromise = null;
+          });
+      }
+
+      if (awaitFresh && __tdlsMenuPreloadPromise) {
+        try {
+          await __tdlsMenuPreloadPromise;
+        } catch {
+          // ignore
+        }
+        return __tdlsMenuPreloadData;
+      }
     }
 
     return __tdlsMenuPreloadData;
   }
 
+  // No cache: if a fetch is inflight, await it
   if (__tdlsMenuPreloadPromise) return __tdlsMenuPreloadPromise;
 
   __tdlsMenuPreloadPromise = fetchAndBuildFresh()
@@ -726,7 +827,7 @@ function runIdle(fn, timeout = 900) {
 
 // Optional helper: parent can call this on app load; safe no-op if already warmed.
 export function warmSlidingMenuBar() {
-  return preloadMenuDataOnce({ backgroundRefresh: true });
+  return preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: false });
 }
 
 /**
@@ -736,12 +837,12 @@ export function warmSlidingMenuBar() {
 export function SlidingMenuBarPreloader() {
   useEffect(() => {
     runIdle(() => {
-      preloadMenuDataOnce({ backgroundRefresh: true }).catch(() => {});
+      preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true }).catch(() => {});
     });
 
     const onVis = () => {
       if (document.visibilityState === "visible") {
-        preloadMenuDataOnce({ backgroundRefresh: true }).catch(() => {});
+        preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true }).catch(() => {});
       }
     };
     document.addEventListener("visibilitychange", onVis, { passive: true });
@@ -751,10 +852,20 @@ export function SlidingMenuBarPreloader() {
   return null;
 }
 
-// Start warming as soon as THIS chunk exists (still requires chunk to be loaded by being imported somewhere).
+// Prime the in-memory snapshot from LS as soon as this chunk exists (no network).
 if (typeof window !== "undefined") {
+  try {
+    if (!__tdlsMenuPreloadData) {
+      const warm = loadFromLocalStorage();
+      if (warm) __tdlsMenuPreloadData = warm;
+    }
+  } catch {
+    // ignore
+  }
+
+  // Start warming as soon as THIS chunk exists (still requires chunk to be loaded by being imported somewhere).
   runIdle(() => {
-    preloadMenuDataOnce({ backgroundRefresh: true }).catch(() => {});
+    preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: false }).catch(() => {});
   });
 }
 
@@ -985,8 +1096,44 @@ function readCssVarPx(vars, fallbackPx) {
   return fallbackPx;
 }
 
+function SkeletonList({ rows = 10, dense = false }) {
+  const h = dense ? 40 : 44;
+  const pad = dense ? "9px 9px" : "10px 10px";
+  return (
+    <div style={{ display: "grid", gap: dense ? 7 : 8 }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div
+          key={i}
+          style={{
+            height: h,
+            borderRadius: 12,
+            border: "1px solid rgba(0,0,0,0.06)",
+            background: "linear-gradient(135deg, rgba(12,35,64,0.06) 10%, rgba(191,167,80,0.10) 100%)",
+            boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
+            padding: pad,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: 1 }}>
+            <div style={{ height: 10, borderRadius: 999, background: "rgba(12,35,64,0.10)", width: `${60 + (i % 4) * 8}%` }} />
+            <div style={{ height: 8, borderRadius: 999, background: "rgba(12,35,64,0.08)", width: `${34 + (i % 5) * 6}%` }} />
+          </div>
+          <div style={{ height: 18, width: 46, borderRadius: 999, background: "rgba(12,35,64,0.08)" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Slidingmenubar({ open, onClose }) {
   const router = useRouter();
+
+  // ✅ One-time warm snapshot for FIRST render (prevents “blank first paint”).
+  const warmRef = useRef(null);
+  if (warmRef.current === null) warmRef.current = getWarmSnapshot();
 
   const [menuWidth, setMenuWidth] = useState(MENU_WIDTH_DESKTOP);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -1003,9 +1150,9 @@ export default function Slidingmenubar({ open, onClose }) {
 
   const [q, setQ] = useState("");
 
-  const [audienceRows, setAudienceRows] = useState([]);
-  const [productIndex, setProductIndex] = useState(() => new Map());
-  const [hydrated, setHydrated] = useState(false);
+  const [audienceRows, setAudienceRows] = useState(() => warmRef.current?.audienceRows || []);
+  const [productIndex, setProductIndex] = useState(() => warmRef.current?.productIndex || new Map());
+  const [hydrated, setHydrated] = useState(() => !!warmRef.current);
 
   const [bottomBarHeight, setBottomBarHeight] = useState(DEFAULT_BOTTOM_FLOATING_BAR_HEIGHT);
 
@@ -1019,6 +1166,15 @@ export default function Slidingmenubar({ open, onClose }) {
 
   const panelRef = useRef(null);
 
+  // ✅ last-good snapshot in this component (never allow “empty overwrite” in UI).
+  const lastGoodRef = useRef(null);
+  useEffect(() => {
+    if (audienceRows.length > 0 && productIndex instanceof Map && productIndex.size > 0) {
+      lastGoodRef.current = { audienceRows, productIndex };
+    }
+  }, [audienceRows, productIndex]);
+
+  const hasMenuData = audienceRows.length > 0 && productIndex instanceof Map && productIndex.size > 0;
   const anyTierSignals = useMemo(() => computeAnyTierSignals(productIndex, audienceRows), [productIndex, audienceRows]);
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
@@ -1079,21 +1235,40 @@ export default function Slidingmenubar({ open, onClose }) {
     };
   }, []);
 
-  // ✅ Hydrate immediately from singleton/cache, then refresh in background.
+  // ✅ Always hydrate: instant warm snapshot + awaitFresh so the UI gets real data (even if background refresh started).
   useEffect(() => {
     let alive = true;
 
-    if (__tdlsMenuPreloadData && alive) {
-      setAudienceRows(__tdlsMenuPreloadData.audienceRows || []);
-      setProductIndex(__tdlsMenuPreloadData.productIndex || new Map());
+    // Apply warm snapshot immediately (no blank first paint after refresh/open)
+    const warm = getWarmSnapshot();
+    if (warm && alive) {
+      if (Array.isArray(warm.audienceRows)) setAudienceRows(warm.audienceRows);
+      if (warm.productIndex instanceof Map) setProductIndex(warm.productIndex);
       setHydrated(true);
     }
 
     (async () => {
-      const data = await preloadMenuDataOnce({ backgroundRefresh: true });
+      // ✅ awaitFresh fixes “stuck empty after background refresh”
+      const data = await preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true });
       if (!alive) return;
-      setAudienceRows(data?.audienceRows || []);
-      setProductIndex(data?.productIndex || new Map());
+
+      // Do not overwrite UI with empties if we have last-good
+      if (isMeaningfulMenuData(data)) {
+        setAudienceRows(data.audienceRows || []);
+        setProductIndex(data.productIndex || new Map());
+        setHydrated(true);
+        return;
+      }
+
+      const last = lastGoodRef.current;
+      if (last && isMeaningfulMenuData(last)) {
+        setAudienceRows(last.audienceRows || []);
+        setProductIndex(last.productIndex || new Map());
+        setHydrated(true);
+        return;
+      }
+
+      // If no last-good exists, keep whatever we have, but mark hydrated to stop “random blank”
       setHydrated(true);
     })();
 
@@ -1101,6 +1276,76 @@ export default function Slidingmenubar({ open, onClose }) {
       alive = false;
     };
   }, []);
+
+  // ✅ When opening, ensure we immediately apply warm snapshot and actively await fresh (plus limited retry).
+  useEffect(() => {
+    if (!open) return;
+
+    let alive = true;
+    let tries = 0;
+    let t = null;
+
+    const applyLastGoodOrWarm = () => {
+      const last = lastGoodRef.current;
+      if (last && isMeaningfulMenuData(last)) {
+        setAudienceRows(last.audienceRows || []);
+        setProductIndex(last.productIndex || new Map());
+        setHydrated(true);
+        return true;
+      }
+
+      const warm = getWarmSnapshot();
+      if (warm && isMeaningfulMenuData(warm)) {
+        setAudienceRows(warm.audienceRows || []);
+        setProductIndex(warm.productIndex || new Map());
+        setHydrated(true);
+        return true;
+      }
+
+      return false;
+    };
+
+    // Always attempt to apply warm immediately on open (prevents blank open)
+    applyLastGoodOrWarm();
+
+    const attempt = async () => {
+      try {
+        const data = await preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true });
+        if (!alive) return;
+
+        if (isMeaningfulMenuData(data)) {
+          setAudienceRows(data.audienceRows || []);
+          setProductIndex(data.productIndex || new Map());
+          setHydrated(true);
+          return;
+        }
+
+        // If fetch result is empty, re-apply last-good snapshot (never “empty overwrite”)
+        applyLastGoodOrWarm();
+      } catch {
+        // If fetch throws, keep last-good/warm
+        applyLastGoodOrWarm();
+      }
+
+      // Limited retries only if still empty
+      tries += 1;
+      if (!alive) return;
+
+      const stillEmpty = !(lastGoodRef.current && isMeaningfulMenuData(lastGoodRef.current)) && !hasMenuData;
+      if (stillEmpty && tries <= 3) {
+        const delay = 600 * Math.pow(2, tries); // 1200ms, 2400ms, 4800ms
+        t = window.setTimeout(attempt, delay);
+      }
+    };
+
+    attempt();
+
+    return () => {
+      alive = false;
+      if (t) window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     function handleResize() {
@@ -1235,9 +1480,7 @@ export default function Slidingmenubar({ open, onClose }) {
 
     const isInsidePanel = (evt) => {
       const panelEl =
-        panelRef.current ||
-        document.getElementById(PANEL_ID) ||
-        document.getElementById(LEGACY_PANEL_ID);
+        panelRef.current || document.getElementById(PANEL_ID) || document.getElementById(LEGACY_PANEL_ID);
 
       if (!panelEl) return false;
       const t = evt?.target;
@@ -1276,10 +1519,7 @@ export default function Slidingmenubar({ open, onClose }) {
       if (!active || e.pointerId !== active.id) return;
 
       const endedInside = isInsidePanel(e);
-      const shouldClose =
-        !active.startedInside &&
-        !endedInside &&
-        !active.moved; // true outside tap only
+      const shouldClose = !active.startedInside && !endedInside && !active.moved; // true outside tap only
 
       active = null;
       if (shouldClose) handleClose();
@@ -1649,7 +1889,7 @@ export default function Slidingmenubar({ open, onClose }) {
                       {tierName}
                     </Pill>
                     <Pill tone="ink" size="sm">
-                      {filteredProducts.length}
+                      {hasMenuData ? filteredProducts.length : "…"}
                     </Pill>
                     {flyAudienceSlug ? <Pill size="sm">{titleizeSlug(flyAudienceSlug)}</Pill> : null}
                     {flyCategorySlug ? <Pill size="sm">{titleizeSlug(flyCategorySlug)}</Pill> : null}
@@ -1708,7 +1948,7 @@ export default function Slidingmenubar({ open, onClose }) {
                     {tierName}
                   </Pill>
                   <Pill tone="ink" size={headerIsMobile ? "sm" : "md"}>
-                    {filteredProducts.length}
+                    {hasMenuData ? filteredProducts.length : "…"}
                   </Pill>
                   {flyAudienceSlug ? <Pill size={headerIsMobile ? "sm" : "md"}>{titleizeSlug(flyAudienceSlug)}</Pill> : null}
                   {flyCategorySlug ? <Pill size={headerIsMobile ? "sm" : "md"}>{titleizeSlug(flyCategorySlug)}</Pill> : null}
@@ -1728,7 +1968,10 @@ export default function Slidingmenubar({ open, onClose }) {
                     <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile={headerIsMobile} />
                   </div>
 
-                  <div ref={searchWrapRef} style={{ position: "relative", flexShrink: 0, width: headerIsMobile ? "100%" : "auto" }}>
+                  <div
+                    ref={searchWrapRef}
+                    style={{ position: "relative", flexShrink: 0, width: headerIsMobile ? "100%" : "auto" }}
+                  >
                     <input
                       value={q}
                       onChange={(e) => {
@@ -1764,7 +2007,7 @@ export default function Slidingmenubar({ open, onClose }) {
                           setShowSuggest(false);
                         }
                       }}
-                      placeholder={hydrated ? "Search…" : "Search…"}
+                      placeholder={"Search…"}
                       style={{
                         width: headerIsMobile ? "100%" : "clamp(160px, 18vw, 300px)",
                         maxWidth: "100%",
@@ -1918,20 +2161,6 @@ export default function Slidingmenubar({ open, onClose }) {
                     ) : null}
                   </div>
                 </div>
-
-                {!isDesktop ? (
-                  <div style={{ marginTop: 10 }}>
-                    <Segmented
-                      value={mobileSection}
-                      onChange={setMobileSection}
-                      items={[
-                        { value: "audiences", label: "Audiences" },
-                        { value: "categories", label: "Categories" },
-                        { value: "products", label: "Products" },
-                      ]}
-                    />
-                  </div>
-                ) : null}
               </div>
 
               <button
@@ -1977,57 +2206,63 @@ export default function Slidingmenubar({ open, onClose }) {
               }}
             >
               <Shell
-                title={`Audiences · ${filteredAudiences.length}`}
-                right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)}</Pill>}
+                title={`Audiences · ${hasMenuData ? filteredAudiences.length : "…"}`}
+                right={<Pill tone="ink">{hasMenuData ? filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0) : "…"}</Pill>}
               >
                 <ScrollBody>
-                  {filteredAudiences.map((a) => (
-                    <CompactRowButton
-                      key={a.slug}
-                      title={a.name}
-                      subLeft={`${a.count} product${a.count === 1 ? "" : "s"}`}
-                      badge={a.count}
-                      active={a.slug === flyAudienceSlug}
-                      isDesktop
-                      dense={false}
-                      onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: a.slug })}
-                      onNavigate={handleClose}
-                      onClick={() => {}}
-                      // ✅ Desktop: select on hover/focus (no click navigation change)
-                      onMouseEnter={() => scheduleHoverSelect("aud", a.slug)}
-                      onMouseLeave={() => cancelHoverSelect("aud")}
-                      onFocus={() => scheduleHoverSelect("aud", a.slug)}
-                    />
-                  ))}
+                  {!hasMenuData ? (
+                    <SkeletonList rows={10} dense={false} />
+                  ) : (
+                    filteredAudiences.map((a) => (
+                      <CompactRowButton
+                        key={a.slug}
+                        title={a.name}
+                        subLeft={`${a.count} product${a.count === 1 ? "" : "s"}`}
+                        badge={a.count}
+                        active={a.slug === flyAudienceSlug}
+                        isDesktop
+                        dense={false}
+                        onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: a.slug })}
+                        onNavigate={handleClose}
+                        onClick={() => {}}
+                        onMouseEnter={() => scheduleHoverSelect("aud", a.slug)}
+                        onMouseLeave={() => cancelHoverSelect("aud")}
+                        onFocus={() => scheduleHoverSelect("aud", a.slug)}
+                      />
+                    ))
+                  )}
                 </ScrollBody>
               </Shell>
 
               <Shell
                 title={
                   flyAudience?.name
-                    ? `Categories · ${flyAudience.name} · ${filteredCategories.length}`
-                    : `Categories · ${filteredCategories.length}`
+                    ? `Categories · ${flyAudience.name} · ${hasMenuData ? filteredCategories.length : "…"}`
+                    : `Categories · ${hasMenuData ? filteredCategories.length : "…"}`
                 }
               >
                 <ScrollBody>
-                  {filteredCategories.map((c) => (
-                    <CompactRowButton
-                      key={c.slug}
-                      title={c.name}
-                      subLeft={`${c.count} product${c.count === 1 ? "" : "s"}`}
-                      badge={c.count}
-                      active={c.slug === flyCategorySlug}
-                      isDesktop
-                      dense={false}
-                      onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug })}
-                      onNavigate={handleClose}
-                      onClick={() => {}}
-                      // ✅ Desktop: select on hover/focus (no click navigation change)
-                      onMouseEnter={() => scheduleHoverSelect("cat", c.slug)}
-                      onMouseLeave={() => cancelHoverSelect("cat")}
-                      onFocus={() => scheduleHoverSelect("cat", c.slug)}
-                    />
-                  ))}
+                  {!hasMenuData ? (
+                    <SkeletonList rows={10} dense={false} />
+                  ) : (
+                    filteredCategories.map((c) => (
+                      <CompactRowButton
+                        key={c.slug}
+                        title={c.name}
+                        subLeft={`${c.count} product${c.count === 1 ? "" : "s"}`}
+                        badge={c.count}
+                        active={c.slug === flyCategorySlug}
+                        isDesktop
+                        dense={false}
+                        onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug })}
+                        onNavigate={handleClose}
+                        onClick={() => {}}
+                        onMouseEnter={() => scheduleHoverSelect("cat", c.slug)}
+                        onMouseLeave={() => cancelHoverSelect("cat")}
+                        onFocus={() => scheduleHoverSelect("cat", c.slug)}
+                      />
+                    ))
+                  )}
                 </ScrollBody>
               </Shell>
 
@@ -2052,7 +2287,7 @@ export default function Slidingmenubar({ open, onClose }) {
                     <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
                       Products
                     </div>
-                    <Pill tone="ink">{filteredProducts.length}</Pill>
+                    <Pill tone="ink">{hasMenuData ? filteredProducts.length : "…"}</Pill>
                   </div>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -2171,7 +2406,9 @@ export default function Slidingmenubar({ open, onClose }) {
                       touchAction: "pan-y",
                     }}
                   >
-                    {filteredProducts.length ? (
+                    {!hasMenuData ? (
+                      <SkeletonList rows={12} dense={false} />
+                    ) : filteredProducts.length ? (
                       <div
                         style={{
                           display: "grid",
@@ -2268,44 +2505,45 @@ export default function Slidingmenubar({ open, onClose }) {
             <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
               {mobileSection === "audiences" ? (
                 <Shell
-                  title={`Audiences · ${filteredAudiences.length}`}
-                  right={<Pill tone="ink" size="sm">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)}</Pill>}
+                  title={`Audiences · ${hasMenuData ? filteredAudiences.length : "…"}`}
+                  right={<Pill tone="ink" size="sm">{hasMenuData ? filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0) : "…"}</Pill>}
                 >
                   <ScrollBody compact>
-                    {filteredAudiences.map((a) => {
-                      const isActive = a.slug === flyAudienceSlug;
-                      const href = buildCollectionsHref({ tier: tierSlug, audience: a.slug });
+                    {!hasMenuData ? (
+                      <SkeletonList rows={10} dense />
+                    ) : (
+                      filteredAudiences.map((a) => {
+                        const isActive = a.slug === flyAudienceSlug;
+                        const href = buildCollectionsHref({ tier: tierSlug, audience: a.slug });
 
-                      return (
-                        <CompactRowButton
-                          key={a.slug}
-                          title={a.name}
-                          subLeft={`${a.count} product${a.count === 1 ? "" : "s"}`}
-                          badge={a.count}
-                          active={isActive}
-                          isDesktop={false}
-                          dense
-                          onNavigateHref={null}
-                          onNavigate={null}
-                          onClick={() => {
-                            // ✅ Mobile intelligent click:
-                            // - First tap: select + go to Categories (browse)
-                            // - Second tap (already active): go to Audience "See All" page
-                            if (isActive) {
-                              router.push(href);
-                              handleClose();
-                              return;
-                            }
-                            setHoverAudienceSlug(a.slug);
-                            setHoverCategorySlug("");
-                            setSelectedSubCategory("");
-                            setSelectedGenderGroup("");
-                            setSelectedAgeGroup("");
-                            setMobileSection("categories");
-                          }}
-                        />
-                      );
-                    })}
+                        return (
+                          <CompactRowButton
+                            key={a.slug}
+                            title={a.name}
+                            subLeft={`${a.count} product${a.count === 1 ? "" : "s"}`}
+                            badge={a.count}
+                            active={isActive}
+                            isDesktop={false}
+                            dense
+                            onNavigateHref={null}
+                            onNavigate={null}
+                            onClick={() => {
+                              if (isActive) {
+                                router.push(href);
+                                handleClose();
+                                return;
+                              }
+                              setHoverAudienceSlug(a.slug);
+                              setHoverCategorySlug("");
+                              setSelectedSubCategory("");
+                              setSelectedGenderGroup("");
+                              setSelectedAgeGroup("");
+                              setMobileSection("categories");
+                            }}
+                          />
+                        );
+                      })
+                    )}
                   </ScrollBody>
                 </Shell>
               ) : null}
@@ -2314,8 +2552,8 @@ export default function Slidingmenubar({ open, onClose }) {
                 <Shell
                   title={
                     flyAudience?.name
-                      ? `Categories · ${flyAudience.name} · ${filteredCategories.length}`
-                      : `Categories · ${filteredCategories.length}`
+                      ? `Categories · ${flyAudience.name} · ${hasMenuData ? filteredCategories.length : "…"}`
+                      : `Categories · ${hasMenuData ? filteredCategories.length : "…"}`
                   }
                   right={
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -2372,37 +2610,38 @@ export default function Slidingmenubar({ open, onClose }) {
                   }
                 >
                   <ScrollBody compact>
-                    {filteredCategories.map((c) => {
-                      const isActive = c.slug === flyCategorySlug;
-                      const href = buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug });
+                    {!hasMenuData ? (
+                      <SkeletonList rows={10} dense />
+                    ) : (
+                      filteredCategories.map((c) => {
+                        const isActive = c.slug === flyCategorySlug;
+                        const href = buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug });
 
-                      return (
-                        <CompactRowButton
-                          key={c.slug}
-                          title={c.name}
-                          subLeft={`${c.count} product${c.count === 1 ? "" : "s"}`}
-                          badge={c.count}
-                          active={isActive}
-                          isDesktop={false}
-                          dense
-                          onClick={() => {
-                            // ✅ Mobile intelligent click:
-                            // - First tap: select + go to Products (browse)
-                            // - Second tap (already active): go to Category "See All" page
-                            if (isActive) {
-                              router.push(href);
-                              handleClose();
-                              return;
-                            }
-                            setHoverCategorySlug(c.slug);
-                            setSelectedSubCategory("");
-                            setSelectedGenderGroup("");
-                            setSelectedAgeGroup("");
-                            setMobileSection("products");
-                          }}
-                        />
-                      );
-                    })}
+                        return (
+                          <CompactRowButton
+                            key={c.slug}
+                            title={c.name}
+                            subLeft={`${c.count} product${c.count === 1 ? "" : "s"}`}
+                            badge={c.count}
+                            active={isActive}
+                            isDesktop={false}
+                            dense
+                            onClick={() => {
+                              if (isActive) {
+                                router.push(href);
+                                handleClose();
+                                return;
+                              }
+                              setHoverCategorySlug(c.slug);
+                              setSelectedSubCategory("");
+                              setSelectedGenderGroup("");
+                              setSelectedAgeGroup("");
+                              setMobileSection("products");
+                            }}
+                          />
+                        );
+                      })
+                    )}
                   </ScrollBody>
                 </Shell>
               ) : null}
@@ -2427,7 +2666,7 @@ export default function Slidingmenubar({ open, onClose }) {
                         <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
                           Products
                         </div>
-                        <Pill tone="ink" size="sm">{filteredProducts.length}</Pill>
+                        <Pill tone="ink" size="sm">{hasMenuData ? filteredProducts.length : "…"}</Pill>
                       </div>
 
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -2615,7 +2854,6 @@ export default function Slidingmenubar({ open, onClose }) {
                       minWidth: 0,
                     }}
                   >
-                    {/* ✅ Mobile list: breathing space above + below (inside scroll), keep everything else intact */}
                     <div
                       style={{
                         flex: 1,
@@ -2636,12 +2874,12 @@ export default function Slidingmenubar({ open, onClose }) {
                           minHeight: 0,
                         }}
                       >
-                        {/* empty space above the list */}
                         <div aria-hidden="true" style={{ height: 10 }} />
 
-                        {filteredProducts.length ? (
+                        {!hasMenuData ? (
+                          <SkeletonList rows={12} dense />
+                        ) : filteredProducts.length ? (
                           <>
-                            {/* ✅ Mobile: single-column list + 2-line clamp to show names clearly */}
                             <div
                               style={{
                                 display: "grid",
@@ -2724,10 +2962,7 @@ export default function Slidingmenubar({ open, onClose }) {
                               ))}
                             </div>
 
-                            {/* empty space below the list */}
                             <div aria-hidden="true" style={{ height: 14 }} />
-
-                            {/* extra breathing room at the very bottom */}
                             <div aria-hidden="true" style={{ height: 10 }} />
                           </>
                         ) : (
