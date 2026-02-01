@@ -1,4 +1,4 @@
-// FILE: app/api/strapi/route.js
+//✅ FULL corrected file: app/api/strapi/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -311,6 +311,12 @@ const DEFAULT_PRODUCTS_PAGESIZE = (() => {
   return Math.min(1500, Math.max(25, Math.round(n)));
 })();
 
+const BROAD_FALLBACK_PAGESIZE = (() => {
+  const n = Number(process.env.TDLS_STRAPI_BROAD_FALLBACK_PAGESIZE ?? 400);
+  if (!Number.isFinite(n) || n <= 0) return Math.min(400, DEFAULT_PRODUCTS_PAGESIZE);
+  return Math.min(DEFAULT_PRODUCTS_PAGESIZE, Math.max(50, Math.round(n)));
+})();
+
 /* ───────── products populate profiles ───────── */
 
 const TAXONOMY_RELS = [
@@ -354,10 +360,7 @@ const FAST_META_PROFILES = new Map([
   ["/tiers", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
   ["/brand-tiers", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
   ["/collection-tiers", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  [
-    "/events-products-collections",
-    { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] },
-  ],
+  ["/events-products-collections", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
   ["/product-collections", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
 ]);
 
@@ -521,66 +524,43 @@ function normalizePopulateStringToObject(params, mode = "products-list") {
   }
 }
 
-/**
- * ✅ CRITICAL PROD FIX (your issue):
- * For PUBLIC /products requests we DO NOT trust client populate=* spam.
- * We enforce a stable, filter-safe populate profile so Strapi is fast and consistent.
- *
- * Opt-out: add `noOptimize=1` inside the `path` query (proxy-only flag).
- */
-function normalizeProductsPath(p, opts = {}) {
-  const isPublic = Boolean(opts?.isPublic);
-
+function normalizeProductsPath(p) {
   const { pathname, search } = splitPathAndQuery(p);
   if (!pathname.startsWith("/products")) return p;
 
   const params = new URLSearchParams(search || "");
 
-  // proxy-only flag: never send to Strapi
-  const noOptimize = params.get("noOptimize") === "1";
-  if (noOptimize) params.delete("noOptimize");
-
   const isList = pathname === "/products";
   const isDetail = !isList;
 
-  // ✅ PUBLIC enforcement: strip all client populate keys unless opted out.
-  if (isPublic && !noOptimize) {
-    stripPopulateParams(params);
+  if (params.has("populate") && hasObjectPopulate(params)) {
+    params.delete("populate");
+  }
 
-    if (isDetail) {
+  if (params.has("populate") && !hasObjectPopulate(params)) {
+    normalizePopulateStringToObject(params, isDetail ? "products-detail" : "products-list");
+  }
+
+  if (isDetail) {
+    if (!hasAnyPopulate(params)) {
       applyProductDetailPopulate(params);
     } else {
-      // If caller is intentionally requesting a tiny payload via fields[],
-      // keep it light (taxonomy only) to stay "electric fast".
-      if (hasAnyFields(params)) {
-        applyProductsTaxonomyPopulate(params);
-      } else {
-        applyProductsFilterSafePopulate(params);
-      }
+      applyProductDetailPopulate(params);
     }
   } else {
-    // Legacy behavior (internal/secret calls can request extra populates)
-    if (params.has("populate") && hasObjectPopulate(params)) {
-      params.delete("populate");
-    }
-
-    if (params.has("populate") && !hasObjectPopulate(params)) {
-      normalizePopulateStringToObject(params, isDetail ? "products-detail" : "products-list");
-    }
-
-    if (isDetail) {
-      applyProductDetailPopulate(params);
-    } else {
-      if (!hasAnyPopulate(params)) {
-        // Even in "light/full" modes, we keep it filter-safe because your UI depends on it.
+    if (!hasAnyPopulate(params)) {
+      if (DEFAULT_PRODUCTS_POPULATE_MODE === "light") {
+        applyProductsFilterSafePopulate(params);
+      } else if (DEFAULT_PRODUCTS_POPULATE_MODE === "full") {
         applyProductsFilterSafePopulate(params);
       } else {
         applyProductsFilterSafePopulate(params);
       }
+    } else {
+      applyProductsFilterSafePopulate(params);
     }
   }
 
-  // pagination enforcement for list
   if (isList) {
     const pageSizeKey = "pagination[pageSize]";
     const existing = params.get(pageSizeKey);
@@ -594,6 +574,38 @@ function normalizeProductsPath(p, opts = {}) {
 
     if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
   }
+
+  const qs = params.toString();
+  return qs ? `${pathname}?${qs}` : pathname;
+}
+
+/**
+ * ✅ PUBLIC products list profile enforcement:
+ * - Keep filters/sort/pagination/fields
+ * - Strip ALL populate directives provided by client
+ * - Re-apply deterministic “filter-safe” populate (taxonomy fields + variants.sizes + thumbnail)
+ *
+ * This removes the #1 production cause of slow/502 responses: client accidentally sending populate=* or populate[rel]=*
+ * for many relations.
+ */
+function forcePublicProductsListPath(p) {
+  const { pathname, search } = splitPathAndQuery(p);
+  if (pathname !== "/products") return p;
+
+  const params = new URLSearchParams(search || "");
+
+  // Never allow noOptimize to bypass list enforcement on public requests
+  if (params.get("noOptimize") === "1") params.delete("noOptimize");
+
+  // Strip any populate directives from client, then enforce filter-safe populate deterministically
+  stripPopulateParams(params);
+  applyProductsFilterSafePopulate(params);
+
+  // Ensure pagination keys exist
+  if (!params.get("pagination[pageSize]")) {
+    params.set("pagination[pageSize]", String(DEFAULT_PRODUCTS_PAGESIZE));
+  }
+  if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
 
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
@@ -613,26 +625,8 @@ function sanitizeMetaPathForPublic(p) {
 }
 
 function sanitizeProductsListPathForPublic(p) {
-  const { pathname, search } = splitPathAndQuery(p);
-  if (pathname !== "/products") return p;
-
-  const params = new URLSearchParams(search || "");
-  stripPopulateParams(params);
-
-  applyProductsFilterSafePopulate(params);
-
-  const pageSizeKey = "pagination[pageSize]";
-  const existing = params.get(pageSizeKey);
-  if (!existing) {
-    params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
-  } else {
-    const x = Number(existing);
-    if (!Number.isFinite(x) || x <= 0) params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
-  }
-  if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
-
-  const qs = params.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  // Now reuses the stricter list profile (deterministic + safe)
+  return forcePublicProductsListPath(p);
 }
 
 function buildTargetUrl(normalizedPath) {
@@ -704,36 +698,32 @@ const MEM_PROD = G.__TDLS_STRAPI_MEM_PROD__ ?? (G.__TDLS_STRAPI_MEM_PROD__ = new
 const LAST_GOOD = G.__TDLS_STRAPI_LAST_GOOD__ ?? (G.__TDLS_STRAPI_LAST_GOOD__ = new Map());
 const STOCK_CACHE = G.__TDLS_STRAPI_STOCK__ ?? (G.__TDLS_STRAPI_STOCK__ = new Map());
 
+/**
+ * IMPORTANT:
+ * This key MUST represent a PRODUCTS LIST payload only.
+ * (Previously it could be poisoned by /products/:slug detail payloads.)
+ */
 const LAST_GOOD_ANY_PRODUCTS_KEY = "pub|prod|__any__";
 
 function metaAnyKeyFromPathname(pathname) {
   return `pub|meta|__any__:${pathname}`;
 }
 
-// meta cache TTL
 const MEM_TTL_MS = (() => {
   const n = Number(process.env.TDLS_STRAPI_MEMCACHE_TTL_MS || 120000);
   if (!Number.isFinite(n) || n <= 0) return 120000;
   return Math.min(10 * 60 * 1000, Math.max(10 * 1000, Math.round(n)));
 })();
 
-// products mem cache TTL
 const MEM_PROD_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 15000);
-  if (!Number.isFinite(n) || n <= 0) return 15000;
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 45000);
+  if (!Number.isFinite(n) || n <= 0) return 45000;
   return Math.min(120 * 1000, Math.max(2000, Math.round(n)));
 })();
 
-/**
- * ✅ BIG FIX: default 1MB was too small for products payloads.
- * This made products effectively "uncacheable" → slow + inconsistent on every click.
- *
- * Keep env override. Clamp remains 6MB.
- */
 const MEM_MAX_BYTES = (() => {
-  const fallback = 4 * 1024 * 1024; // 4MB default (safe)
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES || fallback);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES || 1024 * 1024);
+  if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
   return Math.min(6 * 1024 * 1024, Math.max(64 * 1024, Math.round(n)));
 })();
 
@@ -908,39 +898,18 @@ function collectSizeIdsFromStrapiProducts(strapiData) {
   return { items, sizeIds };
 }
 
-/**
- * ✅ Speed improvement WITHOUT changing behavior:
- * - Use STOCK_CACHE first
- * - Query Prisma only for missing sizeIds
- */
 async function getStockMapForSizeIds(sizeIds) {
   const ids = Array.from(sizeIds || []);
   if (ids.length === 0) return { bySizeId: new Map(), source: "none", error: null };
 
-  const bySizeId = new Map();
-  const missing = [];
-
-  for (const sid0 of ids) {
-    const sid = Number(sid0);
-    if (!Number.isFinite(sid) || sid <= 0) continue;
-
-    const cached = stockCacheGet(sid);
-    if (cached != null) {
-      bySizeId.set(sid, cached);
-    } else {
-      missing.push(sid);
-    }
-  }
-
-  if (missing.length === 0) return { bySizeId, source: "cache", error: null };
-
   try {
     const prisma = await getPrisma();
     const prismaVariants = await prisma.productVariant.findMany({
-      where: { strapiSizeId: { in: missing } },
+      where: { strapiSizeId: { in: ids } },
       select: { strapiSizeId: true, stockAvailable: true },
     });
 
+    const bySizeId = new Map();
     for (const v of prismaVariants) {
       const sid = Number(v?.strapiSizeId);
       const stock = Number(v?.stockAvailable ?? 0) || 0;
@@ -950,10 +919,18 @@ async function getStockMapForSizeIds(sizeIds) {
       }
     }
 
-    return { bySizeId, source: bySizeId.size ? "prisma" : "none", error: null };
+    return { bySizeId, source: "prisma", error: null };
   } catch (e) {
-    // still return whatever cache hits we had
-    return { bySizeId, source: bySizeId.size ? "cache" : "none", error: e };
+    const bySizeId = new Map();
+    let hits = 0;
+    for (const sid of ids) {
+      const cached = stockCacheGet(sid);
+      if (cached != null) {
+        bySizeId.set(sid, cached);
+        hits++;
+      }
+    }
+    return { bySizeId, source: hits ? "cache" : "none", error: e };
   }
 }
 
@@ -1121,24 +1098,37 @@ function productCountFromStrapiPayload(data) {
   return 0;
 }
 
-/**
- * ✅ Treat empty /products (no filters) as suspect.
- * Your store is not empty, so an empty list is almost always a Strapi/proxy failure mode.
- */
-function isSuspectEmptyProductsResponse(data, assumeNonEmpty = false) {
+function isSuspectEmptyProductsResponse(data) {
   const items = data?.data;
   if (!Array.isArray(items)) return false;
   if (items.length !== 0) return false;
-
   const total = Number(data?.meta?.pagination?.total ?? 0);
-  if (Number.isFinite(total) && total > 0) return true;
+  return Number.isFinite(total) && total > 0;
+}
 
-  return assumeNonEmpty;
+/**
+ * Guard: ensure LAST_GOOD_ANY_PRODUCTS_KEY is truly a products LIST payload (array data).
+ */
+function anyProductsListPayloadStr() {
+  const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
+  if (!any?.payloadStr) return null;
+
+  const parsed = safeJsonParse(any.payloadStr);
+  const strapi = parsed?.data;
+
+  // Must be list (array data) AND have at least 1 item
+  if (!Array.isArray(strapi?.data)) return null;
+
+  const cnt = productCountFromStrapiPayload(strapi);
+  if (!Number.isFinite(cnt) || cnt <= 0) return null;
+
+  return any.payloadStr;
 }
 
 async function fetchBroaderProductsFallback(baseHeaders) {
+  // Use safer pageSize for fallback reliability (configurable)
   const fallbackPath = canonicalizePath(
-    normalizeProductsPath(`/products?pagination[pageSize]=${DEFAULT_PRODUCTS_PAGESIZE}`, { isPublic: true })
+    forcePublicProductsListPath(`/products?pagination[pageSize]=${BROAD_FALLBACK_PAGESIZE}`)
   );
   const target = buildTargetUrl(fallbackPath);
 
@@ -1233,10 +1223,7 @@ export async function GET(req) {
     const noCache = url.searchParams.get("noCache") === "1";
     const allowHeavy = url.searchParams.get("allowHeavy") === "1";
 
-    // ✅ IMPORTANT: normalize /products differently for PUBLIC vs SECRET.
-    let effectivePath = canonicalizePath(
-      normalizeProductsPath(canonicalizePath(normalizedPath0), { isPublic: !hasClientSecret })
-    );
+    let effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
 
     let { pathname: effPathname } = splitPathAndQuery(effectivePath);
     let isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
@@ -1264,6 +1251,19 @@ export async function GET(req) {
     if (!hasClientSecret && !isProductEndpoint) {
       const normalizedMeta = normalizeMetaPath(effectivePath, { isPublic: true });
       effectivePath = canonicalizePath(normalizedMeta);
+
+      ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
+      isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
+      isProductsList = isProductEndpoint && effPathname === "/products";
+    }
+
+    /**
+     * ✅ CRITICAL: enforce deterministic, safe list profile for PUBLIC /products
+     * This prevents frontend-bundle accidental populate=* / populate[rel]=* causing slow/502.
+     */
+    if (!hasClientSecret && isProductsList) {
+      const forced = canonicalizePath(forcePublicProductsListPath(effectivePath));
+      effectivePath = forced;
 
       ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
       isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
@@ -1338,23 +1338,18 @@ export async function GET(req) {
           return { ok: false, status: 502, statusText: "Bad Gateway", errorText: "Invalid JSON" };
         }
 
-        // ✅ If /products is empty (and should not be), retry once quickly.
-        if (isProductsList) {
-          const hasFilters = hasFiltersInPath(effectivePath);
-          const assumeNonEmpty = !hasFilters;
-          if (isSuspectEmptyProductsResponse(data, assumeNonEmpty)) {
-            await sleep(120);
-            try {
-              const res2 = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_PRODUCTS });
-              if (res2.ok) {
-                try {
-                  const data2 = await res2.json();
-                  if (!isSuspectEmptyProductsResponse(data2, assumeNonEmpty)) data = data2;
-                } catch {}
-              }
-            } catch {
-              // ignore; fallbacks below will cover empties if needed
+        if (isProductsList && isSuspectEmptyProductsResponse(data)) {
+          await sleep(120);
+          try {
+            const res2 = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_PRODUCTS });
+            if (res2.ok) {
+              try {
+                const data2 = await res2.json();
+                if (!isSuspectEmptyProductsResponse(data2)) data = data2;
+              } catch {}
             }
+          } catch {
+            // ignore; fallback logic below will cover empties if needed
           }
         }
 
@@ -1378,12 +1373,12 @@ export async function GET(req) {
               };
             }
 
-            const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
-            if (any?.payloadStr) {
+            const anyList = anyProductsListPayloadStr();
+            if (anyList) {
               return {
                 ok: true,
                 status: 200,
-                payloadStr: any.payloadStr,
+                payloadStr: anyList,
                 degraded: true,
                 reason: hasFilters ? "EMPTY->ANY_PRODUCTS_CACHE_FILTERED" : "EMPTY->ANY_PRODUCTS_CACHE",
               };
@@ -1481,13 +1476,13 @@ export async function GET(req) {
         }
       }
 
-      if (isProductEndpoint) {
-        const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
-        if (any?.payloadStr) {
-          const parsed = safeJsonParse(any.payloadStr);
+      if (isProductsList) {
+        const anyList = anyProductsListPayloadStr();
+        if (anyList) {
+          const parsed = safeJsonParse(anyList);
           const cnt = productCountFromStrapiPayload(parsed?.data);
 
-          return rawJsonResponse(any.payloadStr, 200, {
+          return rawJsonResponse(anyList, 200, {
             "cache-control": cacheControl,
             "CDN-Cache-Control": cacheControl,
             "x-tdls-proxy-ms": String(ms),
@@ -1565,9 +1560,12 @@ export async function GET(req) {
       if (!isProductEndpoint || isGoodProductPayload) {
         lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
       }
-      if (isProductEndpoint && isGoodProductPayload) {
+
+      // ✅ Only store LIST payloads into ANY key (prevents “single-product” poisoning)
+      if (isProductsList && isGoodProductPayload) {
         lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
       }
+
       if (!isProductEndpoint) {
         lastGoodSet(metaAnyKeyFromPathname(effPathname), payloadStr, LAST_GOOD_ANY_TTL_MS);
       }
