@@ -1,7 +1,7 @@
 // FILE: src/components/checkout/checkout-page.js
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PaymentMethods from "./payment-methods";
 import Summary from "./summary";
 import GoBackButton from "./go-back-button";
@@ -1280,6 +1280,100 @@ function CheckoutAddressForm({
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
+  /* ---------------- Autofill / flicker hardening ----------------
+   * Problem: Browser "saved address" autofill can write DOM values without firing React onChange.
+   * On any re-render, controlled inputs snap back to state -> browser re-applies -> visible flicker.
+   * Fix: (1) detect autofill via CSS animation + capture handler, (2) sync DOM values into state once,
+   * (3) stop parent prefill from overwriting after user/autofill interaction.
+   */
+  const formRef = useRef(null);
+  const valsRef = useRef(null);
+  const userInteractedRef = useRef(false);
+
+  useEffect(() => {
+    valsRef.current = vals;
+  }, [vals]);
+
+  const markInteracted = useCallback(() => {
+    userInteractedRef.current = true;
+  }, []);
+
+  const syncFromDom = useCallback(() => {
+    const root = formRef.current;
+    if (!root || typeof window === "undefined") return;
+
+    const els = root.querySelectorAll("input[name], select[name], textarea[name]");
+    if (!els || !els.length) return;
+
+    const cur = valsRef.current || {};
+    const patch = {};
+
+    els.forEach((el) => {
+      const k = el.getAttribute("data-field") || el.getAttribute("name");
+      if (!k) return;
+
+      const v = el.value;
+      if (v == null) return;
+
+      const s = String(v);
+      if (!s.trim()) return;
+
+      const prev = cur?.[k];
+      const prevS = prev == null ? "" : String(prev);
+
+      if (s !== prevS) patch[k] = v;
+    });
+
+    const keys = Object.keys(patch);
+    if (!keys.length) return;
+
+    markInteracted();
+
+    setVals((p) => {
+      let changed = false;
+      const next = { ...p };
+
+      for (const k of keys) {
+        if (!Object.is(next?.[k], patch[k])) {
+          next[k] = patch[k];
+          changed = true;
+        }
+      }
+
+      if (!changed) return p;
+
+      next.countryIso2 = String(next.countryIso2 || "BD").toUpperCase();
+      return next;
+    });
+  }, [markInteracted]);
+
+  const handleAutofillAnimationStart = useCallback(
+    (e) => {
+      if (!e?.animationName) return;
+      if (e.animationName !== "tdlsAutofillStart") return;
+
+      const raf =
+        (typeof window !== "undefined" && window.requestAnimationFrame) ||
+        ((fn) => setTimeout(fn, 0));
+
+      raf(() => {
+        // let the browser finish writing all autofilled fields before syncing
+        syncFromDom();
+      });
+    },
+    [syncFromDom]
+  );
+
+  // Safety: sync shortly after mount (covers cases where autofill happens instantly on load)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const t1 = setTimeout(() => syncFromDom(), 60);
+    const t2 = setTimeout(() => syncFromDom(), 260);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [syncFromDom]);
   const lastDraftSigRef = useRef("");
 
   useEffect(() => {
@@ -1314,8 +1408,29 @@ function CheckoutAddressForm({
     setVals((prev) => {
       const next = { ...prev };
 
+      const prevId = String(prev?.id || "").trim();
+      const incId = String(patch?.id || "").trim();
+
+      // If a different id comes in (address-book selection), allow full overwrite.
+      // Otherwise, after user/autofill interaction, only fill empty fields to avoid blink/tug-of-war.
+      const newSelection = !!incId && incId !== prevId;
+      const overwrite = !userInteractedRef.current || newSelection;
+
       for (const k of Object.keys(patch)) {
-        if (patch[k] !== undefined) next[k] = patch[k];
+        const v = patch[k];
+        if (v === undefined) continue;
+
+        if (overwrite) {
+          next[k] = v;
+          continue;
+        }
+
+        // Fill-only mode (post-interaction): do not overwrite existing non-empty values.
+        const cur = next[k];
+        const curEmpty = cur == null || (typeof cur === "string" && cur.trim() === "");
+        const incMeaningful = v != null && (!(typeof v === "string") || v.trim() !== "");
+
+        if (curEmpty && incMeaningful) next[k] = v;
       }
 
       next.countryIso2 = String(next.countryIso2 || "BD").toUpperCase();
@@ -1396,9 +1511,18 @@ function CheckoutAddressForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validateSignal]);
 
-  function setField(k, v) {
-    setVals((p) => ({ ...p, [k]: v }));
-  }
+  const setField = useCallback(
+    (k, v) => {
+      markInteracted();
+      setVals((p) => {
+        const prevV = p?.[k];
+        if (Object.is(prevV, v)) return p;
+        return { ...p, [k]: v };
+      });
+    },
+    [markInteracted]
+  );
+
 
   function isCompleteLocal(a) {
     const line1 = a.streetAddress || a.address1 || a.line1 || "";
@@ -1527,7 +1651,7 @@ function CheckoutAddressForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="ca-form">
+    <form ref={formRef} onSubmit={handleSubmit} onAnimationStartCapture={handleAutofillAnimationStart} className="ca-form">
       {title ? <div className="ca-title">{title}</div> : null}
       {subtitle ? <div className="ca-sub">{subtitle}</div> : null}
 
@@ -1538,6 +1662,8 @@ function CheckoutAddressForm({
           <div className={`ca-field${fieldErrors.name ? " invalid" : ""}`}>
             <label>Full name <span className="req">*</span></label>
             <input
+              name="name"
+              autoComplete="name"
               value={vals.name || ""}
               onChange={(e) => setField("name", e.target.value)}
               placeholder="Your full name"
@@ -1548,6 +1674,8 @@ function CheckoutAddressForm({
               Mobile number {requirePhone ? <span className="req">*</span> : null}
             </label>
             <input
+              name="phone"
+              autoComplete="tel"
               value={vals.phone || ""}
               onChange={(e) => setField("phone", e.target.value)}
               onBlur={(e) => {
@@ -1561,6 +1689,8 @@ function CheckoutAddressForm({
           <div className="ca-field">
             <label>Email (optional)</label>
             <input
+              name="email"
+              autoComplete="email"
               value={vals.email || ""}
               onChange={(e) => setField("email", e.target.value)}
               placeholder="name@email.com"
@@ -1574,6 +1704,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>House No</label>
           <input
+            name="houseNo"
+            autoComplete="off"
             value={vals.houseNo || ""}
             onChange={(e) => setField("houseNo", e.target.value)}
             placeholder="House No"
@@ -1582,6 +1714,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>House Name</label>
           <input
+            name="houseName"
+            autoComplete="off"
             value={vals.houseName || ""}
             onChange={(e) => setField("houseName", e.target.value)}
             placeholder="House Name"
@@ -1590,6 +1724,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Apartment No</label>
           <input
+            name="apartmentNo"
+            autoComplete="off"
             value={vals.apartmentNo || ""}
             onChange={(e) => setField("apartmentNo", e.target.value)}
             placeholder="Apartment"
@@ -1598,6 +1734,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Floor No</label>
           <input
+            name="floorNo"
+            autoComplete="off"
             value={vals.floorNo || ""}
             onChange={(e) => setField("floorNo", e.target.value)}
             placeholder="Floor"
@@ -1611,6 +1749,8 @@ function CheckoutAddressForm({
             Street Address <span className="req">*</span>
           </label>
           <input
+            name="streetAddress"
+            autoComplete="address-line1"
             value={vals.streetAddress || vals.address1 || ""}
             onChange={(e) => setField("streetAddress", e.target.value)}
             placeholder="Street / Road / Area"
@@ -1619,6 +1759,8 @@ function CheckoutAddressForm({
         <div className="ca-field ca-span2">
           <label>Address line 2 (optional)</label>
           <input
+            name="address2"
+            autoComplete="address-line2"
             value={vals.address2 || ""}
             onChange={(e) => setField("address2", e.target.value)}
             placeholder="Nearby landmark / extra details"
@@ -1632,6 +1774,8 @@ function CheckoutAddressForm({
             Upazila / City <span className="req">*</span>
           </label>
           <input
+            name="upazila"
+            autoComplete="address-level3"
             value={vals.upazila || vals.city || ""}
             onChange={(e) => setField("upazila", e.target.value)}
             placeholder="Upazila / City"
@@ -1642,6 +1786,8 @@ function CheckoutAddressForm({
             District <span className="req">*</span>
           </label>
           <input
+            name="district"
+            autoComplete="address-level2"
             value={vals.district || ""}
             onChange={(e) => setField("district", e.target.value)}
             placeholder="District"
@@ -1650,6 +1796,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Division (optional)</label>
           <input
+            name="division"
+            autoComplete="address-level1"
             value={vals.division || ""}
             onChange={(e) => setField("division", e.target.value)}
             placeholder="Division"
@@ -1658,6 +1806,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Postal Code (optional)</label>
           <input
+            name="postalCode"
+            autoComplete="postal-code"
             value={vals.postalCode || ""}
             onChange={(e) => setField("postalCode", e.target.value)}
             placeholder="Postal code"
@@ -1670,6 +1820,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Post Office (optional)</label>
           <input
+            name="postOffice"
+            autoComplete="off"
             value={vals.postOffice || ""}
             onChange={(e) => setField("postOffice", e.target.value)}
             placeholder="Post Office"
@@ -1678,6 +1830,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Union (optional)</label>
           <input
+            name="union"
+            autoComplete="off"
             value={vals.union || ""}
             onChange={(e) => setField("union", e.target.value)}
             placeholder="Union"
@@ -1686,6 +1840,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Police Station / Thana (optional)</label>
           <input
+            name="policeStation"
+            autoComplete="off"
             value={vals.policeStation || vals.thana || ""}
             onChange={(e) => setField("policeStation", e.target.value)}
             placeholder="Police Station / Thana"
@@ -1694,6 +1850,8 @@ function CheckoutAddressForm({
         <div className="ca-field">
           <label>Country</label>
           <select
+            name="countryIso2"
+            autoComplete="country"
             value={(vals.countryIso2 || "BD").toString().toUpperCase()}
             onChange={(e) => setField("countryIso2", e.target.value)}
           >
@@ -1705,6 +1863,8 @@ function CheckoutAddressForm({
       {showMakeDefault || forceDefault ? (
         <label className="chk">
           <input
+            name="makeDefault"
+            autoComplete="off"
             type="checkbox"
             checked={forceDefault ? true : !!vals.makeDefault}
             onChange={(e) => {
@@ -1793,6 +1953,44 @@ function CheckoutAddressForm({
           outline: none;
           background: #fff;
         }
+/* Autofill: prevent browser repaint flicker + enable animationstart sync */
+@keyframes tdlsAutofillStart {
+  from {
+  }
+  to {
+  }
+}
+@keyframes tdlsAutofillCancel {
+  from {
+  }
+  to {
+  }
+}
+
+.ca-field input:-webkit-autofill,
+.ca-field textarea:-webkit-autofill,
+.ca-field select:-webkit-autofill {
+  animation-name: tdlsAutofillStart;
+  animation-duration: 0.01s;
+  animation-iteration-count: 1;
+}
+
+.ca-field input:-webkit-autofill,
+.ca-field input:-webkit-autofill:hover,
+.ca-field input:-webkit-autofill:focus,
+.ca-field textarea:-webkit-autofill,
+.ca-field textarea:-webkit-autofill:hover,
+.ca-field textarea:-webkit-autofill:focus,
+.ca-field select:-webkit-autofill,
+.ca-field select:-webkit-autofill:hover,
+.ca-field select:-webkit-autofill:focus {
+  -webkit-text-fill-color: ${NAVY};
+  caret-color: ${NAVY};
+  -webkit-box-shadow: 0 0 0px 1000px #fff inset;
+  box-shadow: 0 0 0px 1000px #fff inset;
+  transition: background-color 9999s ease-out 0s;
+}
+
         .ca-actions {
           display: flex;
           gap: 10px;

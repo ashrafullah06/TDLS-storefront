@@ -209,17 +209,40 @@ function unwrapStrapiList(payload) {
   return [];
 }
 
-async function fetchAudienceCategoriesWithProducts() {
+/**
+ * ✅ PRODUCTION HARDENING:
+ * Audience categories in production often come WITHOUT `products` relation (heavy-guard/populate strip/timeouts).
+ * So we fetch audiences LIGHT (slug/name/tier slugs), then attach products using productIndex.
+ */
+async function fetchAudienceCategoriesLight() {
   const payload = await fetchFromStrapi(
-    "/audience-categories?pagination[pageSize]=500&populate[products][populate]=*&populate[tiers][populate]=*&populate[brand_tiers][populate]=*&populate[collection_tiers][populate]=*&populate[events_products_collections][populate]=*&populate[product_collections][populate]=*"
+    "/audience-categories?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order&populate[tiers][fields][0]=slug&populate[brand_tiers][fields][0]=slug&populate[collection_tiers][fields][0]=slug"
   );
   const rows = unwrapStrapiList(payload);
   return rows.map(normalizeEntity).filter(Boolean);
 }
 
+/**
+ * ✅ Optional “with products” fetch, but only minimal fields (IDs only),
+ * so it won’t trip heavy-guard and won’t bloat payload.
+ * If production strips products anyway, we will attach from productIndex later.
+ */
+async function fetchAudienceCategoriesWithProductsLite() {
+  const payload = await fetchFromStrapi(
+    "/audience-categories?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order&populate[products][fields][0]=id&populate[tiers][fields][0]=slug&populate[brand_tiers][fields][0]=slug&populate[collection_tiers][fields][0]=slug"
+  );
+  const rows = unwrapStrapiList(payload);
+  return rows.map(normalizeEntity).filter(Boolean);
+}
+
+/**
+ * ✅ Filter-safe menu product index fetch:
+ * We only need slug/name + taxonomy relation slugs for filtering.
+ * This avoids huge populate=* and stays stable in production.
+ */
 async function fetchProductsForIndex() {
   const payload = await fetchFromStrapi(
-    "/products?pagination[pageSize]=1000&populate=*&populate[tiers]=*&populate[brand_tiers]=*&populate[collection_tiers]=*&populate[categories]=*&populate[audience_categories]=*&populate[sub_categories]=*&populate[gender_groups]=*&populate[age_groups]=*&populate[events_products_collections]=*&populate[product_collections]=*"
+    "/products?pagination[pageSize]=1000&fields[0]=slug&fields[1]=name&fields[2]=title&populate[tiers][fields][0]=slug&populate[brand_tiers][fields][0]=slug&populate[collection_tiers][fields][0]=slug&populate[categories][fields][0]=slug&populate[audience_categories][fields][0]=slug&populate[sub_categories][fields][0]=slug&populate[gender_groups][fields][0]=slug&populate[age_groups][fields][0]=slug&populate[events_products_collections][fields][0]=slug&populate[product_collections][fields][0]=slug"
   );
   const rows = unwrapStrapiList(payload);
   return rows.map(normalizeEntity).filter(Boolean);
@@ -252,6 +275,88 @@ function buildProductIndex(products) {
     });
   }
   return m;
+}
+
+function hasAnyAudienceProducts(audienceRows) {
+  const rows = Array.isArray(audienceRows) ? audienceRows : [];
+  for (const r of rows) {
+    const a = normalizeEntity(r) || {};
+    const prods = unwrapStrapiArray(a?.products);
+    if (prods && prods.length) return true;
+  }
+  return false;
+}
+
+/**
+ * ✅ CRITICAL PRODUCTION FIX:
+ * Ensure every audience row has a usable `products` array (as [{id}...]).
+ * - If Strapi provided products → keep IDs
+ * - If Strapi stripped products → attach using productIndex.audienceSlugs mapping
+ */
+function ensureAudienceProducts({ audienceRows, productIndex }) {
+  const rows = Array.isArray(audienceRows) ? audienceRows : [];
+  if (!(productIndex instanceof Map) || productIndex.size === 0) return rows;
+
+  const audToIds = new Map(); // audienceSlug -> [productId...]
+  for (const p of productIndex.values()) {
+    const as = Array.isArray(p?.audienceSlugs) ? p.audienceSlugs : [];
+    for (const a of as) {
+      const s = normSlug(a);
+      if (!s) continue;
+      if (!audToIds.has(s)) audToIds.set(s, []);
+      audToIds.get(s).push(p.id);
+    }
+  }
+
+  return rows
+    .map((row) => {
+      const a = normalizeEntity(row) || {};
+      const slug = normSlug(a.slug || pickTextForSlug(a));
+      if (!slug) return a;
+
+      const existingIds = unwrapStrapiArray(a?.products)
+        .map((x) => normalizeEntity(x)?.id)
+        .filter(Boolean);
+
+      const mapped = audToIds.get(slug) || [];
+      const ids = uniq([...existingIds, ...mapped]);
+      const products = ids.map((id) => ({ id }));
+
+      return {
+        ...a,
+        slug: a.slug || slug,
+        products,
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * If audience list fetch fails, derive audience rows from productIndex (last-resort).
+ * Business outcome remains: audiences reflect products’ audience slugs.
+ */
+function buildAudienceRowsFromProductIndex(productIndex) {
+  if (!(productIndex instanceof Map) || productIndex.size === 0) return [];
+
+  const audToIds = new Map();
+  for (const p of productIndex.values()) {
+    for (const a of p?.audienceSlugs || []) {
+      const s = normSlug(a);
+      if (!s) continue;
+      if (!audToIds.has(s)) audToIds.set(s, []);
+      audToIds.get(s).push(p.id);
+    }
+  }
+
+  return Array.from(audToIds.entries())
+    .map(([slug, ids]) => ({
+      id: slug,
+      slug,
+      name: titleizeSlug(slug),
+      tiers: [], // safe: tier membership still computed via products; audience tier match will be false unless tiers exist
+      products: uniq(ids).map((id) => ({ id })),
+    }))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 }
 
 function computeAnyTierSignals(productIndex, audienceRows) {
@@ -600,8 +705,9 @@ function makeSearchKey(name, slug) {
 
 /* -------------------------- ✅ Preload singleton + localStorage cache -------------------------- */
 
-const LS_KEY = "tdls:slidingmenubar:data:v3";
-const LS_TS = "tdls:slidingmenubar:ts:v3";
+// ✅ Bump version to avoid old broken cache causing “blank menu in production”
+const LS_KEY = "tdls:slidingmenubar:data:v4";
+const LS_TS = "tdls:slidingmenubar:ts:v4";
 const LS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 let __tdlsMenuPreloadPromise = null;
@@ -641,6 +747,90 @@ function lsSet(key, value) {
   }
 }
 
+/**
+ * Store compact snapshot:
+ * - audienceRows: [{id, slug, name, tierSlugs[], productIds[]}]
+ * - products: index-ready product list (compact, relation slugs only)
+ */
+function compactProductsForCache(productIndex) {
+  if (!(productIndex instanceof Map)) return [];
+  return Array.from(productIndex.values()).map((p) => ({
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    tierSlugs: p.tierSlugs || [],
+    categorySlugs: p.categorySlugs || [],
+    audienceSlugs: p.audienceSlugs || [],
+    subCategorySlugs: p.subCategorySlugs || [],
+    genderGroupSlugs: p.genderGroupSlugs || [],
+    ageGroupSlugs: p.ageGroupSlugs || [],
+  }));
+}
+
+function buildProductIndexFromCompact(products) {
+  const m = new Map();
+  for (const p of products || []) {
+    const id = p?.id;
+    if (!id) continue;
+    const slug = normSlug(p.slug || "");
+    const name = (p.name || "").toString().trim() || (slug ? titleizeSlug(slug) : `Product #${id}`);
+
+    m.set(id, {
+      id,
+      slug,
+      name,
+      tierSlugs: uniq((p.tierSlugs || []).map(normSlug)),
+      categorySlugs: uniq((p.categorySlugs || []).map(normSlug)),
+      audienceSlugs: uniq((p.audienceSlugs || []).map(normSlug)),
+      subCategorySlugs: uniq((p.subCategorySlugs || []).map(normSlug)),
+      genderGroupSlugs: uniq((p.genderGroupSlugs || []).map(normSlug)),
+      ageGroupSlugs: uniq((p.ageGroupSlugs || []).map(normSlug)),
+      raw: null,
+    });
+  }
+  return m;
+}
+
+function compactAudienceRowsForCache(audienceRows) {
+  const rows = Array.isArray(audienceRows) ? audienceRows : [];
+  return rows.map((row) => {
+    const a = normalizeEntity(row) || {};
+    const slug = normSlug(a.slug || pickTextForSlug(a));
+    const name = pickName(a) || titleizeSlug(slug);
+    const tierSlugs = extractRelSlugs(a, "tiers");
+    const productIds = unwrapStrapiArray(a?.products)
+      .map((x) => normalizeEntity(x)?.id)
+      .filter(Boolean);
+    return {
+      id: a.id || slug,
+      slug,
+      name,
+      tierSlugs: uniq(tierSlugs),
+      productIds: uniq(productIds),
+    };
+  });
+}
+
+function expandAudienceRowsFromCache(cachedAudienceRows) {
+  const rows = Array.isArray(cachedAudienceRows) ? cachedAudienceRows : [];
+  return rows
+    .map((a) => {
+      const slug = normSlug(a.slug);
+      if (!slug) return null;
+      const tierSlugs = Array.isArray(a.tierSlugs) ? a.tierSlugs : [];
+      const productIds = Array.isArray(a.productIds) ? a.productIds : [];
+      return {
+        id: a.id || slug,
+        slug,
+        name: (a.name || titleizeSlug(slug)).toString().trim(),
+        // keep shape compatible with extractRelSlugs (expects tiers relation-like)
+        tiers: tierSlugs.map((s) => ({ slug: normSlug(s) })),
+        products: productIds.map((id) => ({ id })),
+      };
+    })
+    .filter(Boolean);
+}
+
 function loadFromLocalStorage() {
   if (!canUseLS()) return null;
 
@@ -655,24 +845,41 @@ function loadFromLocalStorage() {
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object") return null;
 
-  const audienceRows = Array.isArray(parsed.audienceRows) ? parsed.audienceRows : [];
-  const products = Array.isArray(parsed.products) ? parsed.products : [];
+  const audienceCache = Array.isArray(parsed.audienceRows) ? parsed.audienceRows : [];
+  const productCache = Array.isArray(parsed.products) ? parsed.products : [];
+
+  // product cache can be compact, or legacy raw objects (keep tolerant)
+  let productIndex = null;
+  if (productCache.length && (productCache[0]?.tierSlugs || productCache[0]?.audienceSlugs)) {
+    productIndex = buildProductIndexFromCompact(productCache);
+  } else {
+    productIndex = buildProductIndex(productCache.map(normalizeEntity).filter(Boolean));
+  }
+
+  let audienceRows = expandAudienceRowsFromCache(audienceCache);
+
+  // ✅ Ensure audience products exist even if cache was partial
+  audienceRows = ensureAudienceProducts({ audienceRows, productIndex });
+
   return {
-    audienceRows: audienceRows.map(normalizeEntity).filter(Boolean),
-    productIndex: buildProductIndex(products.map(normalizeEntity).filter(Boolean)),
+    audienceRows,
+    productIndex,
     _fromCache: true,
   };
 }
 
-function saveToLocalStorage({ audienceRows, products }) {
+function saveToLocalStorage({ audienceRows, productIndex }) {
   if (!canUseLS()) return;
   try {
+    const audienceCache = compactAudienceRowsForCache(audienceRows).slice(0, 1200);
+    const productsCache = compactProductsForCache(productIndex).slice(0, 2000);
+
     lsSet(LS_TS, String(Date.now()));
     lsSet(
       LS_KEY,
       JSON.stringify({
-        audienceRows: (audienceRows || []).slice(0, 1200),
-        products: (products || []).slice(0, 2000),
+        audienceRows: audienceCache,
+        products: productsCache,
       })
     );
   } catch {
@@ -683,8 +890,8 @@ function saveToLocalStorage({ audienceRows, products }) {
 function isMeaningfulMenuData(d) {
   const ar = d?.audienceRows;
   const pi = d?.productIndex;
-  const okA = Array.isArray(ar) && ar.length > 0;
   const okP = pi instanceof Map && pi.size > 0;
+  const okA = Array.isArray(ar) && ar.length > 0 && hasAnyAudienceProducts(ar);
   return okA && okP;
 }
 
@@ -700,27 +907,45 @@ function getWarmSnapshot() {
 }
 
 async function fetchAndBuildFresh() {
-  const [aud, prods] = await Promise.all([fetchAudienceCategoriesWithProducts(), fetchProductsForIndex()]);
-  const audienceRows = (aud || []).map(normalizeEntity).filter(Boolean);
+  // ✅ Prefer lite-with-products first (still safe); fallback to ultra-lite if upstream strips products.
+  const [audMaybeProducts, prods] = await Promise.all([fetchAudienceCategoriesWithProductsLite(), fetchProductsForIndex()]);
+
   const products = (prods || []).map(normalizeEntity).filter(Boolean);
+  const productIndex = buildProductIndex(products);
+
+  let audienceRows = (audMaybeProducts || []).map(normalizeEntity).filter(Boolean);
+
+  // If upstream returns empty audiences, fallback to light list
+  if (!audienceRows.length) {
+    const audLight = await fetchAudienceCategoriesLight().catch(() => []);
+    audienceRows = (audLight || []).map(normalizeEntity).filter(Boolean);
+  }
+
+  // If still empty (upstream down), derive audience list from productIndex
+  if (!audienceRows.length && productIndex.size > 0) {
+    audienceRows = buildAudienceRowsFromProductIndex(productIndex);
+  }
+
+  // ✅ Always ensure audience.products is present via productIndex mapping
+  audienceRows = ensureAudienceProducts({ audienceRows, productIndex });
 
   const built = {
     audienceRows,
-    productIndex: buildProductIndex(products),
+    productIndex,
     _fromCache: false,
   };
 
   // ✅ Cache safety: only persist/overwrite cache when we fetched meaningful data.
-  // If upstream blips return null/empty, keep last-good cache instead of wiping.
-  const meaningful = audienceRows.length > 0 && products.length > 0;
+  // If upstream blips return partial/empty, keep last-good cache instead of wiping.
+  const meaningful = isMeaningfulMenuData(built);
 
   if (meaningful) {
-    saveToLocalStorage({ audienceRows, products });
+    saveToLocalStorage({ audienceRows, productIndex });
     return built;
   }
 
   const fallback = __tdlsMenuPreloadData || loadFromLocalStorage();
-  if (fallback && Array.isArray(fallback.audienceRows) && fallback.audienceRows.length > 0) {
+  if (fallback && isMeaningfulMenuData(fallback)) {
     return fallback;
   }
 
@@ -730,9 +955,6 @@ async function fetchAndBuildFresh() {
 
 /**
  * ✅ CRITICAL FIX FOR “BLANK SOMETIMES”:
- * Previously, when cache existed, backgroundRefresh started but this function returned the cached snapshot
- * immediately, so callers who awaited it never received the fresh result (and UI could stay empty).
- *
  * New:
  * - If awaitFresh=true and a refresh promise exists (or we start one), we await it and return the freshest snapshot.
  * - Default behavior stays the same for callers that want “instant snapshot”.
@@ -1169,12 +1391,16 @@ export default function Slidingmenubar({ open, onClose }) {
   // ✅ last-good snapshot in this component (never allow “empty overwrite” in UI).
   const lastGoodRef = useRef(null);
   useEffect(() => {
-    if (audienceRows.length > 0 && productIndex instanceof Map && productIndex.size > 0) {
+    if (isMeaningfulMenuData({ audienceRows, productIndex })) {
       lastGoodRef.current = { audienceRows, productIndex };
     }
   }, [audienceRows, productIndex]);
 
-  const hasMenuData = audienceRows.length > 0 && productIndex instanceof Map && productIndex.size > 0;
+  // ✅ TRUE readiness: audienceRows must have products + productIndex must be ready
+  const hasMenuData = useMemo(() => {
+    return productIndex instanceof Map && productIndex.size > 0 && Array.isArray(audienceRows) && audienceRows.length > 0 && hasAnyAudienceProducts(audienceRows);
+  }, [audienceRows, productIndex]);
+
   const anyTierSignals = useMemo(() => computeAnyTierSignals(productIndex, audienceRows), [productIndex, audienceRows]);
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
@@ -1235,11 +1461,11 @@ export default function Slidingmenubar({ open, onClose }) {
     };
   }, []);
 
-  // ✅ Always hydrate: instant warm snapshot + awaitFresh so the UI gets real data (even if background refresh started).
+  // ✅ Always hydrate: instant warm snapshot + awaitFresh so the UI gets real data
   useEffect(() => {
     let alive = true;
 
-    // Apply warm snapshot immediately (no blank first paint after refresh/open)
+    // Apply warm snapshot immediately
     const warm = getWarmSnapshot();
     if (warm && alive) {
       if (Array.isArray(warm.audienceRows)) setAudienceRows(warm.audienceRows);
@@ -1248,11 +1474,9 @@ export default function Slidingmenubar({ open, onClose }) {
     }
 
     (async () => {
-      // ✅ awaitFresh fixes “stuck empty after background refresh”
       const data = await preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true });
       if (!alive) return;
 
-      // Do not overwrite UI with empties if we have last-good
       if (isMeaningfulMenuData(data)) {
         setAudienceRows(data.audienceRows || []);
         setProductIndex(data.productIndex || new Map());
@@ -1268,7 +1492,6 @@ export default function Slidingmenubar({ open, onClose }) {
         return;
       }
 
-      // If no last-good exists, keep whatever we have, but mark hydrated to stop “random blank”
       setHydrated(true);
     })();
 
@@ -1305,7 +1528,6 @@ export default function Slidingmenubar({ open, onClose }) {
       return false;
     };
 
-    // Always attempt to apply warm immediately on open (prevents blank open)
     applyLastGoodOrWarm();
 
     const attempt = async () => {
@@ -1320,20 +1542,17 @@ export default function Slidingmenubar({ open, onClose }) {
           return;
         }
 
-        // If fetch result is empty, re-apply last-good snapshot (never “empty overwrite”)
         applyLastGoodOrWarm();
       } catch {
-        // If fetch throws, keep last-good/warm
         applyLastGoodOrWarm();
       }
 
-      // Limited retries only if still empty
       tries += 1;
       if (!alive) return;
 
       const stillEmpty = !(lastGoodRef.current && isMeaningfulMenuData(lastGoodRef.current)) && !hasMenuData;
       if (stillEmpty && tries <= 3) {
-        const delay = 600 * Math.pow(2, tries); // 1200ms, 2400ms, 4800ms
+        const delay = 600 * Math.pow(2, tries);
         t = window.setTimeout(attempt, delay);
       }
     };
@@ -1519,7 +1738,7 @@ export default function Slidingmenubar({ open, onClose }) {
       if (!active || e.pointerId !== active.id) return;
 
       const endedInside = isInsidePanel(e);
-      const shouldClose = !active.startedInside && !endedInside && !active.moved; // true outside tap only
+      const shouldClose = !active.startedInside && !endedInside && !active.moved;
 
       active = null;
       if (shouldClose) handleClose();

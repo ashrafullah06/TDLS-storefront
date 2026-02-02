@@ -30,6 +30,10 @@ const AUTO_CLOSE_MS_DEFAULT = 3500;
  */
 const DISPLAY_STABILIZE_WINDOW_MS = 1400;
 
+/** ✅ Fix: prevent auto-open during page load/hydration; only open on real user-triggered adds */
+const GESTURE_STORE_KEY = "tdls_last_user_gesture_at_v1";
+const GESTURE_TTL_MS = 4500; // enough for slow adds; blocks background hydration opens
+
 function money(n) {
   const v = Number(n ?? 0);
   if (!Number.isFinite(v)) return "৳0";
@@ -239,6 +243,9 @@ export default function CartPanel() {
   const stabilizeSeedRef = useRef([]); // cart snapshot captured at the start of stabilization window
   const stabilizeOpenAtRef = useRef(0);
 
+  // ✅ Fix support: correlate qty increase with recent user gesture
+  const lastGestureAtRef = useRef(0);
+
   const clearAutoCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -294,6 +301,33 @@ export default function CartPanel() {
   // only portal on client
   useEffect(() => {
     setMounted(true);
+
+    // ✅ read last gesture timestamp (survives route changes)
+    try {
+      const v = Number(sessionStorage.getItem(GESTURE_STORE_KEY) || 0);
+      if (Number.isFinite(v) && v > 0) lastGestureAtRef.current = v;
+    } catch {}
+  }, []);
+
+  // ✅ record user gestures so qty-based fallback can't open on hydration
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const mark = () => {
+      const ts = Date.now();
+      lastGestureAtRef.current = ts;
+      try {
+        sessionStorage.setItem(GESTURE_STORE_KEY, String(ts));
+      } catch {}
+    };
+
+    window.addEventListener("pointerdown", mark, { capture: true, passive: true });
+    window.addEventListener("keydown", mark, { capture: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", mark, { capture: true });
+      window.removeEventListener("keydown", mark, { capture: true });
+    };
   }, []);
 
   // Do not render cart panel on /admin routes (customer/admin fully decoupled)
@@ -530,42 +564,67 @@ export default function CartPanel() {
   const hydratedRef = useRef(false);
 
   useEffect(() => {
-    // avoid “open on first hydration” when cart is restored from storage/server
+    const curr = Number(totalQty || 0);
+    if (!Number.isFinite(curr)) {
+      prevQtyRef.current = 0;
+      return;
+    }
+
+    // ✅ Fix: do NOT arm qty-trigger while cart is still hydrating/loading.
+    // This prevents "auto open on page load" when persisted cart appears.
     if (!hydratedRef.current) {
+      if (loading) {
+        prevQtyRef.current = curr;
+        return;
+      }
       hydratedRef.current = true;
-      prevQtyRef.current = totalQty;
+      prevQtyRef.current = curr;
       return;
     }
 
     const prev = Number(prevQtyRef.current || 0);
-    const curr = Number(totalQty || 0);
     prevQtyRef.current = curr;
 
-    if (!Number.isFinite(prev) || !Number.isFinite(curr)) return;
+    if (!Number.isFinite(prev)) return;
 
     if (curr > prev) {
       const p = String(pathname || "");
       const suppress = p.startsWith("/cart") || p.startsWith("/checkout");
-      if (!suppress) {
-        lastOpenReasonRef.current = "qty";
-        allowAutoCloseRef.current = true;
-        autoCloseMsRef.current = AUTO_CLOSE_MS_DEFAULT;
+      if (suppress) return;
 
-        stabilizeOpenAtRef.current = Date.now();
-        stabilizeUntilRef.current =
-          stabilizeOpenAtRef.current + DISPLAY_STABILIZE_WINDOW_MS;
-        stabilizeSeedRef.current = Array.isArray(lastKnownStableCartRef.current)
-          ? lastKnownStableCartRef.current
-          : [];
-
-        lastActiveElRef.current =
-          typeof document !== "undefined" ? document.activeElement : null;
-        setOpen(true);
-        setHovered(false);
-        setInteractingSafe(false);
+      // ✅ Fix: only open if there was a recent real user gesture
+      const now = Date.now();
+      let lastGestureAt = Number(lastGestureAtRef.current || 0);
+      if (!Number.isFinite(lastGestureAt) || lastGestureAt <= 0) {
+        try {
+          lastGestureAt = Number(sessionStorage.getItem(GESTURE_STORE_KEY) || 0);
+        } catch {
+          lastGestureAt = 0;
+        }
       }
+      const hasRecentGesture =
+        lastGestureAt > 0 && now - lastGestureAt <= GESTURE_TTL_MS;
+
+      if (!hasRecentGesture) return;
+
+      lastOpenReasonRef.current = "qty";
+      allowAutoCloseRef.current = true;
+      autoCloseMsRef.current = AUTO_CLOSE_MS_DEFAULT;
+
+      stabilizeOpenAtRef.current = Date.now();
+      stabilizeUntilRef.current =
+        stabilizeOpenAtRef.current + DISPLAY_STABILIZE_WINDOW_MS;
+      stabilizeSeedRef.current = Array.isArray(lastKnownStableCartRef.current)
+        ? lastKnownStableCartRef.current
+        : [];
+
+      lastActiveElRef.current =
+        typeof document !== "undefined" ? document.activeElement : null;
+      setOpen(true);
+      setHovered(false);
+      setInteractingSafe(false);
     }
-  }, [totalQty, pathname, setInteractingSafe]);
+  }, [totalQty, pathname, setInteractingSafe, loading]);
 
   // Auto-close scheduling
   useEffect(() => {

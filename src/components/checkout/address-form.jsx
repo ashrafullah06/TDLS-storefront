@@ -298,6 +298,7 @@ export default function AddressForm({
 
   // Keep latest vals in a ref (for flush operations)
   const valsRef = useRef(null);
+  const formRef = useRef(null);
 
   // Hydration-safe init: resolve mode + storage on mount and whenever checkoutMode changes.
   useEffect(() => {
@@ -654,6 +655,94 @@ export default function AddressForm({
     });
   }
 
+// Autofill sync: prevents controlled-input "tug-of-war" flicker after browser saved-address fill.
+function syncFromDom() {
+  const root = formRef.current;
+  if (!root || typeof window === "undefined") return;
+
+  const cur = valsRef.current || {};
+  const patch = {};
+
+  const map = {
+    fullName: "name",
+    phone: "phone",
+    email: "email",
+    houseNo: "houseNo",
+    houseName: "houseName",
+    apartmentNo: "apartmentNo",
+    floorNo: "floorNo",
+    addressLine1: "streetAddress",
+    addressLine2: "address2",
+    city: "upazila",
+    district: "district",
+    division: "division",
+    postalCode: "postalCode",
+    postOffice: "postOffice",
+    union: "union",
+    policeStation: "policeStation",
+    country: "countryIso2",
+  };
+
+  const els = root.querySelectorAll("input[name], select[name], textarea[name]");
+  els.forEach((el) => {
+    const n = el.getAttribute("name");
+    if (!n) return;
+    const k = map[n] || n;
+    if (!(k in cur)) return;
+
+    const v = el.value;
+    if (v == null) return;
+
+    const s = String(v);
+    if (!s.trim()) return;
+
+    const prev = cur?.[k];
+    const prevS = prev == null ? "" : String(prev);
+
+    if (s !== prevS) patch[k] = v;
+  });
+
+  const keys = Object.keys(patch);
+  if (!keys.length) return;
+
+  markInteracted();
+
+  setVals((p) => {
+    let changed = false;
+    const next = { ...p };
+    for (const k of keys) {
+      if (!Object.is(next?.[k], patch[k])) {
+        next[k] = patch[k];
+        changed = true;
+      }
+    }
+    if (!changed) return p;
+    next.countryIso2 = String(next.countryIso2 || "BD").toUpperCase();
+    return next;
+  });
+}
+
+function handleAutofillAnimationStart(e) {
+  if (!e?.animationName) return;
+  if (e.animationName !== "tdlsAutofillStart") return;
+
+  const raf =
+    (typeof window !== "undefined" && window.requestAnimationFrame) ||
+    ((fn) => setTimeout(fn, 0));
+
+  raf(() => syncFromDom());
+}
+
+useEffect(() => {
+  if (typeof window === "undefined") return;
+  const t1 = setTimeout(() => syncFromDom(), 60);
+  const t2 = setTimeout(() => syncFromDom(), 260);
+  return () => {
+    clearTimeout(t1);
+    clearTimeout(t2);
+  };
+}, []);
+
   function isCompleteLocal(a) {
     const line1 = a.streetAddress || a.address1 || a.line1 || "";
     const city = a.upazila || a.city || "";
@@ -907,7 +996,7 @@ export default function AddressForm({
 
   return (
     <div className="ca-safe-wrap" data-mode={mode} data-safe={useSafePadding ? "1" : "0"}>
-      <form onSubmit={handleSubmit} className="ca-form">
+      <form ref={formRef} onSubmit={handleSubmit} onAnimationStartCapture={handleAutofillAnimationStart} className="ca-form">
         {title ? <div className="ca-title">{title}</div> : null}
         {subtitle ? <div className="ca-sub">{subtitle}</div> : null}
 
