@@ -1,9 +1,9 @@
-//✅ FILE: app/layout.js
+// FILE: app/layout.js
 import "@/styles/globals.css";
-
 import OptionsProvider from "@/providers/optionsprovider";
 import Providers from "./providers";
 import CartProvider from "@/components/common/cart_context";
+import AutoSignoutGuard from "@/components/auth/auto_signout_guard";
 import SwrProvider from "@/providers/swrprovider";
 import RouteFlagger from "@/components/route-flagger";
 import Promobar from "@/components/common/promobar";
@@ -11,14 +11,26 @@ import Promobar from "@/components/common/promobar";
 // Global cart panel
 import CartPanel from "@/components/cart/cart_panel";
 
-import AdminRouteGate from "@/components/admin/admin_route_gate"; // ✅ client gate
+import AdminRouteGate from "@/components/admin/admin_route_gate"; // ✅ new tiny client gate
 
-// ✅ Client-only deferred boot helpers (ssr:false must live in a Client Component)
-import ClientBoot from "@/components/common/client_boot";
+// ✅ Preload Sliding Menu Bar (no UI, runs on site load)
+import SlidingMenuBarPreloader from "@/components/common/slidingmenubar.preloader";
+
+// ✅ NEW: Preload HomePanel data (no click loading)
+import HomePanelPreloader from "@/components/common/homepanel.preloader";
+
+// ✅ NEW: Preload BottomFloatingBar data (no click loading)
+import BottomFloatingBarPreloader from "@/components/common/bottomfloatingbar.preloader";
+
+// ✅ NEW: Preload Collections / All Products dataset (no click loading)
+import { HomePanelAllProductsPreloader } from "@/components/common/homepanel_all_products";
 
 /* ------------------------- URL + asset normalization ------------------------- */
 const SITE_URL = (() => {
-  const raw = (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "").trim();
+  const raw =
+    (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "").trim();
+
+  // Vercel provides VERCEL_URL without scheme. This makes local/dev safe too.
   const vercel = (process.env.VERCEL_URL || "").trim();
 
   let url = raw || (vercel ? `https://${vercel}` : "");
@@ -35,8 +47,6 @@ const OG_IMAGE = (() => {
   return v.startsWith("/") ? v : `/${v}`;
 })();
 
-const OG_IMAGE_ABS = new URL(OG_IMAGE, SITE_URL).toString();
-
 const OG_IS_FAVICON = /\/favicon\.ico$/i.test(OG_IMAGE);
 const OG_W = OG_IS_FAVICON ? 256 : 1200;
 const OG_H = OG_IS_FAVICON ? 256 : 630;
@@ -51,11 +61,18 @@ const DEFAULT_DESC =
 export const metadata = {
   metadataBase: new URL(SITE_URL),
 
+  // Stronger SERP title without using the full brand expansion
   title: { default: DEFAULT_TITLE, template: `%s | ${BRAND}` },
+
+  // Stronger meta description so Google does not fall back to footer text
   description: DEFAULT_DESC,
 
+  // Advanced canonical strategy:
+  // - Use relative canonical so Next composes the correct per-route canonical under metadataBase.
+  // - Prevents every page from claiming the homepage as canonical.
   alternates: { canonical: "./" },
 
+  // Helpful “other fields” supported by Next metadata API
   applicationName: BRAND,
   referrer: "origin-when-cross-origin",
   category: "ecommerce",
@@ -114,6 +131,7 @@ export const metadata = {
     apple: "/favicon.ico",
   },
 
+  // iOS “Add to Home Screen” friendliness (no UI change)
   appleWebApp: {
     title: BRAND,
     capable: true,
@@ -126,6 +144,7 @@ export const viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // Theme color belongs in viewport config (per Next), not metadata.themeColor
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#faf9f6" },
     { media: "(prefers-color-scheme: dark)", color: "#050b1f" },
@@ -134,13 +153,14 @@ export const viewport = {
 };
 
 export default function RootLayout({ children }) {
+  // Minimal JSON-LD to strengthen brand identity in search + social parsers (no UI impact)
   const orgJsonLd = {
     "@context": "https://schema.org",
     "@type": "Organization",
     "@id": `${SITE_URL}/#organization`,
     name: BRAND,
     url: SITE_URL,
-    logo: OG_IMAGE_ABS, // ✅ absolute for schema correctness
+    logo: OG_IMAGE,
   };
 
   const siteJsonLd = {
@@ -154,6 +174,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body id="app-shell">
+        {/* Structured data (no UI) */}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}
@@ -166,25 +187,32 @@ export default function RootLayout({ children }) {
         <AdminRouteGate
           adminTree={<main role="main">{children}</main>}
           siteTree={
-            <Providers>
-              {/* ✅ All ssr:false dynamics moved into a client-only boot component */}
-              <ClientBoot />
+            <>
+              <AutoSignoutGuard />
 
-              <CartProvider>
-                <OptionsProvider>
-                  <SwrProvider>
-                    <Promobar />
+              {/* ✅ Preloaders run as early as possible on site load (no UI) */}
+              <SlidingMenuBarPreloader />
+              <HomePanelPreloader />
+              <HomePanelAllProductsPreloader />
+              <BottomFloatingBarPreloader />
 
-                    {/* Global mirror slider, reading from real cart */}
-                    <CartPanel />
+              <Providers>
+                <CartProvider>
+                  <OptionsProvider>
+                    <SwrProvider>
+                      <Promobar />
 
-                    <main role="main">
-                      <RouteFlagger>{children}</RouteFlagger>
-                    </main>
-                  </SwrProvider>
-                </OptionsProvider>
-              </CartProvider>
-            </Providers>
+                      {/* Global mirror slider, reading from real cart */}
+                      <CartPanel />
+
+                      <main role="main">
+                        <RouteFlagger>{children}</RouteFlagger>
+                      </main>
+                    </SwrProvider>
+                  </OptionsProvider>
+                </CartProvider>
+              </Providers>
+            </>
           }
         />
       </body>
