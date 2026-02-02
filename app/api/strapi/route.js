@@ -111,12 +111,25 @@ const PRODUCT_CACHE_CONTROL = (() => {
 
 /* ───────── response helpers ───────── */
 
+function cacheHeaders(cc) {
+  const v = String(cc || "no-store");
+  // Add extra headers that help Vercel/CDNs honor s-maxage & stale-on-error more consistently.
+  // (No cookies are set here; these are safe for public reads.)
+  return {
+    "cache-control": v,
+    "CDN-Cache-Control": v,
+    "Vercel-CDN-Cache-Control": v,
+    "Surrogate-Control": v,
+    Vary: "Accept-Encoding",
+  };
+}
+
 function jsonResponse(bodyObj, status = 200, extraHeaders = {}) {
   return new NextResponse(bodyObj === undefined ? "null" : JSON.stringify(bodyObj), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
+      ...cacheHeaders("no-store"),
       ...extraHeaders,
     },
   });
@@ -127,7 +140,7 @@ function rawJsonResponse(bodyString, status = 200, extraHeaders = {}) {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
+      ...cacheHeaders("no-store"),
       ...extraHeaders,
     },
   });
@@ -335,20 +348,29 @@ const TAXONOMY_RELS = [
 
 const TAXONOMY_REL_SET = new Set(TAXONOMY_RELS.map((x) => x[0]));
 
-/**
- * ✅ Fast meta profiles (PUBLIC optimization)
- * These endpoints are tiny lists; populate=* is unnecessary and often slow in production.
- *
- * Only applied when:
- * - PUBLIC request (no secret)
- * - AND caller uses populate=* OR no populate
- * - AND noOptimize=1 is NOT present inside the Strapi path query
- */
+/* ───────── meta profiles (PUBLIC optimization) ───────── */
+
 const FAST_META_DEFAULT_PAGE_SIZE = (() => {
   const n = Number(process.env.TDLS_STRAPI_META_PAGESIZE ?? 1000);
   if (!Number.isFinite(n) || n <= 0) return 1000;
   return Math.min(2000, Math.max(50, Math.round(n)));
 })();
+
+/**
+ * ✅ IMPORTANT PRODUCTION FIX:
+ * audience-categories must include tier relations for your filter UI.
+ * If a “thin” meta payload gets cached as any-meta, your filters can compute “0 matches” randomly.
+ */
+const META_FILTERSAFE_POPULATES = new Map([
+  [
+    "/audience-categories",
+    [
+      ["tiers", ["slug"]],
+      ["brand_tiers", ["slug"]],
+      ["collection_tiers", ["slug"]],
+    ],
+  ],
+]);
 
 const FAST_META_PROFILES = new Map([
   ["/audience-categories", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
@@ -378,6 +400,31 @@ function hasAnySort(params) {
   return false;
 }
 
+function hasPopulateForRel(params, rel) {
+  const prefix = `populate[${rel}]`;
+  for (const k of params.keys()) {
+    if (k === prefix || k.startsWith(`${prefix}[`)) return true;
+  }
+  return false;
+}
+
+function applyMetaFilterSafePopulate(pathname, params) {
+  const rels = META_FILTERSAFE_POPULATES.get(pathname);
+  if (!rels) return;
+
+  for (const [rel, fields] of rels) {
+    if (hasPopulateForRel(params, rel)) continue;
+    for (let i = 0; i < fields.length; i++) {
+      params.set(`populate[${rel}][fields][${i}]`, String(fields[i]));
+    }
+  }
+}
+
+/**
+ * Fast meta profile:
+ * - Removes populate=* (or no populate) and replaces with a deterministic minimal dataset
+ * - BUT for audience-categories we still include tier relations (filtersafe meta)
+ */
 function applyFastMetaProfile(pathname, params) {
   const prof = FAST_META_PROFILES.get(pathname);
   if (!prof) return;
@@ -395,6 +442,9 @@ function applyFastMetaProfile(pathname, params) {
       params.set(`sort[${i}]`, String(prof.sort[i]));
     }
   }
+
+  // ✅ critical: keep tier relations for audience-categories
+  applyMetaFilterSafePopulate(pathname, params);
 
   if (!params.get("pagination[pageSize]")) {
     params.set("pagination[pageSize]", String(FAST_META_DEFAULT_PAGE_SIZE));
@@ -426,13 +476,7 @@ function normalizeMetaPath(p, { isPublic } = { isPublic: true }) {
   return qs ? `${pathname}?${qs}` : pathname;
 }
 
-function hasPopulateForRel(params, rel) {
-  const prefix = `populate[${rel}]`;
-  for (const k of params.keys()) {
-    if (k === prefix || k.startsWith(`${prefix}[`)) return true;
-  }
-  return false;
-}
+/* ───────── products populate (deterministic) ───────── */
 
 function applyProductsTaxonomyPopulate(params) {
   for (const [rel, fields] of TAXONOMY_RELS) {
@@ -615,10 +659,14 @@ function forcePublicProductsListPath(p) {
 
 function sanitizeMetaPathForPublic(p) {
   const { pathname, search } = splitPathAndQuery(p);
-  if (!search) return pathname;
+  const params = new URLSearchParams(search || "");
 
-  const params = new URLSearchParams(search);
+  // strip heavy populate but keep a deterministic filtersafe shape for known endpoints
   stripPopulateParams(params);
+
+  // ✅ critical: if this is a known meta endpoint, re-apply the fast profile
+  // (audience-categories will re-add tier relations)
+  applyFastMetaProfile(pathname, params);
 
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
@@ -709,6 +757,30 @@ function metaAnyKeyFromPathname(pathname) {
   return `pub|meta|__any__:${pathname}`;
 }
 
+/**
+ * ✅ PRODUCTION FIX:
+ * Your product list payload is often >1MB.
+ * Previously MEM_MAX_BYTES default (1MB) caused mem-cache to NEVER store products,
+ * leading to repeated upstream hits and random empty/timeout behavior.
+ */
+const MEM_MAX_BYTES_META = (() => {
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES_META || 1024 * 1024);
+  if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
+  return Math.min(2 * 1024 * 1024, Math.max(128 * 1024, Math.round(n)));
+})();
+
+const MEM_MAX_BYTES_PROD = (() => {
+  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES_PROD || 8 * 1024 * 1024);
+  if (!Number.isFinite(n) || n <= 0) return 8 * 1024 * 1024;
+  return Math.min(16 * 1024 * 1024, Math.max(512 * 1024, Math.round(n)));
+})();
+
+const LAST_GOOD_MAX_BYTES = (() => {
+  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_MAX_BYTES || 24 * 1024 * 1024);
+  if (!Number.isFinite(n) || n <= 0) return 24 * 1024 * 1024;
+  return Math.min(40 * 1024 * 1024, Math.max(2 * 1024 * 1024, Math.round(n)));
+})();
+
 const MEM_TTL_MS = (() => {
   const n = Number(process.env.TDLS_STRAPI_MEMCACHE_TTL_MS || 120000);
   if (!Number.isFinite(n) || n <= 0) return 120000;
@@ -719,12 +791,6 @@ const MEM_PROD_TTL_MS = (() => {
   const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 45000);
   if (!Number.isFinite(n) || n <= 0) return 45000;
   return Math.min(120 * 1000, Math.max(2000, Math.round(n)));
-})();
-
-const MEM_MAX_BYTES = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES || 1024 * 1024);
-  if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
-  return Math.min(6 * 1024 * 1024, Math.max(64 * 1024, Math.round(n)));
 })();
 
 const LAST_GOOD_TTL_MS = (() => {
@@ -755,9 +821,11 @@ function memGet(map, key) {
   return v;
 }
 
-function memSet(map, key, payloadStr, headers, ttlMs) {
+function memSet(map, key, payloadStr, headers, ttlMs, maxBytes) {
   if (typeof payloadStr !== "string") return;
-  if (payloadStr.length > MEM_MAX_BYTES) return;
+  const lim = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : MEM_MAX_BYTES_META;
+  if (payloadStr.length > lim) return;
+
   const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : MEM_TTL_MS;
   map.set(key, { exp: Date.now() + ttl, payloadStr, headers });
 }
@@ -774,7 +842,8 @@ function lastGoodGet(key) {
 
 function lastGoodSet(key, payloadStr, ttlMs = LAST_GOOD_TTL_MS) {
   if (typeof payloadStr !== "string") return;
-  if (payloadStr.length > 8 * 1024 * 1024) return;
+  if (payloadStr.length > LAST_GOOD_MAX_BYTES) return;
+
   const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LAST_GOOD_TTL_MS;
   LAST_GOOD.set(key, { exp: Date.now() + ttl, payloadStr });
 }
@@ -856,8 +925,9 @@ async function warmMetaCachesIfNeeded(baseHeaders) {
           MEM_META,
           cacheKey,
           payloadStr,
-          { "cache-control": META_CACHE_CONTROL, "CDN-Cache-Control": META_CACHE_CONTROL },
-          MEM_TTL_MS
+          { ...cacheHeaders(META_CACHE_CONTROL) },
+          MEM_TTL_MS,
+          MEM_MAX_BYTES_META
         );
 
         lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
@@ -1171,7 +1241,7 @@ export async function GET(req) {
       return jsonResponse(
         { ok: false, error: "SERVER_MISCONFIGURED", message: STRAPI_BOOT_ERROR },
         500,
-        { "cache-control": "no-store" }
+        cacheHeaders("no-store")
       );
     }
 
@@ -1298,8 +1368,7 @@ export async function GET(req) {
 
         return rawJsonResponse(hit.payloadStr, 200, {
           ...hit.headers,
-          "cache-control": cacheControl,
-          "CDN-Cache-Control": cacheControl,
+          ...cacheHeaders(cacheControl),
           "x-tdls-proxy-ms": String(ms),
           "x-tdls-cache": "1",
           "x-tdls-mem": "1",
@@ -1435,7 +1504,7 @@ export async function GET(req) {
           },
           502,
           {
-            "cache-control": "no-store",
+            ...cacheHeaders("no-store"),
             "x-tdls-upstream-status": String(result?.status || 0),
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-cache": "0",
@@ -1450,8 +1519,7 @@ export async function GET(req) {
         const cnt = isProductEndpoint ? productCountFromStrapiPayload(parsed?.data) : null;
 
         return rawJsonResponse(lg.payloadStr, 200, {
-          "cache-control": cacheControl,
-          "CDN-Cache-Control": cacheControl,
+          ...cacheHeaders(cacheControl),
           "x-tdls-proxy-ms": String(ms),
           "x-tdls-stale": "1",
           "x-tdls-fallback": "last-good",
@@ -1465,8 +1533,7 @@ export async function GET(req) {
         const anyMeta = lastGoodGet(metaAnyKeyFromPathname(effPathname));
         if (anyMeta?.payloadStr) {
           return rawJsonResponse(anyMeta.payloadStr, 200, {
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
+            ...cacheHeaders(cacheControl),
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": "any-meta",
@@ -1483,8 +1550,7 @@ export async function GET(req) {
           const cnt = productCountFromStrapiPayload(parsed?.data);
 
           return rawJsonResponse(anyList, 200, {
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
+            ...cacheHeaders(cacheControl),
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": "any-products",
@@ -1502,8 +1568,7 @@ export async function GET(req) {
           const cnt = productCountFromStrapiPayload(parsed?.data);
 
           return rawJsonResponse(broad, 200, {
-            "cache-control": cacheControl,
-            "CDN-Cache-Control": cacheControl,
+            ...cacheHeaders(cacheControl),
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": "broad-fetch",
@@ -1523,7 +1588,7 @@ export async function GET(req) {
       });
 
       return rawJsonResponse(payloadStr, 200, {
-        "cache-control": "no-store",
+        ...cacheHeaders("no-store"),
         "x-tdls-proxy-ms": String(ms),
         "x-tdls-stale": "1",
         "x-tdls-fallback": "degraded-empty",
@@ -1550,8 +1615,9 @@ export async function GET(req) {
           map,
           cacheKey,
           payloadStr,
-          { "cache-control": cacheControl, "CDN-Cache-Control": cacheControl },
-          isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS
+          { ...cacheHeaders(cacheControl) },
+          isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS,
+          isProductEndpoint ? MEM_MAX_BYTES_PROD : MEM_MAX_BYTES_META
         );
       }
     }
@@ -1572,8 +1638,7 @@ export async function GET(req) {
     }
 
     return rawJsonResponse(payloadStr, 200, {
-      "cache-control": cacheControl,
-      "CDN-Cache-Control": cacheControl,
+      ...cacheHeaders(cacheControl),
       "x-tdls-proxy-ms": String(ms),
       "x-tdls-cache": CACHE_OK ? "1" : "0",
       "x-tdls-mem": "0",
@@ -1600,7 +1665,7 @@ export async function GET(req) {
           ms,
         },
         504,
-        { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
+        { ...cacheHeaders("no-store"), "x-tdls-proxy-ms": String(ms) }
       );
     }
 
@@ -1608,7 +1673,7 @@ export async function GET(req) {
     return jsonResponse(
       { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed", ms },
       500,
-      { "cache-control": "no-store", "x-tdls-proxy-ms": String(ms) }
+      { ...cacheHeaders("no-store"), "x-tdls-proxy-ms": String(ms) }
     );
   }
 }
