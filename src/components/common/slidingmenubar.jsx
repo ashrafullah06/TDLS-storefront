@@ -1,4 +1,4 @@
-// FILE: src/components/common/slidingmenubar.jsx
+// ✅ FILE: src/components/common/slidingmenubar.jsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -8,16 +8,15 @@ import { useRouter } from "next/navigation";
 /**
  * TDLS Sliding Menu Bar — Desktop preserved; Mobile restructured; True preload supported.
  * ----------------------------------------------------------------------------
- * Goals (this task):
- * 1) Preload at website load (NOT on click):
- *    - Keep singleton + localStorage cache for instant open.
- *    - Export <SlidingMenuBarPreloader/> to mount in a root always-mounted place.
- *    - Use requestIdleCallback + visibilitychange to warm/refresh early.
+ * ✅ LOCKED listing system:
+ * Tier  →  Audience  →  Category  →  Products
  *
- * 2) Mobile: adaptive, never overflow/break (Android/iOS; portrait/landscape):
- *    - Desktop: same 3-column rail layout.
- *    - Mobile: sectioned view (Audiences / Categories / Products) with a segmented switcher.
- *      All features remain accessible; just organized for small screens.
+ * ✅ MUST:
+ * - No synthetic "All" audience
+ * - Only real audiences that have products in that Tier
+ * - Only real categories inside Tier+Audience
+ * - Only real products
+ * - All items route to REAL pages (query URLs; collections page normalizes)
  */
 
 const NAVBAR_HEIGHT = 96;
@@ -45,6 +44,8 @@ const TIERS = [
   { name: "Heritage Collection", slug: "heritage-collection" },
 ];
 
+/* ------------------------------ tiny utils ------------------------------ */
+
 const isArr = (v) => Array.isArray(v);
 
 function unwrapStrapiArray(v) {
@@ -57,15 +58,14 @@ function unwrapStrapiArray(v) {
 
 function normalizeEntity(e) {
   if (!e) return null;
-  if (e.attributes) return { id: e.id, ...e.attributes, attributes: e.attributes };
+  if (e.attributes) return { id: e.id, ...e.attributes };
   return e;
 }
 
 function normSlug(input) {
   const raw = (input ?? "").toString().trim().toLowerCase();
   if (!raw) return "";
-  const cutSemi = raw.split(";")[0];
-  return cutSemi
+  return raw
     .replace(/[?#].*$/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
@@ -78,397 +78,66 @@ function titleizeSlug(slug) {
   return s.replace(/[-_]/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 }
 
-function pickTextForSlug(x) {
-  const e = normalizeEntity(x) || {};
-  return e.slug || e.handle || e.key || e.uid || e.code || e.name || e.title || e.label || "";
+function pickName(e) {
+  const x = normalizeEntity(e) || {};
+  return (x.name || x.title || x.label || x.slug || "").toString().trim();
 }
 
-function pickName(x) {
-  const e = normalizeEntity(x) || {};
-  return (e.name || e.title || e.label || e.slug || "").toString().trim();
+function tierKey(s) {
+  return (s || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function uniq(arr) {
-  return Array.from(new Set((arr || []).filter(Boolean)));
+function tierMatches(a, b) {
+  const ak = tierKey(a);
+  const bk = tierKey(b);
+  return !!ak && ak === bk;
 }
 
-const FIELD_ALIASES = {
-  tiers: [
-    "tiers",
-    "tier",
-    "brand_tiers",
-    "brand_tier",
-    "collection_tiers",
-    "collection_tier",
-    "events_products_collections",
-    "events_products_collection",
-    "product_collections",
-    "product_collection",
-    "collections",
-    "collection",
-  ],
-  categories: ["categories", "category", "product_categories", "product_category"],
-  audience_categories: ["audience_categories", "audience_category", "audiences", "audience", "audienceCategories"],
-  sub_categories: [
-    "sub_categories",
-    "sub_category",
-    "subCategories",
-    "subCategory",
-    "product_sub_categories",
-    "product_sub_category",
-  ],
-  gender_groups: ["gender_groups", "gender_group", "genderGroups", "genderGroup"],
-  age_groups: ["age_groups", "age_group", "ageGroups", "ageGroup"],
-};
-
-function pickSlugs(obj) {
-  if (!obj) return [];
-  if (Array.isArray(obj)) return obj.map((x) => normSlug(pickTextForSlug(x))).filter(Boolean);
-  if (obj?.data) {
-    const d = obj.data;
-    if (Array.isArray(d)) return d.map((x) => normSlug(pickTextForSlug(x))).filter(Boolean);
-    return [normSlug(pickTextForSlug(d))].filter(Boolean);
-  }
-  if (typeof obj === "string" || typeof obj === "number") return [normSlug(obj)].filter(Boolean);
-  return [normSlug(pickTextForSlug(obj))].filter(Boolean);
-}
-
-function extractRelSlugs(entity, canonicalKey) {
-  const p = entity || {};
-  const aliases = FIELD_ALIASES[canonicalKey] || [canonicalKey];
-
-  const out = [];
-  for (const k of aliases) pickSlugs(p?.[k]).forEach((s) => out.push(s));
-  return uniq(out);
-}
-
-/* ------------------------------ Strapi proxy IO ------------------------------ */
-
-function fetchWithAbort(url, init, timeoutMs = 15000) {
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const t =
-    controller && timeoutMs > 0
-      ? window.setTimeout(() => {
-          try {
-            controller.abort();
-          } catch {
-            // ignore
-          }
-        }, timeoutMs)
-      : null;
-
-  return fetch(url, {
-    ...init,
-    signal: controller ? controller.signal : undefined,
-  }).finally(() => {
-    if (t) window.clearTimeout(t);
-  });
-}
-
-async function fetchFromStrapi(path) {
+function safeJsonParse(s) {
   try {
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-    const q = encodeURIComponent(normalizedPath);
-
-    const res = await fetchWithAbort(
-      `/api/strapi?path=${q}`,
-      {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        cache: "default",
-      },
-      15000
-    );
-
-    if (!res.ok) return null;
-    const raw = await res.json().catch(() => null);
-
-    // keep original intent, but tolerate proxy shapes
-    if (raw?.ok && raw.data != null) return raw.data;
-    return raw;
+    return JSON.parse(s);
   } catch {
     return null;
   }
 }
 
-// ✅ SAFETY: unwrap Strapi lists no matter how the proxy wraps the payload
-function unwrapStrapiList(payload) {
-  if (!payload) return [];
-  if (Array.isArray(payload)) return payload;
-
-  // common Strapi shape: { data: [...] }
-  if (Array.isArray(payload?.data)) return payload.data;
-
-  // sometimes proxy returns { data: { data: [...] } }
-  if (payload?.data && Array.isArray(payload.data?.data)) return payload.data.data;
-
-  // sometimes proxy returns { ok:true, data:[...] } already handled, but keep safe:
-  if (payload?.ok && Array.isArray(payload?.data)) return payload.data;
-  if (payload?.ok && payload?.data && Array.isArray(payload.data?.data)) return payload.data.data;
-
-  return [];
+function canUseLS() {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 }
 
 /**
- * ✅ PRODUCTION HARDENING:
- * Audience categories in production often come WITHOUT `products` relation (heavy-guard/populate strip/timeouts).
- * So we fetch audiences LIGHT (slug/name/tier slugs), then attach products using productIndex.
+ * ✅ Only REAL products that have real pages:
+ * - must have a slug
+ * - must NOT be archived
+ * - must NOT be disable_frontend
+ * - if status exists, only allow Active (case-insensitive)
  */
-async function fetchAudienceCategoriesLight() {
-  const payload = await fetchFromStrapi(
-    "/audience-categories?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order&populate[tiers][fields][0]=slug&populate[brand_tiers][fields][0]=slug&populate[collection_tiers][fields][0]=slug"
-  );
-  const rows = unwrapStrapiList(payload);
-  return rows.map(normalizeEntity).filter(Boolean);
+function isProductVisible(pRaw) {
+  const p = normalizeEntity(pRaw) || {};
+  const slug = normSlug(p.slug || "");
+  if (!slug) return false;
+
+  if (p.disable_frontend === true) return false;
+  if (p.is_archived === true) return false;
+
+  const st = (p.status || "").toString().trim().toLowerCase();
+  if (st && st !== "active") return false;
+
+  return true;
 }
 
-/**
- * ✅ Optional “with products” fetch, but only minimal fields (IDs only),
- * so it won’t trip heavy-guard and won’t bloat payload.
- * If production strips products anyway, we will attach from productIndex later.
- */
-async function fetchAudienceCategoriesWithProductsLite() {
-  const payload = await fetchFromStrapi(
-    "/audience-categories?pagination[pageSize]=500&fields[0]=slug&fields[1]=name&fields[2]=order&populate[products][fields][0]=id&populate[tiers][fields][0]=slug&populate[brand_tiers][fields][0]=slug&populate[collection_tiers][fields][0]=slug"
-  );
-  const rows = unwrapStrapiList(payload);
-  return rows.map(normalizeEntity).filter(Boolean);
-}
+/* ------------------------------ routing ------------------------------ */
 
-/**
- * ✅ Filter-safe menu product index fetch:
- * We only need slug/name + taxonomy relation slugs for filtering.
- * This avoids huge populate=* and stays stable in production.
- */
-async function fetchProductsForIndex() {
-  const payload = await fetchFromStrapi(
-    "/products?pagination[pageSize]=1000&fields[0]=slug&fields[1]=name&fields[2]=title&populate[tiers][fields][0]=slug&populate[brand_tiers][fields][0]=slug&populate[collection_tiers][fields][0]=slug&populate[categories][fields][0]=slug&populate[audience_categories][fields][0]=slug&populate[sub_categories][fields][0]=slug&populate[gender_groups][fields][0]=slug&populate[age_groups][fields][0]=slug&populate[events_products_collections][fields][0]=slug&populate[product_collections][fields][0]=slug"
-  );
-  const rows = unwrapStrapiList(payload);
-  return rows.map(normalizeEntity).filter(Boolean);
-}
-
-/* ------------------------------- Derivations -------------------------------- */
-
-function buildProductIndex(products) {
-  const m = new Map();
-  for (const pRaw of products || []) {
-    const p = normalizeEntity(pRaw) || {};
-    const id = p.id;
-    if (!id) continue;
-
-    const slug = normSlug(p.slug || "");
-    const name =
-      (p.name || p.title || "").toString().trim() || (slug ? titleizeSlug(slug) : `Product #${id}`);
-
-    m.set(id, {
-      id,
-      slug,
-      name,
-      tierSlugs: extractRelSlugs(p, "tiers"),
-      categorySlugs: extractRelSlugs(p, "categories"),
-      audienceSlugs: extractRelSlugs(p, "audience_categories"),
-      subCategorySlugs: extractRelSlugs(p, "sub_categories"),
-      genderGroupSlugs: extractRelSlugs(p, "gender_groups"),
-      ageGroupSlugs: extractRelSlugs(p, "age_groups"),
-      raw: p,
-    });
-  }
-  return m;
-}
-
-function hasAnyAudienceProducts(audienceRows) {
-  const rows = Array.isArray(audienceRows) ? audienceRows : [];
-  for (const r of rows) {
-    const a = normalizeEntity(r) || {};
-    const prods = unwrapStrapiArray(a?.products);
-    if (prods && prods.length) return true;
-  }
-  return false;
-}
-
-/**
- * ✅ CRITICAL PRODUCTION FIX:
- * Ensure every audience row has a usable `products` array (as [{id}...]).
- * - If Strapi provided products → keep IDs
- * - If Strapi stripped products → attach using productIndex.audienceSlugs mapping
- */
-function ensureAudienceProducts({ audienceRows, productIndex }) {
-  const rows = Array.isArray(audienceRows) ? audienceRows : [];
-  if (!(productIndex instanceof Map) || productIndex.size === 0) return rows;
-
-  const audToIds = new Map(); // audienceSlug -> [productId...]
-  for (const p of productIndex.values()) {
-    const as = Array.isArray(p?.audienceSlugs) ? p.audienceSlugs : [];
-    for (const a of as) {
-      const s = normSlug(a);
-      if (!s) continue;
-      if (!audToIds.has(s)) audToIds.set(s, []);
-      audToIds.get(s).push(p.id);
-    }
-  }
-
-  return rows
-    .map((row) => {
-      const a = normalizeEntity(row) || {};
-      const slug = normSlug(a.slug || pickTextForSlug(a));
-      if (!slug) return a;
-
-      const existingIds = unwrapStrapiArray(a?.products)
-        .map((x) => normalizeEntity(x)?.id)
-        .filter(Boolean);
-
-      const mapped = audToIds.get(slug) || [];
-      const ids = uniq([...existingIds, ...mapped]);
-      const products = ids.map((id) => ({ id }));
-
-      return {
-        ...a,
-        slug: a.slug || slug,
-        products,
-      };
-    })
-    .filter(Boolean);
-}
-
-/**
- * If audience list fetch fails, derive audience rows from productIndex (last-resort).
- * Business outcome remains: audiences reflect products’ audience slugs.
- */
-function buildAudienceRowsFromProductIndex(productIndex) {
-  if (!(productIndex instanceof Map) || productIndex.size === 0) return [];
-
-  const audToIds = new Map();
-  for (const p of productIndex.values()) {
-    for (const a of p?.audienceSlugs || []) {
-      const s = normSlug(a);
-      if (!s) continue;
-      if (!audToIds.has(s)) audToIds.set(s, []);
-      audToIds.get(s).push(p.id);
-    }
-  }
-
-  return Array.from(audToIds.entries())
-    .map(([slug, ids]) => ({
-      id: slug,
-      slug,
-      name: titleizeSlug(slug),
-      tiers: [], // safe: tier membership still computed via products; audience tier match will be false unless tiers exist
-      products: uniq(ids).map((id) => ({ id })),
-    }))
-    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-}
-
-function computeAnyTierSignals(productIndex, audienceRows) {
-  const productHasTiers = Array.from(productIndex.values()).some((p) => (p?.tierSlugs || []).length > 0);
-  const audienceHasTiers = (audienceRows || []).some((a) => extractRelSlugs(a, "tiers").length > 0);
-  return productHasTiers || audienceHasTiers;
-}
-
-function productBelongsToTier({ tier, productIdx, productEntity, audienceTierMatch, anyTierSignals }) {
-  const t = normSlug(tier);
-
-  const tierSlugs =
-    (productIdx?.tierSlugs?.length ? productIdx.tierSlugs : extractRelSlugs(productEntity, "tiers")) || [];
-  if (tierSlugs.length) return tierSlugs.includes(t);
-
-  if (audienceTierMatch) return true;
-
-  if (anyTierSignals) return false;
-  return false;
-}
-
-function audienceTierVerdict({ audience, tierSlug, productIndex, anyTierSignals }) {
-  const tier = normSlug(tierSlug);
-  const a = normalizeEntity(audience) || {};
-  const prodRel = unwrapStrapiArray(a?.products);
-  if (!prodRel.length) return { ok: false, count: 0 };
-
-  const audienceTierSlugs = extractRelSlugs(a, "tiers");
-  const audienceTierMatch = audienceTierSlugs.length ? audienceTierSlugs.includes(tier) : false;
-
-  let count = 0;
-  for (const pr of prodRel) {
-    const p = normalizeEntity(pr) || {};
-    const pid = p.id;
-    const idx = pid ? productIndex?.get(pid) : null;
-
-    if (productBelongsToTier({ tier, productIdx: idx, productEntity: p, audienceTierMatch, anyTierSignals })) {
-      count += 1;
-    }
-  }
-  return { ok: count > 0, count };
-}
-
-function deriveCategories({ tierSlug, audience, productIndex, anyTierSignals }) {
-  const tier = normSlug(tierSlug);
-  const a = normalizeEntity(audience) || {};
-  const prodRel = unwrapStrapiArray(a?.products);
-
-  const audienceTierSlugs = extractRelSlugs(a, "tiers");
-  const audienceTierMatch = audienceTierSlugs.length ? audienceTierSlugs.includes(tier) : false;
-
-  const counts = new Map();
-  for (const pr of prodRel) {
-    const p = normalizeEntity(pr) || {};
-    const pid = p.id;
-    const idx = pid ? productIndex?.get(pid) : null;
-
-    if (!productBelongsToTier({ tier, productIdx: idx, productEntity: p, audienceTierMatch, anyTierSignals })) continue;
-
-    const cats = (idx?.categorySlugs?.length ? idx.categorySlugs : extractRelSlugs(p, "categories")) || [];
-    for (const c of cats) counts.set(c, (counts.get(c) || 0) + 1);
-  }
-
-  return Array.from(counts.entries())
-    .map(([slug, count]) => ({ slug, name: titleizeSlug(slug), count }))
-    .filter((x) => x.slug && x.count > 0)
-    .sort((a2, b2) => (b2.count !== a2.count ? b2.count - a2.count : a2.name.localeCompare(b2.name)));
-}
-
-function deriveProducts({ tierSlug, audience, categorySlug, productIndex, anyTierSignals, filters }) {
-  const tier = normSlug(tierSlug);
-  const cat = categorySlug ? normSlug(categorySlug) : "";
-  const a = normalizeEntity(audience) || {};
-  const prodRel = unwrapStrapiArray(a?.products);
-
-  const audienceTierSlugs = extractRelSlugs(a, "tiers");
-  const audienceTierMatch = audienceTierSlugs.length ? audienceTierSlugs.includes(tier) : false;
-
-  const sc = normSlug(filters?.subCategory);
-  const gg = normSlug(filters?.genderGroup);
-  const ag = normSlug(filters?.ageGroup);
-
-  const out = [];
-  for (const pr of prodRel) {
-    const p = normalizeEntity(pr) || {};
-    const pid = p.id;
-    const idx = pid ? productIndex?.get(pid) : null;
-
-    if (!productBelongsToTier({ tier, productIdx: idx, productEntity: p, audienceTierMatch, anyTierSignals })) continue;
-
-    const cats = (idx?.categorySlugs?.length ? idx.categorySlugs : extractRelSlugs(p, "categories")) || [];
-    if (cat && !cats.includes(cat)) continue;
-
-    const subCats = idx?.subCategorySlugs?.length ? idx.subCategorySlugs : extractRelSlugs(p, "sub_categories");
-    const genders = idx?.genderGroupSlugs?.length ? idx.genderGroupSlugs : extractRelSlugs(p, "gender_groups");
-    const ages = idx?.ageGroupSlugs?.length ? idx.ageGroupSlugs : extractRelSlugs(p, "age_groups");
-
-    if (sc && !subCats.includes(sc)) continue;
-    if (gg && !genders.includes(gg)) continue;
-    if (ag && !ages.includes(ag)) continue;
-
-    const slug = idx?.slug || normSlug(p.slug);
-    const name = idx?.name || (p.name || p.title || "").toString().trim() || titleizeSlug(slug);
-    if (!slug) continue;
-
-    out.push({ id: pid || p.id, slug, name });
-  }
-
-  return out.sort((x, y) => x.name.localeCompare(y.name));
-}
-
-function buildCollectionsHref({ tier, audience, category, subCategory, genderGroup, ageGroup }) {
+function buildCollectionsHref({
+  tier,
+  audience,
+  category,
+  subCategory,
+  genderGroup,
+  ageGroup,
+  page,
+  pageSize,
+}) {
   const t = normSlug(tier);
   const a = audience ? normSlug(audience) : "";
   const c = category ? normSlug(category) : "";
@@ -476,15 +145,22 @@ function buildCollectionsHref({ tier, audience, category, subCategory, genderGro
   const gg = genderGroup ? normSlug(genderGroup) : "";
   const ag = ageGroup ? normSlug(ageGroup) : "";
 
-  const segments = [a, c, sc, gg, ag].filter(Boolean);
-  const base = segments.length ? `/collections/${segments.map(encodeURIComponent).join("/")}` : "/collections";
-
   const qs = new URLSearchParams();
   if (t) qs.set("tier", t);
-  return `${base}${qs.toString() ? `?${qs.toString()}` : ""}`;
+  if (a) qs.set("audience", a);
+  if (c) qs.set("category", c);
+  if (sc) qs.set("subCategory", sc);
+  if (gg) qs.set("genderGroup", gg);
+  if (ag) qs.set("ageGroup", ag);
+
+  if (page != null && page !== "") qs.set("page", String(Math.max(1, Math.floor(Number(page) || 1))));
+  if (pageSize != null && pageSize !== "")
+    qs.set("pageSize", String(Math.max(10, Math.min(100, Math.floor(Number(pageSize) || 24)))));
+
+  return `/collections${qs.toString() ? `?${qs.toString()}` : ""}`;
 }
 
-/* ------------------------------- UI helpers -------------------------------- */
+/* ------------------------------ UI helpers (UNCHANGED) ------------------------------ */
 
 function Pill({ children, tone = "neutral", size = "md" }) {
   const tones = {
@@ -636,7 +312,7 @@ function Select({ value, onChange, options, placeholder, isMobile }) {
       value={value}
       onChange={onChange}
       style={{
-        height: isMobile ? 32 : 34,
+        height: isMobile ? 34 : 34,
         borderRadius: 12,
         border: "1px solid rgba(0,0,0,0.10)",
         background: "rgba(255,255,255,0.96)",
@@ -648,7 +324,8 @@ function Select({ value, onChange, options, placeholder, isMobile }) {
         fontSize: fs,
         color: "#0c2340",
         outline: "none",
-        maxWidth: isMobile ? "100%" : "min(220px, 100%)",
+        width: isMobile ? "100%" : "min(220px, 100%)",
+        maxWidth: "100%",
       }}
     >
       <option value="">{placeholder}</option>
@@ -661,437 +338,49 @@ function Select({ value, onChange, options, placeholder, isMobile }) {
   );
 }
 
-/* ------------------------------ Facet options ------------------------------ */
-
-function buildFacetOptions({ baseProducts, productIndex }) {
-  const sub = new Map();
-  const gg = new Map();
-  const ag = new Map();
-
-  for (const p of baseProducts || []) {
-    const idx = p?.id ? productIndex.get(p.id) : null;
-    if (!idx) continue;
-
-    for (const s of idx.subCategorySlugs || []) sub.set(s, (sub.get(s) || 0) + 1);
-    for (const s of idx.genderGroupSlugs || []) gg.set(s, (gg.get(s) || 0) + 1);
-    for (const s of idx.ageGroupSlugs || []) ag.set(s, (ag.get(s) || 0) + 1);
-  }
-
-  const toArr = (m) =>
-    Array.from(m.entries())
-      .map(([slug, count]) => ({ slug, name: titleizeSlug(slug), count }))
-      .filter((x) => x.slug && x.count > 0)
-      .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.name.localeCompare(b.name)));
-
-  return { subCategories: toArr(sub), genderGroups: toArr(gg), ageGroups: toArr(ag) };
+function Segmented({ value, onChange, items }) {
+  const btnFs = "clamp(9px, 2.5vw, 10px)";
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100%",
+        borderRadius: 999,
+        border: "1px solid rgba(0,0,0,0.10)",
+        background: "rgba(255,255,255,0.92)",
+        boxShadow: "0 10px 18px rgba(0,0,0,0.05)",
+        overflow: "hidden",
+      }}
+    >
+      {items.map((it) => {
+        const active = it.value === value;
+        return (
+          <button
+            key={it.value}
+            type="button"
+            onClick={() => onChange(it.value)}
+            style={{
+              flex: 1,
+              height: 32,
+              border: "none",
+              background: active ? "linear-gradient(135deg, #0c2340 10%, #163060 100%)" : "transparent",
+              color: active ? "#fffdf8" : "#0c2340",
+              fontWeight: 900,
+              letterSpacing: ".12em",
+              textTransform: "uppercase",
+              fontSize: btnFs,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+            aria-pressed={active}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
-
-/* -------------------------- Search (global suggestions) -------------------------- */
-
-function scoreMatch({ q, text }) {
-  const qq = (q || "").trim().toLowerCase();
-  const tt = (text || "").trim().toLowerCase();
-  if (!qq || !tt) return -1;
-  if (tt === qq) return 1000;
-  if (tt.startsWith(qq)) return 900;
-  const idx = tt.indexOf(qq);
-  if (idx >= 0) return 700 - idx;
-  return -1;
-}
-
-function makeSearchKey(name, slug) {
-  return `${(name || "").toString()} ${(slug || "").toString()}`.trim();
-}
-
-/* -------------------------- ✅ Preload singleton + localStorage cache -------------------------- */
-
-// ✅ Bump version to avoid old broken cache causing “blank menu in production”
-const LS_KEY = "tdls:slidingmenubar:data:v4";
-const LS_TS = "tdls:slidingmenubar:ts:v4";
-const LS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-
-let __tdlsMenuPreloadPromise = null;
-let __tdlsMenuPreloadData = null;
-
-function canUseLS() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
-
-function safeJsonParse(s) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * ✅ IMPORTANT: localStorage can throw (Safari/private/blocked storage).
- * If it throws, we must not crash render => “blank menu”.
- */
-function lsGet(key) {
-  if (!canUseLS()) return null;
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function lsSet(key, value) {
-  if (!canUseLS()) return;
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // ignore
-  }
-}
-
-/**
- * Store compact snapshot:
- * - audienceRows: [{id, slug, name, tierSlugs[], productIds[]}]
- * - products: index-ready product list (compact, relation slugs only)
- */
-function compactProductsForCache(productIndex) {
-  if (!(productIndex instanceof Map)) return [];
-  return Array.from(productIndex.values()).map((p) => ({
-    id: p.id,
-    slug: p.slug,
-    name: p.name,
-    tierSlugs: p.tierSlugs || [],
-    categorySlugs: p.categorySlugs || [],
-    audienceSlugs: p.audienceSlugs || [],
-    subCategorySlugs: p.subCategorySlugs || [],
-    genderGroupSlugs: p.genderGroupSlugs || [],
-    ageGroupSlugs: p.ageGroupSlugs || [],
-  }));
-}
-
-function buildProductIndexFromCompact(products) {
-  const m = new Map();
-  for (const p of products || []) {
-    const id = p?.id;
-    if (!id) continue;
-    const slug = normSlug(p.slug || "");
-    const name = (p.name || "").toString().trim() || (slug ? titleizeSlug(slug) : `Product #${id}`);
-
-    m.set(id, {
-      id,
-      slug,
-      name,
-      tierSlugs: uniq((p.tierSlugs || []).map(normSlug)),
-      categorySlugs: uniq((p.categorySlugs || []).map(normSlug)),
-      audienceSlugs: uniq((p.audienceSlugs || []).map(normSlug)),
-      subCategorySlugs: uniq((p.subCategorySlugs || []).map(normSlug)),
-      genderGroupSlugs: uniq((p.genderGroupSlugs || []).map(normSlug)),
-      ageGroupSlugs: uniq((p.ageGroupSlugs || []).map(normSlug)),
-      raw: null,
-    });
-  }
-  return m;
-}
-
-function compactAudienceRowsForCache(audienceRows) {
-  const rows = Array.isArray(audienceRows) ? audienceRows : [];
-  return rows.map((row) => {
-    const a = normalizeEntity(row) || {};
-    const slug = normSlug(a.slug || pickTextForSlug(a));
-    const name = pickName(a) || titleizeSlug(slug);
-    const tierSlugs = extractRelSlugs(a, "tiers");
-    const productIds = unwrapStrapiArray(a?.products)
-      .map((x) => normalizeEntity(x)?.id)
-      .filter(Boolean);
-    return {
-      id: a.id || slug,
-      slug,
-      name,
-      tierSlugs: uniq(tierSlugs),
-      productIds: uniq(productIds),
-    };
-  });
-}
-
-function expandAudienceRowsFromCache(cachedAudienceRows) {
-  const rows = Array.isArray(cachedAudienceRows) ? cachedAudienceRows : [];
-  return rows
-    .map((a) => {
-      const slug = normSlug(a.slug);
-      if (!slug) return null;
-      const tierSlugs = Array.isArray(a.tierSlugs) ? a.tierSlugs : [];
-      const productIds = Array.isArray(a.productIds) ? a.productIds : [];
-      return {
-        id: a.id || slug,
-        slug,
-        name: (a.name || titleizeSlug(slug)).toString().trim(),
-        // keep shape compatible with extractRelSlugs (expects tiers relation-like)
-        tiers: tierSlugs.map((s) => ({ slug: normSlug(s) })),
-        products: productIds.map((id) => ({ id })),
-      };
-    })
-    .filter(Boolean);
-}
-
-function loadFromLocalStorage() {
-  if (!canUseLS()) return null;
-
-  const tsRaw = lsGet(LS_TS);
-  const ts = tsRaw ? parseInt(tsRaw, 10) : 0;
-  if (!Number.isFinite(ts) || ts <= 0) return null;
-  if (Date.now() - ts > LS_TTL_MS) return null;
-
-  const raw = lsGet(LS_KEY);
-  if (!raw) return null;
-
-  const parsed = safeJsonParse(raw);
-  if (!parsed || typeof parsed !== "object") return null;
-
-  const audienceCache = Array.isArray(parsed.audienceRows) ? parsed.audienceRows : [];
-  const productCache = Array.isArray(parsed.products) ? parsed.products : [];
-
-  // product cache can be compact, or legacy raw objects (keep tolerant)
-  let productIndex = null;
-  if (productCache.length && (productCache[0]?.tierSlugs || productCache[0]?.audienceSlugs)) {
-    productIndex = buildProductIndexFromCompact(productCache);
-  } else {
-    productIndex = buildProductIndex(productCache.map(normalizeEntity).filter(Boolean));
-  }
-
-  let audienceRows = expandAudienceRowsFromCache(audienceCache);
-
-  // ✅ Ensure audience products exist even if cache was partial
-  audienceRows = ensureAudienceProducts({ audienceRows, productIndex });
-
-  return {
-    audienceRows,
-    productIndex,
-    _fromCache: true,
-  };
-}
-
-function saveToLocalStorage({ audienceRows, productIndex }) {
-  if (!canUseLS()) return;
-  try {
-    const audienceCache = compactAudienceRowsForCache(audienceRows).slice(0, 1200);
-    const productsCache = compactProductsForCache(productIndex).slice(0, 2000);
-
-    lsSet(LS_TS, String(Date.now()));
-    lsSet(
-      LS_KEY,
-      JSON.stringify({
-        audienceRows: audienceCache,
-        products: productsCache,
-      })
-    );
-  } catch {
-    // ignore
-  }
-}
-
-function isMeaningfulMenuData(d) {
-  const ar = d?.audienceRows;
-  const pi = d?.productIndex;
-  const okP = pi instanceof Map && pi.size > 0;
-  const okA = Array.isArray(ar) && ar.length > 0 && hasAnyAudienceProducts(ar);
-  return okA && okP;
-}
-
-function getWarmSnapshot() {
-  // Prefer in-memory (already built Map)
-  if (__tdlsMenuPreloadData && (isMeaningfulMenuData(__tdlsMenuPreloadData) || __tdlsMenuPreloadData?._fromCache)) {
-    return __tdlsMenuPreloadData;
-  }
-  // Then LS
-  const cached = loadFromLocalStorage();
-  if (cached) return cached;
-  return null;
-}
-
-async function fetchAndBuildFresh() {
-  // ✅ Prefer lite-with-products first (still safe); fallback to ultra-lite if upstream strips products.
-  const [audMaybeProducts, prods] = await Promise.all([fetchAudienceCategoriesWithProductsLite(), fetchProductsForIndex()]);
-
-  const products = (prods || []).map(normalizeEntity).filter(Boolean);
-  const productIndex = buildProductIndex(products);
-
-  let audienceRows = (audMaybeProducts || []).map(normalizeEntity).filter(Boolean);
-
-  // If upstream returns empty audiences, fallback to light list
-  if (!audienceRows.length) {
-    const audLight = await fetchAudienceCategoriesLight().catch(() => []);
-    audienceRows = (audLight || []).map(normalizeEntity).filter(Boolean);
-  }
-
-  // If still empty (upstream down), derive audience list from productIndex
-  if (!audienceRows.length && productIndex.size > 0) {
-    audienceRows = buildAudienceRowsFromProductIndex(productIndex);
-  }
-
-  // ✅ Always ensure audience.products is present via productIndex mapping
-  audienceRows = ensureAudienceProducts({ audienceRows, productIndex });
-
-  const built = {
-    audienceRows,
-    productIndex,
-    _fromCache: false,
-  };
-
-  // ✅ Cache safety: only persist/overwrite cache when we fetched meaningful data.
-  // If upstream blips return partial/empty, keep last-good cache instead of wiping.
-  const meaningful = isMeaningfulMenuData(built);
-
-  if (meaningful) {
-    saveToLocalStorage({ audienceRows, productIndex });
-    return built;
-  }
-
-  const fallback = __tdlsMenuPreloadData || loadFromLocalStorage();
-  if (fallback && isMeaningfulMenuData(fallback)) {
-    return fallback;
-  }
-
-  // No prior cache available; return what we have (but do NOT write it).
-  return built;
-}
-
-/**
- * ✅ CRITICAL FIX FOR “BLANK SOMETIMES”:
- * New:
- * - If awaitFresh=true and a refresh promise exists (or we start one), we await it and return the freshest snapshot.
- * - Default behavior stays the same for callers that want “instant snapshot”.
- */
-async function preloadMenuDataOnce({ backgroundRefresh = true, awaitFresh = false } = {}) {
-  // If we already have data, optionally start/await a refresh
-  if (__tdlsMenuPreloadData) {
-    if (backgroundRefresh) {
-      if (!__tdlsMenuPreloadPromise) {
-        __tdlsMenuPreloadPromise = fetchAndBuildFresh()
-          .then((fresh) => {
-            __tdlsMenuPreloadData = fresh;
-            return fresh;
-          })
-          .catch(() => __tdlsMenuPreloadData)
-          .finally(() => {
-            __tdlsMenuPreloadPromise = null;
-          });
-      }
-
-      if (awaitFresh && __tdlsMenuPreloadPromise) {
-        try {
-          await __tdlsMenuPreloadPromise;
-        } catch {
-          // ignore
-        }
-        return __tdlsMenuPreloadData;
-      }
-    }
-    return __tdlsMenuPreloadData;
-  }
-
-  // Try localStorage immediately
-  const cached = loadFromLocalStorage();
-  if (cached) {
-    __tdlsMenuPreloadData = cached;
-
-    if (backgroundRefresh) {
-      if (!__tdlsMenuPreloadPromise) {
-        __tdlsMenuPreloadPromise = fetchAndBuildFresh()
-          .then((fresh) => {
-            __tdlsMenuPreloadData = fresh;
-            return fresh;
-          })
-          .catch(() => __tdlsMenuPreloadData)
-          .finally(() => {
-            __tdlsMenuPreloadPromise = null;
-          });
-      }
-
-      if (awaitFresh && __tdlsMenuPreloadPromise) {
-        try {
-          await __tdlsMenuPreloadPromise;
-        } catch {
-          // ignore
-        }
-        return __tdlsMenuPreloadData;
-      }
-    }
-
-    return __tdlsMenuPreloadData;
-  }
-
-  // No cache: if a fetch is inflight, await it
-  if (__tdlsMenuPreloadPromise) return __tdlsMenuPreloadPromise;
-
-  __tdlsMenuPreloadPromise = fetchAndBuildFresh()
-    .then((fresh) => {
-      __tdlsMenuPreloadData = fresh;
-      return fresh;
-    })
-    .catch(() => {
-      __tdlsMenuPreloadData = { audienceRows: [], productIndex: new Map(), _fromCache: false };
-      return __tdlsMenuPreloadData;
-    })
-    .finally(() => {
-      __tdlsMenuPreloadPromise = null;
-    });
-
-  return __tdlsMenuPreloadPromise;
-}
-
-function runIdle(fn, timeout = 900) {
-  if (typeof window === "undefined") return;
-  const ric = window.requestIdleCallback;
-  if (typeof ric === "function") {
-    ric(() => fn(), { timeout });
-  } else {
-    window.setTimeout(() => fn(), Math.min(250, timeout));
-  }
-}
-
-// Optional helper: parent can call this on app load; safe no-op if already warmed.
-export function warmSlidingMenuBar() {
-  return preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: false });
-}
-
-/**
- * ✅ MUST-MOUNT PRELOADER (guarantees preload happens at website load)
- * Place <SlidingMenuBarPreloader/> in an always-mounted component (layout/navbar/bottom bar).
- */
-export function SlidingMenuBarPreloader() {
-  useEffect(() => {
-    runIdle(() => {
-      preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true }).catch(() => {});
-    });
-
-    const onVis = () => {
-      if (document.visibilityState === "visible") {
-        preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true }).catch(() => {});
-      }
-    };
-    document.addEventListener("visibilitychange", onVis, { passive: true });
-    return () => document.removeEventListener("visibilitychange", onVis);
-  }, []);
-
-  return null;
-}
-
-// Prime the in-memory snapshot from LS as soon as this chunk exists (no network).
-if (typeof window !== "undefined") {
-  try {
-    if (!__tdlsMenuPreloadData) {
-      const warm = loadFromLocalStorage();
-      if (warm) __tdlsMenuPreloadData = warm;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Start warming as soon as THIS chunk exists (still requires chunk to be loaded by being imported somewhere).
-  runIdle(() => {
-    preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: false }).catch(() => {});
-  });
-}
-
-/* ------------------------------- Component -------------------------------- */
 
 function CompactRowButton({
   active,
@@ -1260,46 +549,258 @@ function CompactRowButton({
   );
 }
 
-function Segmented({ value, onChange, items }) {
-  const btnFs = "clamp(9px, 2.5vw, 10px)";
+function MobileSelectRow({ active, title, subLeft, badge, onSelect, href, onNavigate }) {
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "stretch", width: "100%" }}>
+      <button
+        type="button"
+        onClick={onSelect}
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          padding: "10px 10px",
+          borderRadius: 12,
+          border: active ? "1px solid rgba(12,35,64,0.32)" : "1px solid rgba(0,0,0,0.06)",
+          background: active
+            ? "linear-gradient(135deg, rgba(12,35,64,0.10) 10%, rgba(191,167,80,0.14) 100%)"
+            : "rgba(255,255,255,0.78)",
+          boxShadow: active ? "0 10px 18px rgba(12,35,64,0.10)" : "0 8px 14px rgba(0,0,0,0.04)",
+          color: "#0c2340",
+          cursor: "pointer",
+          minWidth: 0,
+          textAlign: "left",
+        }}
+        aria-pressed={active}
+      >
+        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+          <div
+            style={{
+              fontWeight: 900,
+              letterSpacing: ".07em",
+              textTransform: "uppercase",
+              fontSize: "clamp(10px, 2.8vw, 11px)",
+              lineHeight: 1.2,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+            title={title}
+          >
+            {title}
+          </div>
+          {subLeft ? (
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: "clamp(9px, 2.5vw, 10px)",
+                color: "rgba(12,35,64,0.62)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+              title={subLeft}
+            >
+              {subLeft}
+            </div>
+          ) : null}
+        </div>
+
+        {typeof badge === "number" ? (
+          <span
+            style={{
+              flexShrink: 0,
+              padding: "4px 8px",
+              borderRadius: 999,
+              border: "1px solid rgba(12,35,64,0.14)",
+              background: "rgba(12,35,64,0.06)",
+              fontWeight: 900,
+              fontSize: 10,
+              letterSpacing: ".10em",
+              textTransform: "uppercase",
+            }}
+          >
+            {badge}
+          </span>
+        ) : null}
+      </button>
+
+      {href ? (
+        <Link
+          href={href}
+          prefetch
+          onClick={(e) => {
+            e.stopPropagation();
+            onNavigate?.();
+          }}
+          onTouchStart={(e) => e.stopPropagation()}
+          style={{
+            flexShrink: 0,
+            width: 74,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 12,
+            border: "1px solid rgba(12,35,64,0.18)",
+            background: "rgba(255,255,255,0.92)",
+            boxShadow: "0 10px 18px rgba(0,0,0,0.05)",
+            color: "#0c2340",
+            textDecoration: "none",
+            fontWeight: 900,
+            letterSpacing: ".12em",
+            textTransform: "uppercase",
+            fontSize: 10,
+          }}
+        >
+          Open
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+function SuggestionsDropdown({ suggestions, activeIndex, onPick, width = 420 }) {
   return (
     <div
       style={{
-        display: "flex",
-        width: "100%",
-        borderRadius: 999,
+        position: "absolute",
+        top: 42,
+        right: 0,
+        width,
+        maxWidth: "min(520px, 92vw)",
+        borderRadius: 16,
         border: "1px solid rgba(0,0,0,0.10)",
-        background: "rgba(255,255,255,0.92)",
-        boxShadow: "0 10px 18px rgba(0,0,0,0.05)",
+        background: "rgba(255,255,255,0.96)",
+        boxShadow: "0 22px 40px rgba(0,0,0,0.14)",
         overflow: "hidden",
+        zIndex: Z_PANEL + 2,
       }}
     >
-      {items.map((it) => {
-        const active = it.value === value;
-        return (
-          <button
-            key={it.value}
-            type="button"
-            onClick={() => onChange(it.value)}
-            style={{
-              flex: 1,
-              height: 32,
-              border: "none",
-              background: active ? "linear-gradient(135deg, #0c2340 10%, #163060 100%)" : "transparent",
-              color: active ? "#fffdf8" : "#0c2340",
-              fontWeight: 900,
-              letterSpacing: ".12em",
-              textTransform: "uppercase",
-              fontSize: btnFs,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-            aria-pressed={active}
-          >
-            {it.label}
-          </button>
-        );
-      })}
+      <div
+        style={{
+          padding: "10px 12px",
+          borderBottom: "1px solid rgba(0,0,0,0.08)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          background: "linear-gradient(135deg, rgba(255,255,255,0.98) 55%, rgba(247,243,231,0.96) 100%)",
+        }}
+      >
+        <div
+          style={{
+            fontWeight: 900,
+            letterSpacing: ".12em",
+            textTransform: "uppercase",
+            fontSize: 11,
+            color: "#0c2340",
+          }}
+        >
+          Suggestions
+        </div>
+        <Pill tone="ink" size="sm">
+          {suggestions.length}
+        </Pill>
+      </div>
+
+      <div
+        style={{
+          maxHeight: 340,
+          overflow: "auto",
+          padding: 8,
+          WebkitOverflowScrolling: "touch",
+          overscrollBehavior: "contain",
+          touchAction: "pan-y",
+        }}
+      >
+        {suggestions.map((s, idx) => {
+          const active = idx === activeIndex;
+          const tag = s.type === "PRODUCT" ? "Product" : s.type === "CATEGORY" ? "Category" : "Audience";
+          return (
+            <Link
+              key={`${s.type}-${s.slug}-${idx}`}
+              href={s.href}
+              prefetch
+              onMouseEnter={() => onPick?.({ type: "hover", idx })}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onPick?.({ type: "click", idx, href: s.href });
+              }}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onPick?.({ type: "click", idx, href: s.href });
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "10px 10px",
+                borderRadius: 12,
+                border: active ? "1px solid rgba(12,35,64,0.28)" : "1px solid rgba(0,0,0,0.06)",
+                background: active
+                  ? "linear-gradient(135deg, rgba(12,35,64,0.10) 10%, rgba(191,167,80,0.12) 100%)"
+                  : "rgba(255,255,255,0.78)",
+                textDecoration: "none",
+                color: "#0c2340",
+                boxShadow: active ? "0 10px 18px rgba(12,35,64,0.10)" : "0 8px 14px rgba(0,0,0,0.04)",
+                cursor: "pointer",
+                minWidth: 0,
+              }}
+            >
+              <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                <div
+                  style={{
+                    fontWeight: 900,
+                    letterSpacing: ".07em",
+                    textTransform: "uppercase",
+                    fontSize: 11,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                  title={s.name}
+                >
+                  {s.name}
+                </div>
+                <div
+                  style={{
+                    fontWeight: 800,
+                    fontSize: 10,
+                    color: "rgba(12,35,64,0.62)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                  title={s.meta || ""}
+                >
+                  {s.meta || ""}
+                </div>
+              </div>
+
+              <span
+                style={{
+                  flexShrink: 0,
+                  padding: "5px 8px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(12,35,64,0.14)",
+                  background: "rgba(12,35,64,0.06)",
+                  fontWeight: 900,
+                  fontSize: 10,
+                  letterSpacing: ".10em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {tag}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1312,50 +813,826 @@ function readCssVarPx(vars, fallbackPx) {
       const n = parseInt((raw || "").toString().replace("px", "").trim(), 10);
       if (Number.isFinite(n) && n > 40 && n < 240) return n;
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
   return fallbackPx;
 }
 
-function SkeletonList({ rows = 10, dense = false }) {
-  const h = dense ? 40 : 44;
-  const pad = dense ? "9px 9px" : "10px 10px";
-  return (
-    <div style={{ display: "grid", gap: dense ? 7 : 8 }}>
-      {Array.from({ length: rows }).map((_, i) => (
-        <div
-          key={i}
-          style={{
-            height: h,
-            borderRadius: 12,
-            border: "1px solid rgba(0,0,0,0.06)",
-            background: "linear-gradient(135deg, rgba(12,35,64,0.06) 10%, rgba(191,167,80,0.10) 100%)",
-            boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
-            padding: pad,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 10,
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: 1 }}>
-            <div style={{ height: 10, borderRadius: 999, background: "rgba(12,35,64,0.10)", width: `${60 + (i % 4) * 8}%` }} />
-            <div style={{ height: 8, borderRadius: 999, background: "rgba(12,35,64,0.08)", width: `${34 + (i % 5) * 6}%` }} />
-          </div>
-          <div style={{ height: 18, width: 46, borderRadius: 999, background: "rgba(12,35,64,0.08)" }} />
-        </div>
-      ))}
-    </div>
-  );
+/* ------------------------------ data model (CLEAN) ------------------------------ */
+
+const FETCH_TIMEOUT_MS = 16000;
+const LS_KEY = "tdls:slidingmenubar:data:v8";
+const LS_TS = "tdls:slidingmenubar:ts:v8";
+const LS_TTL_MS = 6 * 60 * 60 * 1000;
+
+let __menuPromise = null;
+let __menuData = null;
+let __menuLastGood = null;
+
+function unwrapStrapiList(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+
+  // Strapi direct: { data: [...] }
+  if (Array.isArray(payload?.data)) return payload.data;
+
+  // Some wrappers: { data: { data: [...] } }
+  if (payload?.data && Array.isArray(payload.data?.data)) return payload.data.data;
+
+  // Proxy wrapper already unwrapped? (handled earlier) — keep conservative:
+  if (payload?.ok && Array.isArray(payload?.data)) return payload.data;
+  if (payload?.ok && payload?.data && Array.isArray(payload.data?.data)) return payload.data.data;
+
+  return [];
 }
+
+/**
+ * ✅ FIX (critical): if /api/strapi returns { ok:false, ... } it is NOT data.
+ * Previously we treated it as “truthy” and stopped, causing: Audiences 0 / Categories 0.
+ */
+function unwrapProxyOk(raw) {
+  if (!raw || typeof raw !== "object") return raw;
+
+  if (Object.prototype.hasOwnProperty.call(raw, "ok")) {
+    if (raw.ok === true) return raw.data ?? null;
+    if (raw.ok === false) return null;
+  }
+
+  // Some error shapes: { error: ... } without data
+  if (raw?.error && raw?.data == null) return null;
+
+  return raw;
+}
+
+async function fetchFromStrapi(path) {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer =
+    controller && typeof window !== "undefined"
+      ? window.setTimeout(() => {
+          try {
+            controller.abort();
+          } catch {}
+        }, FETCH_TIMEOUT_MS)
+      : null;
+
+  const doFetch = async (url) => {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+    if (!res.ok) return null;
+
+    const raw = await res.json().catch(() => null);
+    const unwrapped = unwrapProxyOk(raw);
+    if (unwrapped == null) return null;
+
+    // If Strapi itself returns { error: ... } treat as failure
+    if (unwrapped?.error && unwrapped?.data == null) return null;
+
+    return unwrapped;
+  };
+
+  try {
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+    // ✅ primary (encoded)
+    const q1 = encodeURIComponent(normalizedPath);
+    const r1 = await doFetch(`/api/strapi?path=${q1}`);
+    if (r1 != null) return r1;
+
+    // ⚠️ fallback raw is unsafe for queries containing &, but kept for compatibility
+    const r2 = await doFetch(`/api/strapi?path=${normalizedPath}`);
+    if (r2 != null) return r2;
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
+}
+
+/**
+ * ✅ Hardened relation slug extraction:
+ * - supports Strapi relations, normalized objects, arrays, and string/enums
+ */
+function relSlugs(entity, keys) {
+  const e = normalizeEntity(entity) || {};
+  const out = [];
+
+  for (const k of keys) {
+    const v = e?.[k];
+    if (v == null) continue;
+
+    if (typeof v === "string" || typeof v === "number") {
+      const s = normSlug(v);
+      if (s) out.push(s);
+      continue;
+    }
+
+    if (v && typeof v === "object" && !Array.isArray(v) && !("data" in v)) {
+      const d = normalizeEntity(v) || v;
+      const s0 = normSlug(d?.slug || d?.handle || d?.key || d?.uid || d?.code || d?.name || d?.title || "");
+      if (s0) out.push(s0);
+    }
+
+    const arr = unwrapStrapiArray(v);
+    for (const rRaw of arr) {
+      if (rRaw == null) continue;
+
+      if (typeof rRaw === "string" || typeof rRaw === "number") {
+        const s1 = normSlug(rRaw);
+        if (s1) out.push(s1);
+        continue;
+      }
+
+      const r = normalizeEntity(rRaw) || {};
+      const s = normSlug(r.slug || r.handle || r.key || r.uid || r.code || r.name || r.title || "");
+      if (s) out.push(s);
+    }
+  }
+
+  return Array.from(new Set(out));
+}
+
+function relSlugNameMapFromProducts(products, relKeys) {
+  const keys = Array.isArray(relKeys) ? relKeys : [relKeys];
+  const m = new Map();
+
+  for (const pRaw of products || []) {
+    const p = normalizeEntity(pRaw) || {};
+
+    for (const relKey of keys) {
+      const v = p?.[relKey];
+      if (v == null) continue;
+
+      if (typeof v === "string" || typeof v === "number") {
+        const s = normSlug(v);
+        if (!s) continue;
+        const name = titleizeSlug(s);
+        if (!m.has(s)) m.set(s, name);
+        continue;
+      }
+
+      if (v && typeof v === "object" && !Array.isArray(v) && !("data" in v)) {
+        const r = normalizeEntity(v) || v;
+        const s = normSlug(r.slug || r.name || r.title || "");
+        if (s) {
+          const name = (r.name || r.title || r.label || "").toString().trim() || titleizeSlug(s);
+          if (!m.has(s)) m.set(s, name);
+        }
+      }
+
+      const arr = unwrapStrapiArray(v);
+      for (const rRaw of arr) {
+        if (rRaw == null) continue;
+
+        if (typeof rRaw === "string" || typeof rRaw === "number") {
+          const s = normSlug(rRaw);
+          if (!s) continue;
+          const name = titleizeSlug(s);
+          if (!m.has(s)) m.set(s, name);
+          continue;
+        }
+
+        const r = normalizeEntity(rRaw) || {};
+        const s = normSlug(r.slug || r.name || r.title || "");
+        if (!s) continue;
+        const name = (r.name || r.title || r.label || "").toString().trim() || titleizeSlug(s);
+        if (!m.has(s)) m.set(s, name);
+      }
+    }
+  }
+
+  return m;
+}
+
+function buildIndexFromAudienceSeed(audienceRowsStrapi) {
+  const prodById = new Map();
+  const audRows = [];
+
+  for (const aRaw of audienceRowsStrapi || []) {
+    const a = normalizeEntity(aRaw) || {};
+    const aSlug = normSlug(a.slug || a.name || a.title || "");
+    if (!aSlug) continue;
+
+    const aName = (a.name || a.title || "").toString().trim() || titleizeSlug(aSlug);
+
+    const aTierSlugs = relSlugs(a, [
+      "tiers",
+      "brand_tiers",
+      "collection_tiers",
+      "product_collections",
+      "events_products_collections",
+      "events_products_collection",
+      "event_products_collections",
+      "event_product_collections",
+    ]);
+
+    // ✅ extra hardening: products relation key can drift (still real, no placeholders)
+    const productRelationKeys = ["products", "items", "pieces", "product_list", "product_lists"];
+    const mergedProducts = [];
+    for (const k of productRelationKeys) {
+      const chunk = unwrapStrapiArray(a?.[k]).map(normalizeEntity).filter(Boolean);
+      for (const p of chunk) mergedProducts.push(p);
+    }
+
+    const prods = (mergedProducts.length ? mergedProducts : unwrapStrapiArray(a?.products).map(normalizeEntity))
+      .filter(Boolean)
+      .filter(isProductVisible);
+
+    const productIds = [];
+    for (const p of prods) {
+      if (!p?.id) continue;
+      productIds.push(p.id);
+      if (!prodById.has(p.id)) prodById.set(p.id, p);
+    }
+
+    audRows.push({
+      id: a.id ?? `aud-${aSlug}`,
+      slug: aSlug,
+      name: aName,
+      tierSlugs: aTierSlugs,
+      productIds: Array.from(new Set(productIds)),
+    });
+  }
+
+  const products = Array.from(prodById.values());
+
+  const productIndex = new Map();
+  for (const p of products) {
+    if (!isProductVisible(p)) continue;
+
+    const slug = normSlug(p.slug || "");
+    if (!p.id || !slug) continue;
+
+    const name = (p.name || p.title || "").toString().trim() || titleizeSlug(slug);
+
+    const tierSlugs = relSlugs(p, [
+      "tiers",
+      "brand_tiers",
+      "collection_tiers",
+      "product_collections",
+      "events_products_collections",
+      "events_products_collection",
+      "event_products_collections",
+      "event_product_collections",
+      "collections",
+      "collection",
+      "tier",
+      "tier_slug",
+      "tierSlug",
+    ]);
+
+    const categorySlugs = relSlugs(p, ["categories", "category", "product_categories", "product_category"]);
+    const subCategorySlugs = relSlugs(p, ["sub_categories", "sub_category", "subCategories", "subCategory"]);
+    const genderGroupSlugs = relSlugs(p, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]);
+    const ageGroupSlugs = relSlugs(p, ["age_groups", "age_group", "ageGroups", "ageGroup"]);
+
+    productIndex.set(p.id, {
+      id: p.id,
+      slug,
+      name,
+      tierSlugs,
+      categorySlugs,
+      subCategorySlugs,
+      genderGroupSlugs,
+      ageGroupSlugs,
+    });
+  }
+
+  const nameMaps = {
+    categories: relSlugNameMapFromProducts(products, ["categories", "category", "product_categories", "product_category"]),
+    subCategories: relSlugNameMapFromProducts(products, ["sub_categories", "sub_category", "subCategories", "subCategory"]),
+    genderGroups: relSlugNameMapFromProducts(products, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]),
+    ageGroups: relSlugNameMapFromProducts(products, ["age_groups", "age_group", "ageGroups", "ageGroup"]),
+  };
+
+  const validIds = new Set(Array.from(productIndex.keys()));
+  const cleanedAudRows = (audRows || [])
+    .map((a) => ({
+      ...a,
+      productIds: (a.productIds || []).filter((id) => validIds.has(id)),
+    }))
+    .filter((a) => (a.productIds || []).length > 0);
+
+  return { audienceRows: cleanedAudRows, productIndex, nameMaps };
+}
+
+/**
+ * ✅ STRICT Tier membership (NO GUESSING):
+ * - If tier selected:
+ *   - product must have a matching tier slug OR audience must have matching tier slug
+ * - If neither has tier links → it does NOT belong to any tier
+ */
+function productBelongsToTier({ tier, productTierSlugs, audienceTierMatch }) {
+  const t = normSlug(tier);
+  if (!t) return true;
+
+  if (productTierSlugs && productTierSlugs.length) return productTierSlugs.some((s) => tierMatches(t, s));
+  return !!audienceTierMatch;
+}
+
+function resolveNameFromMap(map, slug) {
+  const s = normSlug(slug);
+  if (!s) return "";
+  return map?.get?.(s) || titleizeSlug(s);
+}
+
+function audienceTierVerdict({ audienceRow, tierSlug, productIndex }) {
+  const ids = audienceRow?.productIds || [];
+  if (!ids.length) return { ok: false, count: 0 };
+
+  const aTierSlugs = audienceRow?.tierSlugs || [];
+  const audienceTierMatch = aTierSlugs.length ? aTierSlugs.some((s) => tierMatches(tierSlug, s)) : false;
+
+  let count = 0;
+  for (const id of ids) {
+    const p = productIndex.get(id);
+    if (!p) continue;
+    if (
+      productBelongsToTier({
+        tier: tierSlug,
+        productTierSlugs: p.tierSlugs,
+        audienceTierMatch,
+      })
+    ) {
+      count += 1;
+    }
+  }
+  return { ok: count > 0, count };
+}
+
+function deriveCategories({ tierSlug, audienceRow, productIndex, nameMaps }) {
+  const ids = audienceRow?.productIds || [];
+  const aTierSlugs = audienceRow?.tierSlugs || [];
+  const audienceTierMatch = aTierSlugs.length ? aTierSlugs.some((s) => tierMatches(tierSlug, s)) : false;
+
+  const counts = new Map();
+  for (const id of ids) {
+    const p = productIndex.get(id);
+    if (!p) continue;
+
+    if (
+      !productBelongsToTier({
+        tier: tierSlug,
+        productTierSlugs: p.tierSlugs,
+        audienceTierMatch,
+      })
+    )
+      continue;
+
+    for (const c of p.categorySlugs || []) counts.set(c, (counts.get(c) || 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([slug, count]) => ({ slug, name: resolveNameFromMap(nameMaps?.categories, slug), count }))
+    .filter((x) => x.slug && x.count > 0)
+    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.name.localeCompare(b.name)));
+}
+
+function deriveProducts({ tierSlug, audienceRow, categorySlug, productIndex, filters }) {
+  const ids = audienceRow?.productIds || [];
+  const aTierSlugs = audienceRow?.tierSlugs || [];
+  const audienceTierMatch = aTierSlugs.length ? aTierSlugs.some((s) => tierMatches(tierSlug, s)) : false;
+
+  const cat = categorySlug ? normSlug(categorySlug) : "";
+  const sc = normSlug(filters?.subCategory);
+  const gg = normSlug(filters?.genderGroup);
+  const ag = normSlug(filters?.ageGroup);
+
+  const out = [];
+  for (const id of ids) {
+    const p = productIndex.get(id);
+    if (!p) continue;
+
+    if (
+      !productBelongsToTier({
+        tier: tierSlug,
+        productTierSlugs: p.tierSlugs,
+        audienceTierMatch,
+      })
+    )
+      continue;
+
+    if (cat && !(p.categorySlugs || []).includes(cat)) continue;
+    if (sc && !(p.subCategorySlugs || []).includes(sc)) continue;
+    if (gg && !(p.genderGroupSlugs || []).includes(gg)) continue;
+    if (ag && !(p.ageGroupSlugs || []).includes(ag)) continue;
+
+    out.push({ id: p.id, slug: p.slug, name: p.name });
+  }
+
+  return out.sort((x, y) => (x.name || "").localeCompare(y.name || ""));
+}
+
+function buildFacetOptions({ baseProducts, productIndex, nameMaps }) {
+  const sub = new Map();
+  const gg = new Map();
+  const ag = new Map();
+
+  for (const p of baseProducts || []) {
+    const idx = p?.id ? productIndex.get(p.id) : null;
+    if (!idx) continue;
+
+    for (const s of idx.subCategorySlugs || []) sub.set(s, (sub.get(s) || 0) + 1);
+    for (const s of idx.genderGroupSlugs || []) gg.set(s, (gg.get(s) || 0) + 1);
+    for (const s of idx.ageGroupSlugs || []) ag.set(s, (ag.get(s) || 0) + 1);
+  }
+
+  const toArr = (m, mapNames) =>
+    Array.from(m.entries())
+      .map(([slug, count]) => ({ slug, name: resolveNameFromMap(mapNames, slug), count }))
+      .filter((x) => x.slug && x.count > 0)
+      .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.name.localeCompare(b.name)));
+
+  return {
+    subCategories: toArr(sub, nameMaps?.subCategories),
+    genderGroups: toArr(gg, nameMaps?.genderGroups),
+    ageGroups: toArr(ag, nameMaps?.ageGroups),
+  };
+}
+
+/* ------------------------------ search helpers ------------------------------ */
+
+function scoreMatch({ q, text }) {
+  const qq = (q || "").trim().toLowerCase();
+  const tt = (text || "").trim().toLowerCase();
+  if (!qq || !tt) return -1;
+  if (tt === qq) return 1000;
+  if (tt.startsWith(qq)) return 900;
+  const idx = tt.indexOf(qq);
+  if (idx >= 0) return 700 - idx;
+  return -1;
+}
+
+function makeSearchKey(name, slug) {
+  return `${(name || "").toString()} ${(slug || "").toString()}`.trim();
+}
+
+/* ------------------------------ preload + cache (CLEAN) ------------------------------ */
+
+function loadFromLocalStorage() {
+  if (!canUseLS()) return null;
+  const tsRaw = window.localStorage.getItem(LS_TS);
+  const ts = tsRaw ? parseInt(tsRaw, 10) : 0;
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  if (Date.now() - ts > LS_TTL_MS) return null;
+
+  const raw = window.localStorage.getItem(LS_KEY);
+  if (!raw) return null;
+
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const audienceRows = Array.isArray(parsed.audienceRows) ? parsed.audienceRows : [];
+  const products = Array.isArray(parsed.products) ? parsed.products : [];
+
+  const prodIndex = new Map();
+  for (const p of products) {
+    if (!p?.id || !p?.slug) continue;
+    prodIndex.set(p.id, p);
+  }
+
+  const nameMaps = {
+    categories: new Map(parsed?.nameMaps?.categories || []),
+    subCategories: new Map(parsed?.nameMaps?.subCategories || []),
+    genderGroups: new Map(parsed?.nameMaps?.genderGroups || []),
+    ageGroups: new Map(parsed?.nameMaps?.ageGroups || []),
+  };
+
+  return { audienceRows, productIndex: prodIndex, nameMaps, _fromCache: true };
+}
+
+function saveToLocalStorage({ audienceRows, productIndex, nameMaps }) {
+  if (!canUseLS()) return;
+  try {
+    const products = Array.from(productIndex.values()).slice(0, 2600);
+    window.localStorage.setItem(LS_TS, String(Date.now()));
+    window.localStorage.setItem(
+      LS_KEY,
+      JSON.stringify({
+        audienceRows: (audienceRows || []).slice(0, 1200),
+        products,
+        nameMaps: {
+          categories: Array.from((nameMaps?.categories || new Map()).entries()),
+          subCategories: Array.from((nameMaps?.subCategories || new Map()).entries()),
+          genderGroups: Array.from((nameMaps?.genderGroups || new Map()).entries()),
+          ageGroups: Array.from((nameMaps?.ageGroups || new Map()).entries()),
+        },
+      })
+    );
+  } catch {}
+}
+
+async function fetchAudienceSeedFromStrapi() {
+  const strict =
+    "/audience-categories?pagination[pageSize]=500" +
+    "&fields[0]=slug&fields[1]=name&fields[2]=title&fields[3]=order&fields[4]=priority" +
+    "&populate[tiers][fields][0]=slug&populate[tiers][fields][1]=name&populate[tiers][fields][2]=title" +
+    "&populate[products][fields][0]=slug&populate[products][fields][1]=name&populate[products][fields][2]=title&populate[products][fields][3]=status&populate[products][fields][4]=disable_frontend&populate[products][fields][5]=is_archived" +
+    "&populate[products][populate][categories][fields][0]=slug&populate[products][populate][categories][fields][1]=name&populate[products][populate][categories][fields][2]=title" +
+    "&populate[products][populate][sub_categories][fields][0]=slug&populate[products][populate][sub_categories][fields][1]=name&populate[products][populate][sub_categories][fields][2]=title" +
+    "&populate[products][populate][gender_groups][fields][0]=slug&populate[products][populate][gender_groups][fields][1]=name&populate[products][populate][gender_groups][fields][2]=title" +
+    "&populate[products][populate][age_groups][fields][0]=slug&populate[products][populate][age_groups][fields][1]=name&populate[products][populate][age_groups][fields][2]=title" +
+    "&populate[products][populate][tiers][fields][0]=slug&populate[products][populate][tiers][fields][1]=name&populate[products][populate][tiers][fields][2]=title" +
+    "&populate[products][populate][brand_tiers][fields][0]=slug&populate[products][populate][brand_tiers][fields][1]=name&populate[products][populate][brand_tiers][fields][2]=title" +
+    "&populate[products][populate][collection_tiers][fields][0]=slug&populate[products][populate][collection_tiers][fields][1]=name&populate[products][populate][collection_tiers][fields][2]=title" +
+    "&populate[products][populate][events_products_collections][fields][0]=slug&populate[products][populate][events_products_collections][fields][1]=name&populate[products][populate][events_products_collections][fields][2]=title" +
+    "&populate[products][populate][product_collections][fields][0]=slug&populate[products][populate][product_collections][fields][1]=name&populate[products][populate][product_collections][fields][2]=title";
+
+  let payload = await fetchFromStrapi(strict);
+  let audRows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  if (audRows.length) return audRows;
+
+  const safe1 = "/audience-categories?pagination[pageSize]=500&populate[products][populate]=*";
+  payload = await fetchFromStrapi(safe1);
+  audRows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  if (audRows.length) return audRows;
+
+  const safe2 = "/audience-categories?pagination[pageSize]=500&populate=*";
+  payload = await fetchFromStrapi(safe2);
+  audRows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  return audRows;
+}
+
+async function fetchProductsFallback() {
+  const strict =
+    "/products?pagination[pageSize]=500" +
+    "&fields[0]=slug&fields[1]=name&fields[2]=title&fields[3]=status&fields[4]=disable_frontend&fields[5]=is_archived" +
+    "&populate[audience_categories][fields][0]=slug&populate[audience_categories][fields][1]=name&populate[audience_categories][fields][2]=title" +
+    "&populate[categories][fields][0]=slug&populate[categories][fields][1]=name&populate[categories][fields][2]=title" +
+    "&populate[sub_categories][fields][0]=slug&populate[sub_categories][fields][1]=name&populate[sub_categories][fields][2]=title" +
+    "&populate[gender_groups][fields][0]=slug&populate[gender_groups][fields][1]=name&populate[gender_groups][fields][2]=title" +
+    "&populate[age_groups][fields][0]=slug&populate[age_groups][fields][1]=name&populate[age_groups][fields][2]=title" +
+    "&populate[tiers][fields][0]=slug&populate[tiers][fields][1]=name&populate[tiers][fields][2]=title" +
+    "&populate[brand_tiers][fields][0]=slug&populate[brand_tiers][fields][1]=name&populate[brand_tiers][fields][2]=title" +
+    "&populate[collection_tiers][fields][0]=slug&populate[collection_tiers][fields][1]=name&populate[collection_tiers][fields][2]=title" +
+    "&populate[events_products_collections][fields][0]=slug&populate[events_products_collections][fields][1]=name&populate[events_products_collections][fields][2]=title" +
+    "&populate[product_collections][fields][0]=slug&populate[product_collections][fields][1]=name&populate[product_collections][fields][2]=title";
+
+  let payload = await fetchFromStrapi(strict);
+  let rows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  if (rows.length) return rows;
+
+  const safe = "/products?pagination[pageSize]=500&populate=*";
+  payload = await fetchFromStrapi(safe);
+  rows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  return rows;
+}
+
+function buildIndexFallbackFromProducts(products) {
+  const audMap = new Map();
+  const productIndex = new Map();
+
+  for (const p0 of products || []) {
+    const p = normalizeEntity(p0) || {};
+    if (!isProductVisible(p)) continue;
+
+    const slug = normSlug(p.slug || "");
+    if (!p.id || !slug) continue;
+
+    const name = (p.name || p.title || "").toString().trim() || titleizeSlug(slug);
+
+    const tierSlugs = relSlugs(p, [
+      "tiers",
+      "brand_tiers",
+      "collection_tiers",
+      "product_collections",
+      "events_products_collections",
+      "events_products_collection",
+      "event_products_collections",
+      "event_product_collections",
+      "collections",
+      "collection",
+      "tier",
+      "tier_slug",
+      "tierSlug",
+    ]);
+
+    const categorySlugs = relSlugs(p, ["categories", "category", "product_categories", "product_category"]);
+    const subCategorySlugs = relSlugs(p, ["sub_categories", "sub_category", "subCategories", "subCategory"]);
+    const genderGroupSlugs = relSlugs(p, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]);
+    const ageGroupSlugs = relSlugs(p, ["age_groups", "age_group", "ageGroups", "ageGroup"]);
+
+    productIndex.set(p.id, {
+      id: p.id,
+      slug,
+      name,
+      tierSlugs,
+      categorySlugs,
+      subCategorySlugs,
+      genderGroupSlugs,
+      ageGroupSlugs,
+    });
+
+    const audienceKeys = ["audience_categories", "audiences", "audience_category", "audienceCategory"];
+    const auds = [];
+    for (const k of audienceKeys) {
+      const chunk = unwrapStrapiArray(p?.[k]).map(normalizeEntity).filter(Boolean);
+      for (const a of chunk) auds.push(a);
+    }
+
+    for (const a of auds) {
+      const aSlug = normSlug(a.slug || a.name || a.title || "");
+      if (!aSlug) continue;
+      const aName = (a.name || a.title || "").toString().trim() || titleizeSlug(aSlug);
+
+      const aTierSlugs = relSlugs(a, [
+        "tiers",
+        "brand_tiers",
+        "collection_tiers",
+        "product_collections",
+        "events_products_collections",
+        "events_products_collection",
+        "event_products_collections",
+        "event_product_collections",
+      ]);
+
+      const prev = audMap.get(aSlug);
+      if (!prev) {
+        audMap.set(aSlug, {
+          id: a.id ?? `aud-${aSlug}`,
+          slug: aSlug,
+          name: aName,
+          tierSlugs: aTierSlugs,
+          productIds: [p.id],
+        });
+      } else {
+        prev.productIds.push(p.id);
+        if (aTierSlugs?.length) {
+          prev.tierSlugs = Array.from(new Set([...(prev.tierSlugs || []), ...aTierSlugs]));
+        }
+      }
+    }
+  }
+
+  const audienceRows = Array.from(audMap.values())
+    .map((a) => ({
+      ...a,
+      productIds: Array.from(new Set(a.productIds)),
+    }))
+    .filter((a) => (a.productIds || []).length > 0);
+
+  const nameMaps = {
+    categories: relSlugNameMapFromProducts(products, ["categories", "category", "product_categories", "product_category"]),
+    subCategories: relSlugNameMapFromProducts(products, ["sub_categories", "sub_category", "subCategories", "subCategory"]),
+    genderGroups: relSlugNameMapFromProducts(products, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]),
+    ageGroups: relSlugNameMapFromProducts(products, ["age_groups", "age_group", "ageGroups", "ageGroup"]),
+  };
+
+  return { audienceRows, productIndex, nameMaps };
+}
+
+async function fetchAndBuildFresh() {
+  // ✅ PRIMARY: Products-first (reliable Tier↔Audience↔Category join)
+  let built = null;
+
+  const prods = await fetchProductsFallback();
+  if (prods && prods.length) {
+    built = buildIndexFallbackFromProducts(prods || []);
+  }
+
+  // ✅ BACKUP: Audience seed (only if products fetch did not produce usable structure)
+  const meaningfulPrimary =
+    (built?.audienceRows?.length || 0) > 0 && (built?.productIndex?.size || 0) > 0;
+
+  if (!meaningfulPrimary) {
+    const audSeed = await fetchAudienceSeedFromStrapi();
+    if (audSeed && audSeed.length) {
+      built = buildIndexFromAudienceSeed(audSeed);
+    }
+  }
+
+  const meaningful = (built?.audienceRows?.length || 0) > 0 && (built?.productIndex?.size || 0) > 0;
+  if (meaningful) {
+    saveToLocalStorage(built);
+    __menuLastGood = built;
+    return { ...built, _fromCache: false };
+  }
+
+  const fallback = __menuLastGood || __menuData || loadFromLocalStorage();
+  if (fallback?.audienceRows?.length && (fallback?.productIndex?.size || 0) > 0) return fallback;
+
+  return {
+    audienceRows: [],
+    productIndex: new Map(),
+    nameMaps: {
+      categories: new Map(),
+      subCategories: new Map(),
+      genderGroups: new Map(),
+      ageGroups: new Map(),
+    },
+  };
+}
+
+/**
+ * ✅ FIX (critical): when refresh is triggered, return the refresh promise (fresh data),
+ * not the stale snapshot. This is what makes options actually appear after fetch.
+ */
+async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
+  // If a fetch is already in-flight, await it
+  if (__menuPromise) return __menuPromise;
+
+  // Ensure we have a snapshot for instant usage
+  if (!__menuData) {
+    const cached = loadFromLocalStorage();
+    if (cached) {
+      __menuData = cached;
+      __menuLastGood = __menuLastGood || cached;
+      if (!backgroundRefresh) return __menuData;
+    }
+  } else {
+    if (!backgroundRefresh) return __menuData;
+  }
+
+  // Start (or refresh) the singleton fetch and return it so callers can setState with fresh data
+  __menuPromise = fetchAndBuildFresh()
+    .then((fresh) => {
+      __menuData = fresh;
+      return fresh;
+    })
+    .catch(() => {
+      const fallback = __menuLastGood || __menuData || loadFromLocalStorage();
+      __menuData =
+        fallback ||
+        ({
+          audienceRows: [],
+          productIndex: new Map(),
+          nameMaps: { categories: new Map(), subCategories: new Map(), genderGroups: new Map(), ageGroups: new Map() },
+        });
+      return __menuData;
+    })
+    .finally(() => {
+      __menuPromise = null;
+    });
+
+  return __menuPromise;
+}
+
+export function warmSlidingMenuBar() {
+  return preloadMenuDataOnce({ backgroundRefresh: true });
+}
+
+export function SlidingMenuBarPreloader() {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const run = () => {
+      try {
+        warmSlidingMenuBar();
+      } catch {}
+    };
+
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(run, { timeout: 1200 });
+      return () => {
+        try {
+          window.cancelIdleCallback?.(id);
+        } catch {}
+      };
+    }
+
+    const t = window.setTimeout(run, 220);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  return null;
+}
+
+// Auto-warm (only once per load; no UI change)
+if (typeof window !== "undefined") {
+  try {
+    if (!window.__tdlsSlidingMenuBarAutoWarm) {
+      window.__tdlsSlidingMenuBarAutoWarm = true;
+
+      const kick = () => {
+        try {
+          warmSlidingMenuBar();
+        } catch {}
+      };
+
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(kick, { timeout: 1400 });
+      else window.setTimeout(kick, 240);
+
+      document.addEventListener(
+        "visibilitychange",
+        () => {
+          try {
+            if (document.visibilityState === "visible") warmSlidingMenuBar();
+          } catch {}
+        },
+        { passive: true }
+      );
+    }
+  } catch {}
+}
+
+/* ------------------------------ Component ------------------------------ */
 
 export default function Slidingmenubar({ open, onClose }) {
   const router = useRouter();
-
-  // ✅ One-time warm snapshot for FIRST render (prevents “blank first paint”).
-  const warmRef = useRef(null);
-  if (warmRef.current === null) warmRef.current = getWarmSnapshot();
 
   const [menuWidth, setMenuWidth] = useState(MENU_WIDTH_DESKTOP);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -1372,9 +1649,18 @@ export default function Slidingmenubar({ open, onClose }) {
 
   const [q, setQ] = useState("");
 
-  const [audienceRows, setAudienceRows] = useState(() => warmRef.current?.audienceRows || []);
-  const [productIndex, setProductIndex] = useState(() => warmRef.current?.productIndex || new Map());
-  const [hydrated, setHydrated] = useState(() => !!warmRef.current);
+  const [audienceRows, setAudienceRows] = useState([]);
+  const [productIndex, setProductIndex] = useState(() => new Map());
+  const [nameMaps, setNameMaps] = useState(() => ({
+    categories: new Map(),
+    subCategories: new Map(),
+    genderGroups: new Map(),
+    ageGroups: new Map(),
+  }));
+  const [hydrated, setHydrated] = useState(false);
+
+  // ✅ new: keeps “Loading…” accurate even if an empty snapshot existed before
+  const [loading, setLoading] = useState(true);
 
   const [bottomBarHeight, setBottomBarHeight] = useState(DEFAULT_BOTTOM_FLOATING_BAR_HEIGHT);
 
@@ -1385,39 +1671,21 @@ export default function Slidingmenubar({ open, onClose }) {
   const searchWrapRef = useRef(null);
 
   const [mobileSection, setMobileSection] = useState("audiences"); // audiences | categories | products
-
   const panelRef = useRef(null);
-
-  // ✅ last-good snapshot in this component (never allow “empty overwrite” in UI).
-  const lastGoodRef = useRef(null);
-  useEffect(() => {
-    if (isMeaningfulMenuData({ audienceRows, productIndex })) {
-      lastGoodRef.current = { audienceRows, productIndex };
-    }
-  }, [audienceRows, productIndex]);
-
-  // ✅ TRUE readiness: audienceRows must have products + productIndex must be ready
-  const hasMenuData = useMemo(() => {
-    return productIndex instanceof Map && productIndex.size > 0 && Array.isArray(audienceRows) && audienceRows.length > 0 && hasAnyAudienceProducts(audienceRows);
-  }, [audienceRows, productIndex]);
-
-  const anyTierSignals = useMemo(() => computeAnyTierSignals(productIndex, audienceRows), [productIndex, audienceRows]);
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
   const clickShieldHeight = panelTop + TOP_CLICK_SHIELD_EXTRA;
 
-  // ✅ Desktop hover selection: not hypersensitive (small delay)
   const hoverTimersRef = useRef({ aud: null, cat: null });
   const scheduleHoverSelect = useCallback((kind, slug) => {
     if (typeof window === "undefined") return;
-    const ms = 110; // subtle delay prevents hypersensitivity
+    const ms = 110;
     const key = kind === "aud" ? "aud" : "cat";
-
     if (hoverTimersRef.current[key]) window.clearTimeout(hoverTimersRef.current[key]);
     hoverTimersRef.current[key] = window.setTimeout(() => {
       if (kind === "aud") {
         setHoverAudienceSlug(slug);
-        setHoverCategorySlug(""); // ✅ safety: reset category when audience changes
+        setHoverCategorySlug("");
       } else {
         setHoverCategorySlug(slug);
       }
@@ -1439,6 +1707,7 @@ export default function Slidingmenubar({ open, onClose }) {
     };
   }, []);
 
+  // VisualViewport CSS var (unchanged)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -1461,110 +1730,63 @@ export default function Slidingmenubar({ open, onClose }) {
     };
   }, []);
 
-  // ✅ Always hydrate: instant warm snapshot + awaitFresh so the UI gets real data
+  // ✅ Hydrate immediately from singleton/LS, then await fresh build (FIXED)
   useEffect(() => {
     let alive = true;
 
-    // Apply warm snapshot immediately
-    const warm = getWarmSnapshot();
-    if (warm && alive) {
-      if (Array.isArray(warm.audienceRows)) setAudienceRows(warm.audienceRows);
-      if (warm.productIndex instanceof Map) setProductIndex(warm.productIndex);
+    // instant snapshot
+    if (!__menuData) {
+      const cached = loadFromLocalStorage();
+      if (cached) {
+        __menuData = cached;
+        __menuLastGood = __menuLastGood || cached;
+      }
+    }
+
+    if (__menuData && alive) {
+      setAudienceRows(__menuData.audienceRows || []);
+      setProductIndex(__menuData.productIndex || new Map());
+      setNameMaps(
+        __menuData.nameMaps || {
+          categories: new Map(),
+          subCategories: new Map(),
+          genderGroups: new Map(),
+          ageGroups: new Map(),
+        }
+      );
       setHydrated(true);
+
+      const hasSnap =
+        (__menuData?.audienceRows?.length || 0) > 0 && (__menuData?.productIndex?.size || 0) > 0;
+      if (hasSnap) setLoading(false);
     }
 
     (async () => {
-      const data = await preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true });
-      if (!alive) return;
+      try {
+        setLoading(true);
+        const data = await preloadMenuDataOnce({ backgroundRefresh: true }); // ✅ now awaits fresh, not stale
+        if (!alive) return;
 
-      if (isMeaningfulMenuData(data)) {
-        setAudienceRows(data.audienceRows || []);
-        setProductIndex(data.productIndex || new Map());
+        setAudienceRows(data?.audienceRows || []);
+        setProductIndex(data?.productIndex || new Map());
+        setNameMaps(
+          data?.nameMaps || {
+            categories: new Map(),
+            subCategories: new Map(),
+            genderGroups: new Map(),
+            ageGroups: new Map(),
+          }
+        );
         setHydrated(true);
-        return;
+      } finally {
+        if (alive) setLoading(false);
       }
-
-      const last = lastGoodRef.current;
-      if (last && isMeaningfulMenuData(last)) {
-        setAudienceRows(last.audienceRows || []);
-        setProductIndex(last.productIndex || new Map());
-        setHydrated(true);
-        return;
-      }
-
-      setHydrated(true);
     })();
 
     return () => {
       alive = false;
     };
   }, []);
-
-  // ✅ When opening, ensure we immediately apply warm snapshot and actively await fresh (plus limited retry).
-  useEffect(() => {
-    if (!open) return;
-
-    let alive = true;
-    let tries = 0;
-    let t = null;
-
-    const applyLastGoodOrWarm = () => {
-      const last = lastGoodRef.current;
-      if (last && isMeaningfulMenuData(last)) {
-        setAudienceRows(last.audienceRows || []);
-        setProductIndex(last.productIndex || new Map());
-        setHydrated(true);
-        return true;
-      }
-
-      const warm = getWarmSnapshot();
-      if (warm && isMeaningfulMenuData(warm)) {
-        setAudienceRows(warm.audienceRows || []);
-        setProductIndex(warm.productIndex || new Map());
-        setHydrated(true);
-        return true;
-      }
-
-      return false;
-    };
-
-    applyLastGoodOrWarm();
-
-    const attempt = async () => {
-      try {
-        const data = await preloadMenuDataOnce({ backgroundRefresh: true, awaitFresh: true });
-        if (!alive) return;
-
-        if (isMeaningfulMenuData(data)) {
-          setAudienceRows(data.audienceRows || []);
-          setProductIndex(data.productIndex || new Map());
-          setHydrated(true);
-          return;
-        }
-
-        applyLastGoodOrWarm();
-      } catch {
-        applyLastGoodOrWarm();
-      }
-
-      tries += 1;
-      if (!alive) return;
-
-      const stillEmpty = !(lastGoodRef.current && isMeaningfulMenuData(lastGoodRef.current)) && !hasMenuData;
-      if (stillEmpty && tries <= 3) {
-        const delay = 600 * Math.pow(2, tries);
-        t = window.setTimeout(attempt, delay);
-      }
-    };
-
-    attempt();
-
-    return () => {
-      alive = false;
-      if (t) window.clearTimeout(t);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   useEffect(() => {
     function handleResize() {
@@ -1657,9 +1879,7 @@ export default function Slidingmenubar({ open, onClose }) {
           stored.push({ el, prev: el.style.pointerEvents });
           el.style.pointerEvents = "none";
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
     disabledNodesRef.current = stored;
 
@@ -1686,33 +1906,28 @@ export default function Slidingmenubar({ open, onClose }) {
     onClose?.();
   }, [onClose]);
 
-  /**
-   * ✅ Mobile hypersensitivity fix:
-   * - Close ONLY on true OUTSIDE "tap" (pointer up) that started outside AND ended outside.
-   * - Ignore drags/swipes (movement threshold) so scrolling near edges won't close.
-   * - Use composedPath so taps on panel edges/children never count as outside.
-   */
+  // ✅ Close only on true outside tap (unchanged)
   useEffect(() => {
     if (!open) return;
 
     let active = null;
 
     const isInsidePanel = (evt) => {
-      const panelEl =
-        panelRef.current || document.getElementById(PANEL_ID) || document.getElementById(LEGACY_PANEL_ID);
-
+      const panelEl = panelRef.current || document.getElementById(PANEL_ID) || document.getElementById(LEGACY_PANEL_ID);
       if (!panelEl) return false;
+
       const t = evt?.target;
       if (panelEl === t) return true;
       if (t && panelEl.contains(t)) return true;
+
       const path = typeof evt?.composedPath === "function" ? evt.composedPath() : null;
       if (path && Array.isArray(path) && path.includes(panelEl)) return true;
+
       return false;
     };
 
     const onPointerDownCapture = (e) => {
       if (!e?.isPrimary) return;
-
       const startedInside = isInsidePanel(e);
       active = {
         id: e.pointerId,
@@ -1726,20 +1941,16 @@ export default function Slidingmenubar({ open, onClose }) {
 
     const onPointerMoveCapture = (e) => {
       if (!active || e.pointerId !== active.id) return;
-
       const dx = (e.clientX ?? 0) - active.x;
       const dy = (e.clientY ?? 0) - active.y;
-
       const movePx = active.pointerType === "touch" ? 16 : 10;
       if (dx * dx + dy * dy >= movePx * movePx) active.moved = true;
     };
 
     const onPointerUpCapture = (e) => {
       if (!active || e.pointerId !== active.id) return;
-
       const endedInside = isInsidePanel(e);
       const shouldClose = !active.startedInside && !endedInside && !active.moved;
-
       active = null;
       if (shouldClose) handleClose();
     };
@@ -1780,24 +1991,28 @@ export default function Slidingmenubar({ open, onClose }) {
     setMobileSection("audiences");
   }, []);
 
+  // ✅ Audience list for tier (STRICT)
   const audiencesForTier = useMemo(() => {
     const tier = normSlug(tierSlug);
     const out = [];
 
-    for (const row of audienceRows || []) {
-      const a = normalizeEntity(row) || {};
-      const slug = normSlug(a.slug || pickTextForSlug(a));
-      const name = pickName(a) || titleizeSlug(slug);
+    for (const a of audienceRows || []) {
+      const slug = normSlug(a?.slug);
       if (!slug) continue;
+      const name = (a?.name || "").toString().trim() || titleizeSlug(slug);
 
-      const verdict = audienceTierVerdict({ audience: a, tierSlug: tier, productIndex, anyTierSignals });
+      const verdict = audienceTierVerdict({
+        audienceRow: a,
+        tierSlug: tier,
+        productIndex,
+      });
+
       if (!verdict.ok) continue;
-
       out.push({ slug, name, count: verdict.count, raw: a });
     }
 
     return out.sort((x, y) => (y.count !== x.count ? y.count - x.count : x.name.localeCompare(y.name)));
-  }, [audienceRows, tierSlug, productIndex, anyTierSignals]);
+  }, [audienceRows, tierSlug, productIndex]);
 
   const filteredAudiences = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -1805,7 +2020,6 @@ export default function Slidingmenubar({ open, onClose }) {
     return audiencesForTier.filter((a) => a.name.toLowerCase().includes(qq) || a.slug.includes(qq));
   }, [q, audiencesForTier]);
 
-  // ✅ SAFETY: ensure selected audience slug always exists
   const flyAudienceSlug = useMemo(() => {
     const list = (filteredAudiences && filteredAudiences.length ? filteredAudiences : audiencesForTier) || [];
     const first = list?.[0]?.slug || "";
@@ -1821,8 +2035,13 @@ export default function Slidingmenubar({ open, onClose }) {
 
   const categories = useMemo(() => {
     if (!flyAudience?.raw) return [];
-    return deriveCategories({ tierSlug, audience: flyAudience.raw, productIndex, anyTierSignals });
-  }, [flyAudience, tierSlug, productIndex, anyTierSignals]);
+    return deriveCategories({
+      tierSlug,
+      audienceRow: flyAudience.raw,
+      productIndex,
+      nameMaps,
+    });
+  }, [flyAudience, tierSlug, productIndex, nameMaps]);
 
   const filteredCategories = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -1830,7 +2049,6 @@ export default function Slidingmenubar({ open, onClose }) {
     return categories.filter((c) => c.name.toLowerCase().includes(qq) || c.slug.includes(qq));
   }, [q, categories]);
 
-  // ✅ SAFETY: ensure selected category slug always exists
   const flyCategorySlug = useMemo(() => {
     const list = (filteredCategories && filteredCategories.length ? filteredCategories : categories) || [];
     const first = list?.[0]?.slug || "";
@@ -1848,30 +2066,28 @@ export default function Slidingmenubar({ open, onClose }) {
     if (!flyAudience?.raw) return [];
     return deriveProducts({
       tierSlug,
-      audience: flyAudience.raw,
+      audienceRow: flyAudience.raw,
       categorySlug: flyCategorySlug,
       productIndex,
-      anyTierSignals,
       filters: { subCategory: "", genderGroup: "", ageGroup: "" },
     });
-  }, [flyAudience, tierSlug, flyCategorySlug, productIndex, anyTierSignals]);
+  }, [flyAudience, tierSlug, flyCategorySlug, productIndex]);
 
-  const facetOptions = useMemo(() => buildFacetOptions({ baseProducts: baseProductsForFacets, productIndex }), [
-    baseProductsForFacets,
-    productIndex,
-  ]);
+  const facetOptions = useMemo(
+    () => buildFacetOptions({ baseProducts: baseProductsForFacets, productIndex, nameMaps }),
+    [baseProductsForFacets, productIndex, nameMaps]
+  );
 
   const products = useMemo(() => {
     if (!flyAudience?.raw) return [];
     return deriveProducts({
       tierSlug,
-      audience: flyAudience.raw,
+      audienceRow: flyAudience.raw,
       categorySlug: flyCategorySlug,
       productIndex,
-      anyTierSignals,
       filters,
     });
-  }, [flyAudience, tierSlug, flyCategorySlug, productIndex, anyTierSignals, filters]);
+  }, [flyAudience, tierSlug, flyCategorySlug, productIndex, filters]);
 
   const filteredProducts = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -1879,38 +2095,35 @@ export default function Slidingmenubar({ open, onClose }) {
     return products.filter((p) => p.name.toLowerCase().includes(qq) || p.slug.includes(qq));
   }, [q, products]);
 
+  // Tier-wide (for suggestions)
   const tierAllProducts = useMemo(() => {
     const map = new Map();
     for (const a of audiencesForTier || []) {
       if (!a?.raw) continue;
       const list = deriveProducts({
         tierSlug,
-        audience: a.raw,
+        audienceRow: a.raw,
         categorySlug: "",
         productIndex,
-        anyTierSignals,
         filters: { subCategory: "", genderGroup: "", ageGroup: "" },
       });
-      for (const p of list || []) {
-        if (!p?.slug) continue;
-        if (!map.has(p.slug)) map.set(p.slug, p);
-      }
+      for (const p of list || []) if (p?.slug && !map.has(p.slug)) map.set(p.slug, p);
     }
     return Array.from(map.values()).sort((x, y) => (x.name || "").localeCompare(y.name || ""));
-  }, [audiencesForTier, tierSlug, productIndex, anyTierSignals]);
+  }, [audiencesForTier, tierSlug, productIndex]);
 
   const tierAllCategories = useMemo(() => {
     const m = new Map();
     for (const a of audiencesForTier || []) {
       if (!a?.raw) continue;
-      const cats = deriveCategories({ tierSlug, audience: a.raw, productIndex, anyTierSignals });
+      const cats = deriveCategories({ tierSlug, audienceRow: a.raw, productIndex, nameMaps });
       for (const c of cats || []) {
         if (!c?.slug) continue;
         const prev = m.get(c.slug);
         if (!prev) {
           m.set(c.slug, {
             slug: c.slug,
-            name: c.name || titleizeSlug(c.slug),
+            name: c.name || resolveNameFromMap(nameMaps?.categories, c.slug),
             count: c.count || 0,
             bestAudienceSlug: a.slug,
             bestAudienceCount: c.count || 0,
@@ -1927,7 +2140,7 @@ export default function Slidingmenubar({ open, onClose }) {
     return Array.from(m.values()).sort((x, y) =>
       y.count !== x.count ? y.count - x.count : (x.name || "").localeCompare(y.name || "")
     );
-  }, [audiencesForTier, tierSlug, productIndex, anyTierSignals]);
+  }, [audiencesForTier, tierSlug, productIndex, nameMaps]);
 
   const suggestions = useMemo(() => {
     const qq = q.trim();
@@ -1954,7 +2167,7 @@ export default function Slidingmenubar({ open, onClose }) {
         return {
           type: "CATEGORY",
           slug: c.slug,
-          name: c.name || titleizeSlug(c.slug),
+          name: c.name || resolveNameFromMap(nameMaps?.categories, c.slug),
           href: buildCollectionsHref({ tier: tierSlug, audience: audSlug, category: c.slug }),
           score: Math.max(scoreMatch({ q: ql, text: makeSearchKey(c.name, c.slug) }), 0) + (c.count || 0) * 0.25,
           meta: `${c.count || 0} products`,
@@ -1978,17 +2191,14 @@ export default function Slidingmenubar({ open, onClose }) {
       .slice(0, 10);
 
     return [...aud, ...cat, ...prod].slice(0, 14);
-  }, [q, audiencesForTier, tierAllCategories, tierAllProducts, tierSlug]);
+  }, [q, audiencesForTier, tierAllCategories, tierAllProducts, tierSlug, nameMaps]);
 
   const showRefine =
     (facetOptions.subCategories?.length || 0) > 0 ||
     (facetOptions.genderGroups?.length || 0) > 0 ||
     (facetOptions.ageGroups?.length || 0) > 0;
 
-  // Keep preload mounted behavior when open=false (if parent renders always).
-  if (!open) {
-    return <span aria-hidden="true" style={{ display: "none" }} />;
-  }
+  if (!open) return <span aria-hidden="true" style={{ display: "none" }} />;
 
   const panelBottom = bottomBarHeight + BOTTOM_GAP;
   const headerIsMobile = !isDesktop;
@@ -1997,28 +2207,21 @@ export default function Slidingmenubar({ open, onClose }) {
     ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${panelTop + panelBottom}px)` }
     : null;
 
-  const goViewAllHref =
-    flyAudienceSlug
-      ? buildCollectionsHref({
-          tier: tierSlug,
-          audience: flyAudienceSlug,
-          category: flyCategorySlug,
-          subCategory: selectedSubCategory,
-          genderGroup: selectedGenderGroup,
-          ageGroup: selectedAgeGroup,
-        })
-      : "";
+  const goViewAllHref = flyAudienceSlug
+    ? buildCollectionsHref({
+        tier: tierSlug,
+        audience: flyAudienceSlug,
+        category: flyCategorySlug,
+        subCategory: selectedSubCategory,
+        genderGroup: selectedGenderGroup,
+        ageGroup: selectedAgeGroup,
+      })
+    : "";
 
-  // Mobile “See all” helpers
-  const goAudienceAllHref = flyAudienceSlug ? buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug }) : "";
-  const goCategoryAllHref =
-    flyAudienceSlug && flyCategorySlug
-      ? buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: flyCategorySlug })
-      : "";
+  const showLoadingHint = loading && !(audienceRows?.length || 0) && productIndex.size === 0;
 
   return (
     <>
-      {/* Click shield kept for compatibility, but MUST NOT block panel interactions */}
       <div
         style={{
           position: "fixed",
@@ -2091,31 +2294,26 @@ export default function Slidingmenubar({ open, onClose }) {
           }}
         >
           {headerIsMobile ? (
-            /* ---------------- Mobile header: NO search bar; more space for products ---------------- */
             <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  minWidth: 0,
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, minWidth: 0 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <Pill tone="gold" size="sm">
                       {tierName}
                     </Pill>
                     <Pill tone="ink" size="sm">
-                      {hasMenuData ? filteredProducts.length : "…"}
+                      {filteredProducts.length}
                     </Pill>
                     {flyAudienceSlug ? <Pill size="sm">{titleizeSlug(flyAudienceSlug)}</Pill> : null}
                     {flyCategorySlug ? <Pill size="sm">{titleizeSlug(flyCategorySlug)}</Pill> : null}
+                    {showLoadingHint ? (
+                      <Pill tone="neutral" size="sm">
+                        Loading…
+                      </Pill>
+                    ) : null}
                   </div>
                 </div>
 
-                {/* ✅ Mobile Close: reduced sizing; auto-scales down */}
                 <button
                   type="button"
                   onClick={handleClose}
@@ -2159,38 +2357,22 @@ export default function Slidingmenubar({ open, onClose }) {
               />
             </div>
           ) : (
-            /* ---------------- Desktop header: preserved (includes search) ---------------- */
             <>
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <Pill tone="gold" size={headerIsMobile ? "sm" : "md"}>
-                    {tierName}
-                  </Pill>
-                  <Pill tone="ink" size={headerIsMobile ? "sm" : "md"}>
-                    {hasMenuData ? filteredProducts.length : "…"}
-                  </Pill>
-                  {flyAudienceSlug ? <Pill size={headerIsMobile ? "sm" : "md"}>{titleizeSlug(flyAudienceSlug)}</Pill> : null}
-                  {flyCategorySlug ? <Pill size={headerIsMobile ? "sm" : "md"}>{titleizeSlug(flyCategorySlug)}</Pill> : null}
+                  <Pill tone="gold">{tierName}</Pill>
+                  <Pill tone="ink">{filteredProducts.length}</Pill>
+                  {flyAudienceSlug ? <Pill>{titleizeSlug(flyAudienceSlug)}</Pill> : null}
+                  {flyCategorySlug ? <Pill>{titleizeSlug(flyCategorySlug)}</Pill> : null}
+                  {showLoadingHint ? <Pill>Loading…</Pill> : null}
                 </div>
 
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: headerIsMobile ? "column" : "row",
-                    alignItems: headerIsMobile ? "stretch" : "center",
-                    gap: 10,
-                    marginTop: 8,
-                    minWidth: 0,
-                  }}
-                >
+                <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, minWidth: 0 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile={headerIsMobile} />
+                    <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile={false} />
                   </div>
 
-                  <div
-                    ref={searchWrapRef}
-                    style={{ position: "relative", flexShrink: 0, width: headerIsMobile ? "100%" : "auto" }}
-                  >
+                  <div ref={searchWrapRef} style={{ position: "relative", flexShrink: 0 }}>
                     <input
                       value={q}
                       onChange={(e) => {
@@ -2226,11 +2408,10 @@ export default function Slidingmenubar({ open, onClose }) {
                           setShowSuggest(false);
                         }
                       }}
-                      placeholder={"Search…"}
+                      placeholder="Search…"
                       style={{
-                        width: headerIsMobile ? "100%" : "clamp(160px, 18vw, 300px)",
-                        maxWidth: "100%",
-                        height: headerIsMobile ? 34 : 36,
+                        width: "clamp(160px, 18vw, 300px)",
+                        height: 36,
                         borderRadius: 14,
                         padding: "0 12px",
                         border: "1px solid rgba(0,0,0,0.10)",
@@ -2244,139 +2425,19 @@ export default function Slidingmenubar({ open, onClose }) {
                     />
 
                     {showSuggest && q.trim() && suggestions.length ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: headerIsMobile ? 40 : 42,
-                          right: 0,
-                          width: headerIsMobile ? "min(520px, 92vw)" : 420,
-                          maxWidth: "min(520px, 92vw)",
-                          borderRadius: 16,
-                          border: "1px solid rgba(0,0,0,0.10)",
-                          background: "rgba(255,255,255,0.96)",
-                          boxShadow: "0 22px 40px rgba(0,0,0,0.14)",
-                          overflow: "hidden",
-                          zIndex: Z_PANEL + 2,
+                      <SuggestionsDropdown
+                        suggestions={suggestions}
+                        activeIndex={suggestIndex}
+                        onPick={({ type, idx, href }) => {
+                          if (type === "hover") setSuggestIndex(idx);
+                          if (type === "click" && href) {
+                            setShowSuggest(false);
+                            router.push(href);
+                            handleClose();
+                          }
                         }}
-                      >
-                        <div
-                          style={{
-                            padding: "10px 12px",
-                            borderBottom: "1px solid rgba(0,0,0,0.08)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: 10,
-                            background:
-                              "linear-gradient(135deg, rgba(255,255,255,0.98) 55%, rgba(247,243,231,0.96) 100%)",
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontWeight: 900,
-                              letterSpacing: ".12em",
-                              textTransform: "uppercase",
-                              fontSize: 11,
-                              color: "#0c2340",
-                            }}
-                          >
-                            Suggestions
-                          </div>
-                          <Pill tone="ink" size="sm">
-                            {suggestions.length}
-                          </Pill>
-                        </div>
-
-                        <div
-                          style={{
-                            maxHeight: 340,
-                            overflow: "auto",
-                            padding: 8,
-                            WebkitOverflowScrolling: "touch",
-                            overscrollBehavior: "contain",
-                            touchAction: "pan-y",
-                          }}
-                        >
-                          {suggestions.map((s, idx) => {
-                            const active = idx === suggestIndex;
-                            const tag = s.type === "PRODUCT" ? "Product" : s.type === "CATEGORY" ? "Category" : "Audience";
-                            return (
-                              <Link
-                                key={`${s.type}-${s.slug}-${idx}`}
-                                href={s.href}
-                                prefetch
-                                onMouseEnter={() => setSuggestIndex(idx)}
-                                onMouseDown={() => {
-                                  handleClose();
-                                }}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "space-between",
-                                  gap: 10,
-                                  padding: "10px 10px",
-                                  borderRadius: 12,
-                                  border: active ? "1px solid rgba(12,35,64,0.28)" : "1px solid rgba(0,0,0,0.06)",
-                                  background: active
-                                    ? "linear-gradient(135deg, rgba(12,35,64,0.10) 10%, rgba(191,167,80,0.12) 100%)"
-                                    : "rgba(255,255,255,0.78)",
-                                  textDecoration: "none",
-                                  color: "#0c2340",
-                                  boxShadow: active ? "0 10px 18px rgba(12,35,64,0.10)" : "0 8px 14px rgba(0,0,0,0.04)",
-                                  cursor: "pointer",
-                                  minWidth: 0,
-                                }}
-                              >
-                                <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <div
-                                    style={{
-                                      fontWeight: 900,
-                                      letterSpacing: ".07em",
-                                      textTransform: "uppercase",
-                                      fontSize: 11,
-                                      whiteSpace: "nowrap",
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                    }}
-                                    title={s.name}
-                                  >
-                                    {s.name}
-                                  </div>
-                                  <div
-                                    style={{
-                                      fontWeight: 800,
-                                      fontSize: 10,
-                                      color: "rgba(12,35,64,0.62)",
-                                      whiteSpace: "nowrap",
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                    }}
-                                    title={s.meta || ""}
-                                  >
-                                    {s.meta || ""}
-                                  </div>
-                                </div>
-
-                                <span
-                                  style={{
-                                    flexShrink: 0,
-                                    padding: "5px 8px",
-                                    borderRadius: 999,
-                                    border: "1px solid rgba(12,35,64,0.14)",
-                                    background: "rgba(12,35,64,0.06)",
-                                    fontWeight: 900,
-                                    fontSize: 10,
-                                    letterSpacing: ".10em",
-                                    textTransform: "uppercase",
-                                  }}
-                                >
-                                  {tag}
-                                </span>
-                              </Link>
-                            );
-                          })}
-                        </div>
-                      </div>
+                        width={420}
+                      />
                     ) : null}
                   </div>
                 </div>
@@ -2401,7 +2462,6 @@ export default function Slidingmenubar({ open, onClose }) {
                   whiteSpace: "nowrap",
                   fontSize: 11,
                   lineHeight: "44px",
-                  alignSelf: "auto",
                 }}
                 aria-label="Close menu"
               >
@@ -2414,7 +2474,6 @@ export default function Slidingmenubar({ open, onClose }) {
         {/* Body */}
         <div style={{ flex: 1, minHeight: 0, padding: 10, overflow: "hidden" }}>
           {isDesktop ? (
-            /* ---------------- Desktop: preserved 3-column ---------------- */
             <div
               style={{
                 display: "grid",
@@ -2425,13 +2484,11 @@ export default function Slidingmenubar({ open, onClose }) {
               }}
             >
               <Shell
-                title={`Audiences · ${hasMenuData ? filteredAudiences.length : "…"}`}
-                right={<Pill tone="ink">{hasMenuData ? filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0) : "…"}</Pill>}
+                title={`Audiences · ${filteredAudiences.length}`}
+                right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)}</Pill>}
               >
                 <ScrollBody>
-                  {!hasMenuData ? (
-                    <SkeletonList rows={10} dense={false} />
-                  ) : (
+                  {filteredAudiences.length ? (
                     filteredAudiences.map((a) => (
                       <CompactRowButton
                         key={a.slug}
@@ -2441,7 +2498,12 @@ export default function Slidingmenubar({ open, onClose }) {
                         active={a.slug === flyAudienceSlug}
                         isDesktop
                         dense={false}
-                        onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: a.slug })}
+                        onNavigateHref={buildCollectionsHref({
+                          tier: tierSlug,
+                          audience: a.slug,
+                          genderGroup: selectedGenderGroup,
+                          ageGroup: selectedAgeGroup,
+                        })}
                         onNavigate={handleClose}
                         onClick={() => {}}
                         onMouseEnter={() => scheduleHoverSelect("aud", a.slug)}
@@ -2449,21 +2511,26 @@ export default function Slidingmenubar({ open, onClose }) {
                         onFocus={() => scheduleHoverSelect("aud", a.slug)}
                       />
                     ))
+                  ) : (
+                    <div style={{ padding: 10 }}>
+                      <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
+                        {showLoadingHint ? "Loading options…" : "No audiences in this tier yet."}
+                      </div>
+                      <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
+                        {showLoadingHint ? "Fetching from Strapi…" : "Check tier/audience/product relations in Strapi."}
+                      </div>
+                    </div>
                   )}
                 </ScrollBody>
               </Shell>
 
               <Shell
                 title={
-                  flyAudience?.name
-                    ? `Categories · ${flyAudience.name} · ${hasMenuData ? filteredCategories.length : "…"}`
-                    : `Categories · ${hasMenuData ? filteredCategories.length : "…"}`
+                  flyAudience?.name ? `Categories · ${flyAudience.name} · ${filteredCategories.length}` : `Categories · ${filteredCategories.length}`
                 }
               >
                 <ScrollBody>
-                  {!hasMenuData ? (
-                    <SkeletonList rows={10} dense={false} />
-                  ) : (
+                  {filteredCategories.length ? (
                     filteredCategories.map((c) => (
                       <CompactRowButton
                         key={c.slug}
@@ -2473,7 +2540,14 @@ export default function Slidingmenubar({ open, onClose }) {
                         active={c.slug === flyCategorySlug}
                         isDesktop
                         dense={false}
-                        onNavigateHref={buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug })}
+                        onNavigateHref={buildCollectionsHref({
+                          tier: tierSlug,
+                          audience: flyAudienceSlug,
+                          category: c.slug,
+                          subCategory: selectedSubCategory,
+                          genderGroup: selectedGenderGroup,
+                          ageGroup: selectedAgeGroup,
+                        })}
                         onNavigate={handleClose}
                         onClick={() => {}}
                         onMouseEnter={() => scheduleHoverSelect("cat", c.slug)}
@@ -2481,6 +2555,15 @@ export default function Slidingmenubar({ open, onClose }) {
                         onFocus={() => scheduleHoverSelect("cat", c.slug)}
                       />
                     ))
+                  ) : (
+                    <div style={{ padding: 10 }}>
+                      <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
+                        {flyAudienceSlug ? "No categories in this audience/tier." : "Pick an audience."}
+                      </div>
+                      <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
+                        Try a different audience or tier.
+                      </div>
+                    </div>
                   )}
                 </ScrollBody>
               </Shell>
@@ -2506,7 +2589,7 @@ export default function Slidingmenubar({ open, onClose }) {
                     <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
                       Products
                     </div>
-                    <Pill tone="ink">{hasMenuData ? filteredProducts.length : "…"}</Pill>
+                    <Pill tone="ink">{filteredProducts.length}</Pill>
                   </div>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -2625,17 +2708,8 @@ export default function Slidingmenubar({ open, onClose }) {
                       touchAction: "pan-y",
                     }}
                   >
-                    {!hasMenuData ? (
-                      <SkeletonList rows={12} dense={false} />
-                    ) : filteredProducts.length ? (
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(auto-fill, minmax(min(220px, 100%), 1fr))",
-                          gap: 8,
-                          alignItems: "start",
-                        }}
-                      >
+                    {filteredProducts.length ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {filteredProducts.map((p) => (
                           <Link
                             key={p.slug}
@@ -2708,10 +2782,10 @@ export default function Slidingmenubar({ open, onClose }) {
                     ) : (
                       <div style={{ padding: 12 }}>
                         <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
-                          No pieces match these filters right now.
+                          {showLoadingHint ? "Loading products…" : "No pieces match these filters right now."}
                         </div>
                         <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
-                          Try a different audience/category, clear refine, or clear search.
+                          {showLoadingHint ? "Fetching from Strapi…" : "Try a different audience/category, clear refine, or clear search."}
                         </div>
                       </div>
                     )}
@@ -2720,95 +2794,133 @@ export default function Slidingmenubar({ open, onClose }) {
               </div>
             </div>
           ) : (
-            /* ---------------- Mobile: sectioned (all features accessible, no overflow) ---------------- */
+            /* Mobile sectioned UI — unchanged */
             <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-              {mobileSection === "audiences" ? (
-                <Shell
-                  title={`Audiences · ${hasMenuData ? filteredAudiences.length : "…"}`}
-                  right={<Pill tone="ink" size="sm">{hasMenuData ? filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0) : "…"}</Pill>}
-                >
-                  <ScrollBody compact>
-                    {!hasMenuData ? (
-                      <SkeletonList rows={10} dense />
-                    ) : (
-                      filteredAudiences.map((a) => {
-                        const isActive = a.slug === flyAudienceSlug;
-                        const href = buildCollectionsHref({ tier: tierSlug, audience: a.slug });
+              <div ref={searchWrapRef} style={{ position: "relative" }}>
+                <input
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value);
+                    setShowSuggest(true);
+                    setSuggestIndex(0);
+                  }}
+                  onFocus={() => {
+                    if (q.trim()) setShowSuggest(true);
+                  }}
+                  onBlur={() => {
+                    window.setTimeout(() => setShowSuggest(false), 120);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!q.trim()) return;
 
-                        return (
-                          <CompactRowButton
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setShowSuggest(true);
+                      setSuggestIndex((i) => Math.min(i + 1, Math.max(0, suggestions.length - 1)));
+                    } else if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setShowSuggest(true);
+                      setSuggestIndex((i) => Math.max(i - 1, 0));
+                    } else if (e.key === "Enter") {
+                      const top = suggestions[suggestIndex] || suggestions[0];
+                      if (top?.href) {
+                        e.preventDefault();
+                        router.push(top.href);
+                        handleClose();
+                      }
+                    } else if (e.key === "Escape") {
+                      setShowSuggest(false);
+                    }
+                  }}
+                  placeholder="Search…"
+                  style={{
+                    width: "100%",
+                    height: 38,
+                    borderRadius: 14,
+                    padding: "0 12px",
+                    border: "1px solid rgba(0,0,0,0.10)",
+                    outline: "none",
+                    background: "#ffffff",
+                    boxShadow: "0 10px 20px rgba(0,0,0,0.05)",
+                    fontWeight: 900,
+                    letterSpacing: ".04em",
+                    color: "#0c2340",
+                    fontSize: "clamp(10px, 2.9vw, 12px)",
+                    textTransform: "uppercase",
+                  }}
+                />
+
+                {showSuggest && q.trim() && suggestions.length ? (
+                  <SuggestionsDropdown
+                    suggestions={suggestions}
+                    activeIndex={suggestIndex}
+                    onPick={({ type, idx, href }) => {
+                      if (type === "hover") setSuggestIndex(idx);
+                      if (type === "click" && href) {
+                        setShowSuggest(false);
+                        router.push(href);
+                        handleClose();
+                      }
+                    }}
+                    width={"min(520px, 92vw)"}
+                  />
+                ) : null}
+              </div>
+
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", gap: 10 }}>
+                {mobileSection === "audiences" ? (
+                  <Shell
+                    title={`Audiences · ${filteredAudiences.length}`}
+                    right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)}</Pill>}
+                  >
+                    <ScrollBody>
+                      {filteredAudiences.length ? (
+                        filteredAudiences.map((a) => (
+                          <MobileSelectRow
                             key={a.slug}
                             title={a.name}
                             subLeft={`${a.count} product${a.count === 1 ? "" : "s"}`}
                             badge={a.count}
-                            active={isActive}
-                            isDesktop={false}
-                            dense
-                            onNavigateHref={null}
-                            onNavigate={null}
-                            onClick={() => {
-                              if (isActive) {
-                                router.push(href);
-                                handleClose();
-                                return;
-                              }
+                            active={a.slug === flyAudienceSlug}
+                            onSelect={() => {
                               setHoverAudienceSlug(a.slug);
                               setHoverCategorySlug("");
-                              setSelectedSubCategory("");
-                              setSelectedGenderGroup("");
-                              setSelectedAgeGroup("");
                               setMobileSection("categories");
                             }}
+                            href={buildCollectionsHref({
+                              tier: tierSlug,
+                              audience: a.slug,
+                              genderGroup: selectedGenderGroup,
+                              ageGroup: selectedAgeGroup,
+                            })}
+                            onNavigate={handleClose}
                           />
-                        );
-                      })
-                    )}
-                  </ScrollBody>
-                </Shell>
-              ) : null}
+                        ))
+                      ) : (
+                        <div style={{ padding: 10 }}>
+                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
+                            {showLoadingHint ? "Loading options…" : "No audiences in this tier yet."}
+                          </div>
+                          <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
+                            {showLoadingHint ? "Fetching from Strapi…" : "Check tier/audience/product relations in Strapi."}
+                          </div>
+                        </div>
+                      )}
+                    </ScrollBody>
+                  </Shell>
+                ) : null}
 
-              {mobileSection === "categories" ? (
-                <Shell
-                  title={
-                    flyAudience?.name
-                      ? `Categories · ${flyAudience.name} · ${hasMenuData ? filteredCategories.length : "…"}`
-                      : `Categories · ${hasMenuData ? filteredCategories.length : "…"}`
-                  }
-                  right={
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      {goAudienceAllHref ? (
-                        <Link
-                          href={goAudienceAllHref}
-                          onClick={handleClose}
-                          style={{
-                            textDecoration: "none",
-                            height: 30,
-                            padding: "0 10px",
-                            borderRadius: 999,
-                            border: "1px solid rgba(12,35,64,0.22)",
-                            background: "linear-gradient(135deg, #0c2340 10%, #163060 100%)",
-                            boxShadow: "0 12px 22px rgba(12,35,64,0.14)",
-                            color: "#fffdf8",
-                            fontWeight: 900,
-                            letterSpacing: ".12em",
-                            textTransform: "uppercase",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: "clamp(8px, 2.4vw, 9px)",
-                            whiteSpace: "nowrap",
-                          }}
-                          aria-label="See all products in this audience"
-                        >
-                          See All
-                        </Link>
-                      ) : null}
-
+                {mobileSection === "categories" ? (
+                  <Shell
+                    title={
+                      flyAudience?.name ? `Categories · ${flyAudience.name} · ${filteredCategories.length}` : `Categories · ${filteredCategories.length}`
+                    }
+                    right={
                       <button
                         type="button"
                         onClick={() => setMobileSection("audiences")}
                         style={{
-                          height: 30,
+                          height: 28,
                           padding: "0 10px",
                           borderRadius: 999,
                           border: "1px solid rgba(0,0,0,0.10)",
@@ -2817,112 +2929,83 @@ export default function Slidingmenubar({ open, onClose }) {
                           fontWeight: 900,
                           letterSpacing: ".12em",
                           textTransform: "uppercase",
-                          fontSize: "clamp(8px, 2.4vw, 9px)",
-                          color: "#0c2340",
+                          fontSize: 10,
                           cursor: "pointer",
-                          whiteSpace: "nowrap",
+                          color: "#0c2340",
                         }}
                       >
                         Back
                       </button>
-                    </div>
-                  }
-                >
-                  <ScrollBody compact>
-                    {!hasMenuData ? (
-                      <SkeletonList rows={10} dense />
-                    ) : (
-                      filteredCategories.map((c) => {
-                        const isActive = c.slug === flyCategorySlug;
-                        const href = buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug, category: c.slug });
-
-                        return (
-                          <CompactRowButton
+                    }
+                  >
+                    <ScrollBody>
+                      {filteredCategories.length ? (
+                        filteredCategories.map((c) => (
+                          <MobileSelectRow
                             key={c.slug}
                             title={c.name}
                             subLeft={`${c.count} product${c.count === 1 ? "" : "s"}`}
                             badge={c.count}
-                            active={isActive}
-                            isDesktop={false}
-                            dense
-                            onClick={() => {
-                              if (isActive) {
-                                router.push(href);
-                                handleClose();
-                                return;
-                              }
+                            active={c.slug === flyCategorySlug}
+                            onSelect={() => {
                               setHoverCategorySlug(c.slug);
-                              setSelectedSubCategory("");
-                              setSelectedGenderGroup("");
-                              setSelectedAgeGroup("");
                               setMobileSection("products");
                             }}
+                            href={buildCollectionsHref({
+                              tier: tierSlug,
+                              audience: flyAudienceSlug,
+                              category: c.slug,
+                              subCategory: selectedSubCategory,
+                              genderGroup: selectedGenderGroup,
+                              ageGroup: selectedAgeGroup,
+                            })}
+                            onNavigate={handleClose}
                           />
-                        );
-                      })
-                    )}
-                  </ScrollBody>
-                </Shell>
-              ) : null}
-
-              {mobileSection === "products" ? (
-                <div style={{ minHeight: 0, display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
-                  <div
-                    style={{
-                      borderRadius: 18,
-                      border: "1px solid rgba(0,0,0,0.08)",
-                      background: "linear-gradient(135deg, rgba(255,255,255,0.92) 55%, rgba(247,243,231,0.92) 100%)",
-                      boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
-                      padding: "8px 10px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 7,
-                      minWidth: 0,
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
-                        <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
-                          Products
+                        ))
+                      ) : (
+                        <div style={{ padding: 10 }}>
+                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
+                            {flyAudienceSlug ? "No categories in this audience/tier." : "Pick an audience."}
+                          </div>
+                          <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
+                            Try a different audience or tier.
+                          </div>
                         </div>
-                        <Pill tone="ink" size="sm">{hasMenuData ? filteredProducts.length : "…"}</Pill>
-                      </div>
+                      )}
+                    </ScrollBody>
+                  </Shell>
+                ) : null}
 
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        {goCategoryAllHref ? (
-                          <Link
-                            href={goCategoryAllHref}
-                            onClick={handleClose}
-                            style={{
-                              textDecoration: "none",
-                              height: 30,
-                              padding: "0 10px",
-                              borderRadius: 999,
-                              border: "1px solid rgba(12,35,64,0.22)",
-                              background: "linear-gradient(135deg, #0c2340 10%, #163060 100%)",
-                              boxShadow: "0 12px 22px rgba(12,35,64,0.14)",
-                              color: "#fffdf8",
-                              fontWeight: 900,
-                              letterSpacing: ".12em",
-                              textTransform: "uppercase",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontSize: "clamp(8px, 2.4vw, 9px)",
-                              whiteSpace: "nowrap",
-                            }}
-                            aria-label="See all products in this category"
-                          >
-                            See All
-                          </Link>
-                        ) : null}
+                {mobileSection === "products" ? (
+                  <>
+                    <div
+                      style={{
+                        borderRadius: 18,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        background: "linear-gradient(135deg, rgba(255,255,255,0.92) 55%, rgba(247,243,231,0.92) 100%)",
+                        boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
+                        padding: "10px 10px",
+                        display: "grid",
+                        gridTemplateColumns: "1fr",
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
+                            Products
+                          </div>
+                          <Pill tone="ink" size="sm">
+                            {filteredProducts.length}
+                          </Pill>
+                        </div>
 
                         <button
                           type="button"
                           onClick={() => setMobileSection("categories")}
                           style={{
-                            height: 30,
-                            padding: "0 10px",
+                            height: 32,
+                            padding: "0 12px",
                             borderRadius: 999,
                             border: "1px solid rgba(0,0,0,0.10)",
                             background: "rgba(255,255,255,0.92)",
@@ -2930,50 +3013,47 @@ export default function Slidingmenubar({ open, onClose }) {
                             fontWeight: 900,
                             letterSpacing: ".12em",
                             textTransform: "uppercase",
-                            fontSize: "clamp(8px, 2.4vw, 9px)",
-                            color: "#0c2340",
+                            fontSize: 10,
                             cursor: "pointer",
-                            whiteSpace: "nowrap",
+                            color: "#0c2340",
                           }}
                         >
                           Back
                         </button>
                       </div>
-                    </div>
 
-                    {showRefine ? (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                        {facetOptions.subCategories.length ? (
-                          <Select
-                            value={selectedSubCategory}
-                            onChange={(e) => setSelectedSubCategory(e.target.value)}
-                            options={facetOptions.subCategories}
-                            placeholder="Subcategory"
-                            isMobile
-                          />
-                        ) : null}
+                      {showRefine ? (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {facetOptions.subCategories.length ? (
+                            <Select
+                              value={selectedSubCategory}
+                              onChange={(e) => setSelectedSubCategory(e.target.value)}
+                              options={facetOptions.subCategories}
+                              placeholder="Subcategory"
+                              isMobile
+                            />
+                          ) : null}
 
-                        {facetOptions.genderGroups.length ? (
-                          <Select
-                            value={selectedGenderGroup}
-                            onChange={(e) => setSelectedGenderGroup(e.target.value)}
-                            options={facetOptions.genderGroups}
-                            placeholder="Gender"
-                            isMobile
-                          />
-                        ) : null}
+                          {facetOptions.genderGroups.length ? (
+                            <Select
+                              value={selectedGenderGroup}
+                              onChange={(e) => setSelectedGenderGroup(e.target.value)}
+                              options={facetOptions.genderGroups}
+                              placeholder="Gender"
+                              isMobile
+                            />
+                          ) : null}
 
-                        {facetOptions.ageGroups.length ? (
-                          <Select
-                            value={selectedAgeGroup}
-                            onChange={(e) => setSelectedAgeGroup(e.target.value)}
-                            options={facetOptions.ageGroups}
-                            placeholder="Age"
-                            isMobile
-                          />
-                        ) : null}
+                          {facetOptions.ageGroups.length ? (
+                            <Select
+                              value={selectedAgeGroup}
+                              onChange={(e) => setSelectedAgeGroup(e.target.value)}
+                              options={facetOptions.ageGroups}
+                              placeholder="Age"
+                              isMobile
+                            />
+                          ) : null}
 
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           {selectedSubCategory || selectedGenderGroup || selectedAgeGroup ? (
                             <button
                               type="button"
@@ -2983,7 +3063,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 setSelectedAgeGroup("");
                               }}
                               style={{
-                                height: 32,
+                                height: 34,
                                 padding: "0 10px",
                                 borderRadius: 12,
                                 border: "1px solid rgba(0,0,0,0.10)",
@@ -2992,7 +3072,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 fontWeight: 900,
                                 letterSpacing: ".10em",
                                 textTransform: "uppercase",
-                                fontSize: "clamp(9px, 2.6vw, 10px)",
+                                fontSize: 11,
                                 cursor: "pointer",
                                 color: "#0c2340",
                               }}
@@ -3000,43 +3080,16 @@ export default function Slidingmenubar({ open, onClose }) {
                               Clear Refine
                             </button>
                           ) : null}
-
-                          {goViewAllHref ? (
-                            <Link
-                              href={goViewAllHref}
-                              onClick={handleClose}
-                              style={{
-                                textDecoration: "none",
-                                height: 32,
-                                padding: "0 12px",
-                                borderRadius: 999,
-                                border: "1px solid rgba(12,35,64,0.22)",
-                                background: "linear-gradient(135deg, #0c2340 10%, #163060 100%)",
-                                boxShadow: "0 14px 24px rgba(12,35,64,0.14)",
-                                color: "#fffdf8",
-                                fontWeight: 900,
-                                letterSpacing: ".12em",
-                                textTransform: "uppercase",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontSize: "clamp(9px, 2.6vw, 10px)",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              View All →
-                            </Link>
-                          ) : null}
                         </div>
-                      </div>
-                    ) : (
-                      goViewAllHref ? (
+                      ) : null}
+
+                      {flyAudienceSlug ? (
                         <Link
                           href={goViewAllHref}
                           onClick={handleClose}
                           style={{
                             textDecoration: "none",
-                            height: 32,
+                            height: 34,
                             padding: "0 12px",
                             borderRadius: 999,
                             border: "1px solid rgba(12,35,64,0.22)",
@@ -3049,156 +3102,125 @@ export default function Slidingmenubar({ open, onClose }) {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            fontSize: "clamp(9px, 2.6vw, 10px)",
+                            fontSize: 11,
                             whiteSpace: "nowrap",
                           }}
                         >
                           View All →
                         </Link>
-                      ) : null
-                    )}
-                  </div>
+                      ) : null}
+                    </div>
 
-                  <div
-                    style={{
-                      flex: 1,
-                      minHeight: 0,
-                      borderRadius: 18,
-                      border: "1px solid rgba(0,0,0,0.08)",
-                      background: "rgba(255,255,255,0.70)",
-                      boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
-                      overflow: "hidden",
-                      display: "flex",
-                      flexDirection: "column",
-                      minWidth: 0,
-                    }}
-                  >
                     <div
                       style={{
                         flex: 1,
                         minHeight: 0,
-                        overflow: "auto",
-                        padding: 0,
-                        WebkitOverflowScrolling: "touch",
-                        overscrollBehavior: "contain",
-                        touchAction: "pan-y",
+                        borderRadius: 18,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        background: "rgba(255,255,255,0.70)",
+                        boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
+                        overflow: "hidden",
+                        display: "flex",
+                        flexDirection: "column",
                       }}
                     >
                       <div
                         style={{
-                          paddingTop: 12,
-                          paddingLeft: 10,
-                          paddingRight: 10,
-                          paddingBottom: `calc(18px + env(safe-area-inset-bottom, 0px))`,
+                          flex: 1,
                           minHeight: 0,
+                          overflow: "auto",
+                          padding: 10,
+                          WebkitOverflowScrolling: "touch",
+                          overscrollBehavior: "contain",
+                          touchAction: "pan-y",
                         }}
                       >
-                        <div aria-hidden="true" style={{ height: 10 }} />
-
-                        {!hasMenuData ? (
-                          <SkeletonList rows={12} dense />
-                        ) : filteredProducts.length ? (
-                          <>
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "1fr",
-                                gap: 8,
-                                alignItems: "start",
-                              }}
-                            >
-                              {filteredProducts.map((p) => (
-                                <Link
-                                  key={p.slug}
-                                  href={`/product/${p.slug}`}
-                                  onClick={handleClose}
-                                  title={p.name}
-                                  style={{
-                                    textDecoration: "none",
-                                    borderRadius: 14,
-                                    padding: "10px 10px",
-                                    border: "1px solid rgba(0,0,0,0.06)",
-                                    background: "rgba(255,255,255,0.82)",
-                                    boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
-                                    color: "#0c2340",
-                                    display: "flex",
-                                    alignItems: "flex-start",
-                                    justifyContent: "space-between",
-                                    gap: 10,
-                                    minHeight: 50,
-                                    minWidth: 0,
-                                    contentVisibility: "auto",
-                                    containIntrinsicSize: "60px",
-                                  }}
-                                >
-                                  <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-                                    <div
-                                      style={{
-                                        fontWeight: 900,
-                                        letterSpacing: ".04em",
-                                        textTransform: "uppercase",
-                                        fontSize: "clamp(10px, 2.9vw, 11px)",
-                                        lineHeight: 1.25,
-                                        display: "-webkit-box",
-                                        WebkitBoxOrient: "vertical",
-                                        WebkitLineClamp: 2,
-                                        overflow: "hidden",
-                                      }}
-                                    >
-                                      {p.name}
-                                    </div>
-                                    <div
-                                      style={{
-                                        fontSize: "clamp(8px, 2.3vw, 9px)",
-                                        fontWeight: 800,
-                                        color: "rgba(12,35,64,0.60)",
-                                        whiteSpace: "nowrap",
-                                        overflow: "hidden",
-                                        textOverflow: "ellipsis",
-                                      }}
-                                    >
-                                      {p.slug}
-                                    </div>
-                                  </div>
-
-                                  <span
+                        {filteredProducts.length ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {filteredProducts.map((p) => (
+                              <Link
+                                key={p.slug}
+                                href={`/product/${p.slug}`}
+                                onClick={handleClose}
+                                title={p.name}
+                                style={{
+                                  textDecoration: "none",
+                                  borderRadius: 14,
+                                  padding: "10px 10px",
+                                  border: "1px solid rgba(0,0,0,0.06)",
+                                  background: "rgba(255,255,255,0.82)",
+                                  boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
+                                  color: "#0c2340",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 10,
+                                  minHeight: 50,
+                                  minWidth: 0,
+                                }}
+                              >
+                                <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <div
                                     style={{
-                                      flexShrink: 0,
-                                      padding: "5px 8px",
-                                      borderRadius: 999,
-                                      border: "1px solid rgba(12,35,64,0.14)",
-                                      background: "rgba(12,35,64,0.06)",
                                       fontWeight: 900,
-                                      fontSize: "clamp(8px, 2.3vw, 9px)",
-                                      letterSpacing: ".10em",
+                                      letterSpacing: ".06em",
                                       textTransform: "uppercase",
-                                      marginTop: 1,
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      fontSize: 12,
+                                      lineHeight: 1.15,
                                     }}
                                   >
-                                    Open
-                                  </span>
-                                </Link>
-                              ))}
-                            </div>
+                                    {p.name}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                      color: "rgba(12,35,64,0.60)",
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                    }}
+                                  >
+                                    {p.slug}
+                                  </div>
+                                </div>
 
-                            <div aria-hidden="true" style={{ height: 14 }} />
-                            <div aria-hidden="true" style={{ height: 10 }} />
-                          </>
+                                <span
+                                  style={{
+                                    flexShrink: 0,
+                                    padding: "5px 8px",
+                                    borderRadius: 999,
+                                    border: "1px solid rgba(12,35,64,0.14)",
+                                    background: "rgba(12,35,64,0.06)",
+                                    fontWeight: 900,
+                                    fontSize: 10,
+                                    letterSpacing: ".10em",
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  Open
+                                </span>
+                              </Link>
+                            ))}
+                          </div>
                         ) : (
                           <div style={{ padding: 12 }}>
                             <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
-                              No pieces match these filters right now.
+                              {showLoadingHint ? "Loading products…" : "No pieces match these filters right now."}
                             </div>
                             <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
-                              Try a different audience/category, clear refine, or clear search.
+                              {showLoadingHint ? "Fetching from Strapi…" : "Try a different audience/category, clear refine, or clear search."}
                             </div>
                           </div>
                         )}
                       </div>
                     </div>
-                  </div>
-                </div>
-              ) : null}
+                  </>
+                ) : null}
+              </div>
             </div>
           )}
         </div>

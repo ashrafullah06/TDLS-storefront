@@ -4,6 +4,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,38 +23,64 @@ const BottomFloatingBar = dynamic(
   { ssr: false }
 );
 
-/* ---------------- client-only product fetcher (replaces server import) ---------------- */
-async function fetchProductsClient() {
+/* ===================== PERF: true paging + preload + no-blink ===================== */
+const PAGE_SIZE = 100; // ✅ requested: 100 products per fetch/page (NOT 1000)
+const DISPLAY_STEP = 100; // ✅ requested: reveal 100 cards at a time
+const PREFETCH_AHEAD_PAGES = 2; // prefetch ahead so scroll feels instant
+const FETCH_TIMEOUT_MS = 15000;
+
+// cache: instant open on click (route-scoped)
+const CACHE_PREFIX = "tdls_collections_route_cache_v1::";
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min (fast + safe)
+
+/* ---------------- helpers: fetch with timeout ---------------- */
+async function fetchWithTimeout(url, options = {}, ms = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const res = await fetch(
-      `/api/strapi?path=${encodeURIComponent("/products?populate=*")}`,
-      {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        cache: "no-store",
-      }
-    );
-
-    if (!res.ok) return [];
-
-    const raw = await res.json().catch(() => null);
-    if (!raw) return [];
-
-    // unwrap { ok, data } envelope from our proxy
-    const payload = raw?.ok ? raw.data : raw;
-
-    // Strapi shape: { data: [ {...}, ... ], meta: {...} }
-    const arr = Array.isArray(payload?.data) ? payload.data : [];
-
-    // Flatten Strapi { id, attributes } → { id, ...attributes, attributes }
-    return arr.map((n) =>
-      n?.attributes
-        ? { id: n.id, ...n.attributes, attributes: n.attributes }
-        : n
-    );
-  } catch {
-    return [];
+    const res = await fetch(url, { ...options, signal: ctrl.signal });
+    return res;
+  } finally {
+    clearTimeout(t);
   }
+}
+
+async function safeJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Unwrap /api/strapi envelope + flatten Strapi {id, attributes} nodes
+ */
+function unwrapAndFlatten(raw) {
+  const payload = raw?.ok ? raw.data : raw;
+  const arr = Array.isArray(payload?.data) ? payload.data : [];
+  const meta = payload?.meta?.pagination || payload?.meta?.pagination || null;
+
+  const items = arr.map((n) =>
+    n?.attributes
+      ? { id: n.id, ...n.attributes, attributes: n.attributes }
+      : n
+  );
+
+  const pagination = payload?.meta?.pagination || payload?.meta?.pagination;
+  const p = pagination || meta;
+
+  return {
+    items,
+    pagination: p
+      ? {
+          page: Number(p.page || 1),
+          pageSize: Number(p.pageSize || PAGE_SIZE),
+          pageCount: Number(p.pageCount || 1),
+          total: Number(p.total || 0),
+        }
+      : { page: 1, pageSize: PAGE_SIZE, pageCount: 1, total: items.length },
+  };
 }
 
 /* ---------------- helpers ---------------- */
@@ -72,7 +99,6 @@ const toStr = (x) =>
       x?.value ||
       x?.title ||
       "";
-const arr = (v) => (Array.isArray(v) ? v : v ? [v] : []); // eslint-disable-line no-unused-vars
 
 const normSlug = (s) =>
   String(s || "")
@@ -86,7 +112,65 @@ const pretty = (s) =>
     .replace(/-/g, " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
 
-const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+const uniq = (a) => [...new Set((Array.isArray(a) ? a : []).filter(Boolean))];
+
+const readRouteCache = (key) => {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.ts || !Array.isArray(parsed.items)) return null;
+    if (Date.now() - parsed.ts > CACHE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeRouteCache = (key, items, pagination) => {
+  try {
+    // Keep cache bounded (avoid localStorage bloat on very large catalogs)
+    const capped = Array.isArray(items) ? items.slice(0, 400) : [];
+    localStorage.setItem(
+      CACHE_PREFIX + key,
+      JSON.stringify({
+        ts: Date.now(),
+        items: capped,
+        pagination: pagination || null,
+      })
+    );
+  } catch {
+    // ignore quota
+  }
+};
+
+const mergeUnique = (prev, next) => {
+  const out = Array.isArray(prev) ? [...prev] : [];
+  const seen = new Set(
+    out.map((p) => String(p?.id || p?.slug || p?.attributes?.slug || ""))
+  );
+  (Array.isArray(next) ? next : []).forEach((p) => {
+    const k = String(p?.id || p?.slug || p?.attributes?.slug || "");
+    if (!k) {
+      // last-resort: stable-ish key based on signature fields
+      const fallback =
+        "u:" +
+        String(p?.name || p?.attributes?.name || "") +
+        "::" +
+        String(p?.createdAt || p?.attributes?.createdAt || "");
+      if (!seen.has(fallback)) {
+        seen.add(fallback);
+        out.push(p);
+      }
+      return;
+    }
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(p);
+    }
+  });
+  return out;
+};
 
 /**
  * Generic slug extractor that understands:
@@ -96,7 +180,6 @@ const uniq = (arr) => [...new Set(arr.filter(Boolean))];
  */
 const getSlugs = (rel) => {
   if (!rel) return [];
-  // Already an array (strings or objects)
   if (Array.isArray(rel)) {
     return rel
       .map((x) => {
@@ -106,8 +189,7 @@ const getSlugs = (rel) => {
             x.slug ||
               x.value ||
               x.name ||
-              (x.attributes &&
-                (x.attributes.slug || x.attributes.name)) ||
+              (x.attributes && (x.attributes.slug || x.attributes.name)) ||
               ""
           );
         }
@@ -116,7 +198,6 @@ const getSlugs = (rel) => {
       .filter(Boolean);
   }
 
-  // Strapi relation: { data: [...] }
   const d = rel?.data;
   if (!d) return [];
   if (Array.isArray(d)) {
@@ -134,35 +215,35 @@ const hasSlug = (rel, slug) => {
   return getSlugs(rel).includes(target);
 };
 
-/**
- * Read from product using the new *_slugs fields first,
- * then fall back to full relations if present.
- * Example: hasSlugKey(p, "audience_categories", "kids")
- */
 const hasSlugKey = (product, baseKey, slug) => {
   if (!product || !isNonEmpty(slug)) return false;
   const target = normSlug(slug);
 
-  // 1) direct *_slugs on flattened product
   const direct = product[`${baseKey}_slugs`] || product[`${baseKey}Slugs`];
-  if (direct) {
-    return getSlugs(direct).includes(target);
-  }
+  if (direct) return getSlugs(direct).includes(target);
 
-  // 2) fallback to relation on product or attributes
   const rel = product[baseKey] || product?.attributes?.[baseKey];
   return hasSlug(rel, slug);
 };
 
-
 /* ---------------------- relationship key aliases (future-proof) ---------------------- */
-/**
- * Strapi field naming varies across projects (e.g., tiers vs brand_tiers).
- * The menu already derives "active" signals using tolerant extraction.
- * The collections page must be equally tolerant, otherwise routes show 0 items.
- */
 const FIELD_ALIASES = {
-  tiers: ["events_products_collections", "eventsProductsCollections", "brandTiers", "brand_tiers", "brandTier", "brand_tier", "collectionTiers", "collection_tiers", "collectionTier", "collection_tier", "tiers", "tier", "product_tiers", "tdlc_tiers"],
+  tiers: [
+    "events_products_collections",
+    "eventsProductsCollections",
+    "brandTiers",
+    "brand_tiers",
+    "brandTier",
+    "brand_tier",
+    "collectionTiers",
+    "collection_tiers",
+    "collectionTier",
+    "collection_tier",
+    "tiers",
+    "tier",
+    "product_tiers",
+    "tdlc_tiers",
+  ],
   audiences: ["audience_categories", "audiences", "audience", "customer_audiences"],
   categories: ["categories", "category", "product_categories", "product_category"],
   subCategories: ["sub_categories", "subcategories", "sub_category", "subCategory", "subcategory"],
@@ -174,26 +255,18 @@ const FIELD_ALIASES = {
 
 const hasAnySlugKey = (product, keys, slug) => {
   if (!isNonEmpty(slug)) return true;
-  const arr = Array.isArray(keys) ? keys : [keys];
-  for (const k of arr) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  for (const k of list) {
     if (hasSlugKey(product, k, slug)) return true;
   }
   return false;
 };
 
-
 /* ---- variants, price, inventory (aligned with ProductCard & AllProductsClient) ---- */
 
-/**
- * Tolerant reader for variants:
- * - product.product_variants / attributes.product_variants (relation)
- * - product.variants / attributes.variants (public shape, plain array or relation)
- * - legacy product_variant / options
- */
 const readVariants = (p) => {
   const A = p?.attributes || {};
 
-  // Preferred: product_variants relation
   const pv = p?.product_variants || A?.product_variants;
   if (Array.isArray(pv?.data)) {
     return pv.data.map((node) => {
@@ -209,7 +282,6 @@ const readVariants = (p) => {
     );
   }
 
-  // NEW public-shape: variants on root or attributes
   if (Array.isArray(p?.variants)) return p.variants;
   if (Array.isArray(A?.variants?.data)) {
     return A.variants.data.map((n) => {
@@ -219,22 +291,12 @@ const readVariants = (p) => {
   }
   if (Array.isArray(A?.variants)) return A.variants;
 
-  // Legacy: product_variant / options
   if (Array.isArray(p?.product_variant)) return p.product_variant;
   if (Array.isArray(A?.product_variant)) return A.product_variant;
   if (Array.isArray(A?.options)) return A.options;
 
   return [];
 };
-
-const pickColorName = (v) =>
-  v?.color_name ||
-  v?.color?.name ||
-  v?.color?.data?.attributes?.name ||
-  (typeof v?.color === "string" ? v.color : null) ||
-  v?.attributes?.color_name ||
-  v?.attributes?.color?.name ||
-  v?.attributes?.color;
 
 const pickSizeName = (v) =>
   v?.size_name ||
@@ -244,14 +306,9 @@ const pickSizeName = (v) =>
   v?.attributes?.size_name ||
   v?.attributes?.size?.name;
 
-/**
- * Normalized variants that also flatten nested sizes[]
- * Used for faceting + price/stock.
- */
 const normVariants = (p) => {
   const base = readVariants(p);
   const out = [];
-
   if (!base.length) return out;
 
   base.forEach((v) => {
@@ -264,7 +321,6 @@ const normVariants = (p) => {
       (typeof v?.color === "string" ? v.color : null) ||
       null;
 
-    // if variant has nested sizes, each becomes its own row
     if (sizes && sizes.length) {
       sizes.forEach((s) => {
         const size_name =
@@ -322,8 +378,7 @@ const normVariants = (p) => {
 
       if (price == null && v?.price_range) {
         if (typeof v.price_range.min === "number") price = v.price_range.min;
-        else if (typeof v.price_range.max === "number")
-          price = v.price_range.max;
+        else if (typeof v.price_range.max === "number") price = v.price_range.max;
       }
 
       const stock =
@@ -367,8 +422,6 @@ const fallbackSizes = (p) => {
   return (Array.isArray(can) ? can : []).map(toStr).filter(Boolean);
 };
 
-/* ---------- 🔄 PRICE / COMPARE PRICE: aligned with AllProductsClient ---------- */
-
 const priceOf = (p) => {
   const A = p?.attributes || {};
 
@@ -377,7 +430,6 @@ const priceOf = (p) => {
     .map((v) => v.price)
     .filter((n) => typeof n === "number");
 
-  // TDLC / Strapi common fields
   let base =
     typeof p?.selling_price === "number"
       ? p.selling_price
@@ -552,7 +604,7 @@ const deriveTags = (p) => {
   return [...new Set([...events, ...audience, ...misc])];
 };
 
-/* ---------------- page component ---------------- */
+/* ===================== page component ===================== */
 
 export default function CollectionsSegmentClient() {
   const router = useRouter();
@@ -565,11 +617,29 @@ export default function CollectionsSegmentClient() {
   const cartCount = Array.isArray(cart?.items) ? cart.items.length : 0;
   const [hoverWhich, setHoverWhich] = useState(null);
 
+  /**
+   * ✅ ROUTE-SCOPED "KILL FULL-PAGE GRID" SWITCH
+   * If some global CSS/injected overlay is drawing a full-page grid (debug grid),
+   * this page disables it ONLY while this route is mounted.
+   */
+  useLayoutEffect(() => {
+    try {
+      const root = document.documentElement;
+      const prev = root.getAttribute("data-tdls-no-debug-grid");
+      root.setAttribute("data-tdls-no-debug-grid", "1");
+      return () => {
+        if (prev == null) root.removeAttribute("data-tdls-no-debug-grid");
+        else root.setAttribute("data-tdls-no-debug-grid", prev);
+      };
+    } catch {
+      // never block render
+    }
+  }, []);
+
   // query params (preserved, tolerant aliases + sanitization)
   const cleanParam = (v) =>
     String(v ?? "")
       .trim()
-      // kill accidental trailing tokens like "men;" from bad link builders
       .replace(/;+$/g, "")
       .replace(/^;+/, "")
       .trim();
@@ -658,27 +728,9 @@ export default function CollectionsSegmentClient() {
   // derive from path
   const segments = useMemo(() => {
     const parts = (pathname || "").split("/").filter(Boolean);
-    // parts = ["collections", ...segments]; we want the part AFTER "collections"
-    return parts.slice(1); // e.g. ["men","perfume"] or ["kids","teen-boy","age-12-15-yrs","pants","cotton"]
+    return parts.slice(1);
   }, [pathname]);
 
-  /**
-   * Path grammar (based on BottomFloatingBar link builders):
-   *
-   * Adult:
-   *   /collections/men/<category>[/<sub>]
-   *   /collections/women/<category>[/<sub>]
-   *   /collections/home-decor/<category>[/<sub>]
-   *
-   * Kids/Young:
-   *   /collections/kids/<gender>/<age>/<category>[/<sub>]
-   *   /collections/young/<gender>/<age>/<category>[/<sub>]
-   *
-   * Seasonal:
-   *   /collections/eid/men/<category>[/<sub>]
-   *   /collections/winter/kids/<gender>/<age>/<category>[/<sub>]
-   *   /collections/launch-week/women/<category>[/<sub>]
-   */
   const derived = useMemo(() => {
     const out = {
       audience: "",
@@ -714,12 +766,10 @@ export default function CollectionsSegmentClient() {
     const first = normSlug(segs[0]);
 
     if (SEASON_SLUGS.has(first)) {
-      // seasonal root: /collections/<season>/...
       out.event = first;
 
       const second = normSlug(segs[1] || "");
       if (second && AUD_MAIN.has(second)) {
-        // /collections/<season>/<audience>/...
         out.audience = second;
 
         if (second === "kids" || second === "young") {
@@ -732,7 +782,6 @@ export default function CollectionsSegmentClient() {
           out.subCategory = normSlug(segs[3] || "");
         }
       } else {
-        // /collections/<season>/<category>[/<sub>]
         out.category = second;
         out.subCategory = normSlug(segs[2] || "");
       }
@@ -741,7 +790,6 @@ export default function CollectionsSegmentClient() {
     }
 
     if (AUD_MAIN.has(first)) {
-      // standard audience root: /collections/<audience>/...
       out.audience = first;
 
       if (first === "kids" || first === "young") {
@@ -757,7 +805,6 @@ export default function CollectionsSegmentClient() {
       return out;
     }
 
-    // unknown root — treat as audience-like fallback
     out.audience = first;
     out.category = normSlug(segs[1] || "");
     out.subCategory = normSlug(segs[2] || "");
@@ -765,46 +812,353 @@ export default function CollectionsSegmentClient() {
   }, [segments]);
 
   const selectedTier = isNonEmpty(qpTier) ? qpTier : "";
-
-  const selectedAudience = isNonEmpty(qpAudience)
-    ? qpAudience
-    : derived.audience;
-  const selectedCategory = isNonEmpty(qpCategory)
-    ? qpCategory
-    : derived.category;
+  const selectedAudience = isNonEmpty(qpAudience) ? qpAudience : derived.audience;
+  const selectedCategory = isNonEmpty(qpCategory) ? qpCategory : derived.category;
   const selectedEvent = isNonEmpty(qpEvent) ? qpEvent : derived.event;
   const selectedGender = isNonEmpty(qpGender) ? qpGender : derived.gender;
   const selectedAge = isNonEmpty(qpAge) ? qpAge : derived.age;
-  const selectedSubCategory = isNonEmpty(qpSubCategory) ? qpSubCategory : derived.subCategory;
+  const selectedSubCategory = isNonEmpty(qpSubCategory)
+    ? qpSubCategory
+    : derived.subCategory;
 
-  const [loading, setLoading] = useState(true);
-  const [products, setProducts] = useState([]);
+  const routeKey = useMemo(() => {
+    // route-scoped signature (drives cache + safe reset)
+    const bits = [
+      "path:" + normSlug(pathname || ""),
+      "tier:" + normSlug(selectedTier || ""),
+      "aud:" + normSlug(selectedAudience || ""),
+      "cat:" + normSlug(selectedCategory || ""),
+      "sub:" + normSlug(selectedSubCategory || ""),
+      "evt:" + normSlug(selectedEvent || ""),
+      "gen:" + normSlug(selectedGender || ""),
+      "age:" + normSlug(selectedAge || ""),
+    ];
+    return bits.join("::");
+  }, [
+    pathname,
+    selectedTier,
+    selectedAudience,
+    selectedCategory,
+    selectedSubCategory,
+    selectedEvent,
+    selectedGender,
+    selectedAge,
+  ]);
 
-  
-  // Quick View state
-  const [quickOpen, setQuickOpen] = useState(false);
-  const [quickProduct, setQuickProduct] = useState(null);
+  /* ===================== DATA: paged fetch (instant cache + prefetch) ===================== */
 
-  // fetch (client-safe)
+  const [rawProducts, setRawProducts] = useState([]);
+  const [loadingInitial, setLoadingInitial] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+
+  const [remotePage, setRemotePage] = useState(0);
+  const [remotePageCount, setRemotePageCount] = useState(1);
+  const [remoteTotal, setRemoteTotal] = useState(0);
+
+  // mode:
+  // - "serverFiltered": ask Strapi for just the collection (fast + correct)
+  // - "catalogScan": fallback if server schema mismatch or returns 0 unexpectedly
+  const [fetchMode, setFetchMode] = useState("serverFiltered");
+
+  // reveal count (UI pagination)
+  const [displayTarget, setDisplayTarget] = useState(DISPLAY_STEP);
+
+  // spinner only if load is not instant (prevents long “Curating…”)
+  const [showLoadingHint, setShowLoadingHint] = useState(false);
+
+  const inflightRef = useRef(new Set()); // pages in flight
+  const loadedPagesRef = useRef(new Set()); // pages applied to state
+  const routeKeyRef = useRef(routeKey);
+
+  // prefetch cache: { routeKey, pages: Map(page -> {items, pagination}) }
+  const prefetchRef = useRef({ routeKey, pages: new Map() });
+
+  const abortAllRef = useRef([]);
+  const registerAbort = (ctrl) => {
+    abortAllRef.current.push(ctrl);
+  };
+  const abortAll = () => {
+    abortAllRef.current.forEach((c) => {
+      try {
+        c.abort();
+      } catch {}
+    });
+    abortAllRef.current = [];
+  };
+
+  const buildServerFiltersQS = useCallback(() => {
+    // Keep this intentionally conservative (keys that are most likely to exist).
+    // If Strapi schema differs, we fall back to catalogScan automatically.
+    const parts = [];
+    const addRel = (rel, slug) => {
+      if (!isNonEmpty(slug)) return;
+      parts.push(
+        `filters[${rel}][slug][$eq]=${encodeURIComponent(normSlug(slug))}`
+      );
+    };
+
+    // Primary collection dimensions
+    addRel("audience_categories", selectedAudience);
+    addRel("categories", selectedCategory);
+    addRel("sub_categories", selectedSubCategory);
+    addRel("gender_groups", selectedGender);
+    addRel("age_groups", selectedAge);
+
+    // event / seasonal
+    // NOTE: tier is sometimes routed as collection/tier; we still apply selectedEvent first
+    if (isNonEmpty(selectedEvent)) addRel("events_products_collections", selectedEvent);
+    else if (isNonEmpty(selectedTier)) addRel("events_products_collections", selectedTier);
+
+    return parts.join("&");
+  }, [
+    selectedAudience,
+    selectedCategory,
+    selectedSubCategory,
+    selectedGender,
+    selectedAge,
+    selectedEvent,
+    selectedTier,
+  ]);
+
+  const fetchStrapiPage = useCallback(
+    async ({ page, useServerFilters }) => {
+      const baseQS =
+        `pagination[page]=${page}` +
+        `&pagination[pageSize]=${PAGE_SIZE}` +
+        `&pagination[withCount]=true` +
+        `&populate=*`;
+
+      const filtersQS = useServerFilters ? buildServerFiltersQS() : "";
+      const qs = filtersQS ? `${baseQS}&${filtersQS}` : baseQS;
+
+      const strapiPath = `/products?${qs}`;
+
+      // Use a dedicated AbortController per request so route changes instantly cancel.
+      const ctrl = new AbortController();
+      registerAbort(ctrl);
+
+      const res = await fetchWithTimeout(
+        `/api/strapi?path=${encodeURIComponent(strapiPath)}`,
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: ctrl.signal,
+        },
+        FETCH_TIMEOUT_MS
+      );
+
+      const raw = await safeJson(res);
+      if (!res.ok || !raw) {
+        return { ok: false, status: res.status, items: [], pagination: null };
+      }
+
+      const { items, pagination } = unwrapAndFlatten(raw);
+
+      return { ok: true, status: res.status, items, pagination };
+    },
+    [buildServerFiltersQS]
+  );
+
+  const prefetchAhead = useCallback(
+    async ({ fromPage, useServerFilters }) => {
+      const pr = prefetchRef.current;
+      if (pr.routeKey !== routeKey) return;
+
+      const start = Number(fromPage || 1);
+      for (let i = 1; i <= PREFETCH_AHEAD_PAGES; i++) {
+        const p = start + i;
+        if (p > remotePageCount) break;
+        if (loadedPagesRef.current.has(p)) continue;
+        if (inflightRef.current.has(p)) continue;
+        if (pr.pages.has(p)) continue;
+
+        inflightRef.current.add(p);
+        fetchStrapiPage({ page: p, useServerFilters })
+          .then((r) => {
+            if (!r?.ok) return;
+            const now = prefetchRef.current;
+            if (now.routeKey !== routeKey) return;
+            now.pages.set(p, { items: r.items, pagination: r.pagination });
+          })
+          .finally(() => {
+            inflightRef.current.delete(p);
+          });
+      }
+    },
+    [fetchStrapiPage, routeKey, remotePageCount]
+  );
+
+  const applyPageResult = useCallback(
+    ({ page, items, pagination, allowCacheWrite }) => {
+      setRawProducts((prev) => mergeUnique(prev, items));
+
+      if (pagination) {
+        setRemotePage(Number(pagination.page || page || 1));
+        setRemotePageCount(Number(pagination.pageCount || 1));
+        setRemoteTotal(Number(pagination.total || 0));
+
+        if (allowCacheWrite) {
+          // cache only needs to make the next click instant
+          writeRouteCache(routeKey, mergeUnique([], items), pagination);
+        }
+      } else {
+        setRemotePage((x) => Math.max(x, page || 1));
+      }
+    },
+    [routeKey]
+  );
+
+  const loadPage = useCallback(
+    async ({ page, useServerFilters, allowCacheWrite = false }) => {
+      const p = Number(page || 1);
+      if (loadedPagesRef.current.has(p)) return true;
+
+      // use prefetched result if available (instant scroll)
+      const pref = prefetchRef.current;
+      if (pref.routeKey === routeKey && pref.pages.has(p)) {
+        const cached = pref.pages.get(p);
+        pref.pages.delete(p);
+        loadedPagesRef.current.add(p);
+        applyPageResult({
+          page: p,
+          items: cached.items,
+          pagination: cached.pagination,
+          allowCacheWrite,
+        });
+        return true;
+      }
+
+      if (inflightRef.current.has(p)) return true;
+      inflightRef.current.add(p);
+
+      const isInitial = p === 1;
+      if (isInitial) setLoadingInitial(true);
+      else setLoadingMore(true);
+
+      try {
+        const r = await fetchStrapiPage({ page: p, useServerFilters });
+        if (!r.ok) return false;
+
+        // stale route guard
+        if (routeKeyRef.current !== routeKey) return false;
+
+        loadedPagesRef.current.add(p);
+        applyPageResult({
+          page: p,
+          items: r.items,
+          pagination: r.pagination,
+          allowCacheWrite,
+        });
+
+        // start prefetch ahead after applying this page
+        prefetchAhead({ fromPage: p, useServerFilters });
+
+        return true;
+      } catch {
+        return false;
+      } finally {
+        inflightRef.current.delete(p);
+        setLoadingMore(false);
+        setLoadingInitial(false);
+      }
+    },
+    [applyPageResult, fetchStrapiPage, prefetchAhead, routeKey]
+  );
+
+  // spinner delay (so we don’t show “Curating…” if it’s truly instant)
   useEffect(() => {
-    let alive = true;
+    if (!loadingInitial) {
+      setShowLoadingHint(false);
+      return;
+    }
+    const t = setTimeout(() => setShowLoadingHint(true), 180);
+    return () => clearTimeout(t);
+  }, [loadingInitial]);
+
+  // RESET + boot: cache-first then fetch
+  useEffect(() => {
+    routeKeyRef.current = routeKey;
+
+    // hard reset per route key
+    abortAll();
+    inflightRef.current = new Set();
+    loadedPagesRef.current = new Set();
+    prefetchRef.current = { routeKey, pages: new Map() };
+
+    setRawProducts([]);
+    setFetchError("");
+    setRemotePage(0);
+    setRemotePageCount(1);
+    setRemoteTotal(0);
+    setLoadingInitial(true);
+    setLoadingMore(false);
+    setDisplayTarget(DISPLAY_STEP);
+
+    // Prefer serverFiltered unless nothing is selected
+    const hasAnySelection = [
+      selectedTier,
+      selectedAudience,
+      selectedCategory,
+      selectedSubCategory,
+      selectedEvent,
+      selectedGender,
+      selectedAge,
+    ].some(isNonEmpty);
+
+    setFetchMode(hasAnySelection ? "serverFiltered" : "catalogScan");
+
+    // 1) instant show from route cache (if available)
+    const cached = readRouteCache(routeKey);
+    if (cached?.items?.length) {
+      setRawProducts(Array.isArray(cached.items) ? cached.items : []);
+      if (cached.pagination) {
+        setRemotePage(Number(cached.pagination.page || 1));
+        setRemotePageCount(Number(cached.pagination.pageCount || 1));
+        setRemoteTotal(Number(cached.pagination.total || 0));
+        loadedPagesRef.current.add(Number(cached.pagination.page || 1));
+      }
+      setLoadingInitial(false);
+    }
+
+    // 2) always refresh page 1 in background (keeps it correct)
     (async () => {
-      setLoading(true);
-      const list = await fetchProductsClient();
-      if (alive) {
-        setProducts(Array.isArray(list) ? list : []);
-        setLoading(false);
+      // First attempt: server filtered (fast + correct)
+      const ok1 = await loadPage({
+        page: 1,
+        useServerFilters: hasAnySelection,
+        allowCacheWrite: true,
+      });
+
+      // If serverFiltered returns 0 and we have selections, switch to catalogScan automatically
+      // (prevents “no products” due to schema mismatches).
+      if (routeKeyRef.current !== routeKey) return;
+
+      const shouldFallback =
+        hasAnySelection &&
+        (!ok1 || (remoteTotal === 0 && (cached?.items?.length || 0) === 0));
+
+      if (shouldFallback) {
+        setFetchMode("catalogScan");
+        // clear (but keep UI stable; we’ll refill fast)
+        setRawProducts((prev) => (prev.length ? prev : []));
+        // load catalog page 1 unfiltered
+        await loadPage({ page: 1, useServerFilters: false, allowCacheWrite: false });
       }
     })();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
-  /* ---------- 1) apply path + query-based global filters ---------- */
-  const globallyFiltered = useMemo(() => {
-    if (!Array.isArray(products) || products.length === 0) return [];
-    return products.filter((p) => {
+    return () => {
+      abortAll();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeKey]);
+
+  /* ===================== Collection match logic (used for scan + UI) ===================== */
+
+  const matchesCollection = useCallback(
+    (p) => {
+      if (!p) return false;
       if (p.disable_frontend) return false;
 
       if (isNonEmpty(selectedTier)) {
@@ -833,51 +1187,67 @@ export default function CollectionsSegmentClient() {
 
         if (!ok) return false;
       }
+
       if (
         isNonEmpty(selectedAudience) &&
-        !(hasAnySlugKey(p, FIELD_ALIASES.audiences, selectedAudience))
+        !hasAnySlugKey(p, FIELD_ALIASES.audiences, selectedAudience)
       )
         return false;
+
       if (
         isNonEmpty(selectedCategory) &&
-        !(hasAnySlugKey(p, FIELD_ALIASES.categories, selectedCategory))
+        !hasAnySlugKey(p, FIELD_ALIASES.categories, selectedCategory)
       )
         return false;
+
       if (
         isNonEmpty(selectedSubCategory) &&
-        !(hasAnySlugKey(p, FIELD_ALIASES.subCategories, selectedSubCategory))
+        !hasAnySlugKey(p, FIELD_ALIASES.subCategories, selectedSubCategory)
       )
         return false;
+
       if (
         isNonEmpty(selectedEvent) &&
-        !(hasAnySlugKey(p, [...FIELD_ALIASES.audiences, ...FIELD_ALIASES.events], selectedEvent))
+        !hasAnySlugKey(
+          p,
+          [...FIELD_ALIASES.audiences, ...FIELD_ALIASES.events],
+          selectedEvent
+        )
       )
         return false;
+
       if (
         isNonEmpty(selectedGender) &&
-        !(hasAnySlugKey(p, FIELD_ALIASES.gender, selectedGender))
+        !hasAnySlugKey(p, FIELD_ALIASES.gender, selectedGender)
       )
         return false;
+
       if (
         isNonEmpty(selectedAge) &&
-        !(hasAnySlugKey(p, FIELD_ALIASES.age, selectedAge))
+        !hasAnySlugKey(p, FIELD_ALIASES.age, selectedAge)
       )
         return false;
 
       return true;
-    });
-  }, [
-    products,
-    selectedTier,
-    selectedAudience,
-    selectedCategory,
-    selectedSubCategory,
-    selectedEvent,
-    selectedGender,
-    selectedAge,
-  ]);
+    },
+    [
+      selectedTier,
+      selectedAudience,
+      selectedCategory,
+      selectedSubCategory,
+      selectedEvent,
+      selectedGender,
+      selectedAge,
+    ]
+  );
 
-  /* ---------- 2) dynamic facets from what remains ---------- */
+  /* ---------- 1) apply path + query-based global filters ---------- */
+  const globallyFiltered = useMemo(() => {
+    if (!Array.isArray(rawProducts) || rawProducts.length === 0) return [];
+    return rawProducts.filter(matchesCollection);
+  }, [rawProducts, matchesCollection]);
+
+  /* ---------- 2) dynamic facets from what remains (best-effort on loaded set) ---------- */
   const facets = useMemo(() => {
     const mapCount = () => new Map();
 
@@ -901,9 +1271,7 @@ export default function CollectionsSegmentClient() {
       deriveTags(p).forEach((t) => inc(tags, t));
 
       const v = normVariants(p);
-      v.forEach((x) =>
-        x.color_name && inc(colors, normSlug(String(x.color_name)))
-      );
+      v.forEach((x) => x.color_name && inc(colors, normSlug(String(x.color_name))));
       v.forEach((x) => x.size_name && inc(sizes, String(x.size_name)));
       fallbackColors(p).forEach((c) => inc(colors, normSlug(c)));
       fallbackSizes(p).forEach((s) => inc(sizes, s));
@@ -918,8 +1286,7 @@ export default function CollectionsSegmentClient() {
       }
     });
 
-    const sortEntries = (m) =>
-      [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const sortEntries = (m) => [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     return {
       types: sortEntries(types),
       colors: sortEntries(colors),
@@ -945,13 +1312,16 @@ export default function CollectionsSegmentClient() {
   const [tagSet, setTagSet] = useState(() => new Set());
   const [showMoreFilters, setShowMoreFilters] = useState(false);
 
-  const [visibleCount, setVisibleCount] = useState(24);
-  const sentinelRef = useRef(null);
+  // ✅ IMPORTANT: route-scoped storage so filters never “stick” across different collection pages
+  const FILTERS_STORAGE_KEY = useMemo(
+    () => "collections_filters_v3::" + routeKey,
+    [routeKey]
+  );
 
   // hydrate/persist
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem("collections_filters_v2");
+      const raw = sessionStorage.getItem(FILTERS_STORAGE_KEY);
       if (!raw) return;
       const s = JSON.parse(raw) || {};
       setSearch(s.search || "");
@@ -965,13 +1335,13 @@ export default function CollectionsSegmentClient() {
       setColorSet(new Set(s.colors || []));
       setSizeSet(new Set(s.sizes || []));
       setTagSet(new Set(s.tags || []));
-      setVisibleCount(Number(s.visibleCount || 24));
     } catch {}
-  }, []);
+  }, [FILTERS_STORAGE_KEY]);
+
   useEffect(() => {
     try {
       sessionStorage.setItem(
-        "collections_filters_v2",
+        FILTERS_STORAGE_KEY,
         JSON.stringify({
           search,
           sortBy,
@@ -984,11 +1354,11 @@ export default function CollectionsSegmentClient() {
           colors: [...colorSet],
           sizes: [...sizeSet],
           tags: [...tagSet],
-          visibleCount,
         })
       );
     } catch {}
   }, [
+    FILTERS_STORAGE_KEY,
     search,
     sortBy,
     onlyInStock,
@@ -1000,7 +1370,6 @@ export default function CollectionsSegmentClient() {
     colorSet,
     sizeSet,
     tagSet,
-    visibleCount,
   ]);
 
   // init price range once we know bounds
@@ -1010,33 +1379,14 @@ export default function CollectionsSegmentClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facets.priceMin, facets.priceMax]);
 
-  // infinite load
-  useEffect(() => {
-    if (!sentinelRef.current) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => {
-          if (e.isIntersecting) setVisibleCount((c) => c + 24);
-        });
-      },
-      { rootMargin: "600px 0px" }
-    );
-    io.observe(sentinelRef.current);
-    return () => {
-      io.disconnect();
-    };
-  }, []);
-
   // back-to-top button visibility
   useEffect(() => {
     const onScroll = () => setShowTopBtn(window.scrollY > 600);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  const scrollToTop = useCallback(
-    () => window.scrollTo({ top: 0, behavior: "smooth" }),
-    []
-  );
+
+  const scrollToTop = useCallback(() => window.scrollTo({ top: 0, behavior: "smooth" }), []);
 
   const toggleSet = (setVal, value, setState) => {
     const next = new Set(setVal);
@@ -1044,6 +1394,7 @@ export default function CollectionsSegmentClient() {
     else next.add(value);
     setState(next);
   };
+
   const clearAll = () => {
     setSearch("");
     setSortBy("default");
@@ -1056,7 +1407,7 @@ export default function CollectionsSegmentClient() {
     setColorSet(new Set());
     setSizeSet(new Set());
     setTagSet(new Set());
-    setVisibleCount(24);
+    setDisplayTarget(DISPLAY_STEP);
   };
 
   // derived active chips
@@ -1069,13 +1420,9 @@ export default function CollectionsSegmentClient() {
     if (minDiscount > 0) chips.push({ k: "discount", v: `${minDiscount}%+` });
     if (minPrice > facets.priceMin || maxPrice < facets.priceMax)
       chips.push({ k: "price", v: `৳${minPrice}–${maxPrice}` });
-    [...colorSet].forEach((c) =>
-      chips.push({ k: "color", v: pretty(c), val: c })
-    );
+    [...colorSet].forEach((c) => chips.push({ k: "color", v: pretty(c), val: c }));
     [...sizeSet].forEach((s) => chips.push({ k: "size", v: s, val: s }));
-    [...tagSet].forEach((t) =>
-      chips.push({ k: "tag", v: pretty(t), val: t })
-    );
+    [...tagSet].forEach((t) => chips.push({ k: "tag", v: pretty(t), val: t }));
     return chips;
   }, [
     search,
@@ -1095,21 +1442,14 @@ export default function CollectionsSegmentClient() {
   const pageFiltered = useMemo(() => {
     let list = globallyFiltered;
 
-    // search
     if (isNonEmpty(search)) {
       const q = search.toLowerCase();
       list = list.filter((p) => {
         const A = p?.attributes || {};
         const name = (p?.name || A?.name || "").toLowerCase();
         const slug = (p?.slug || A?.slug || "").toLowerCase();
-        const desc = (
-          A?.short_description ||
-          A?.description ||
-          ""
-        ).toLowerCase();
-        return (
-          name.includes(q) || slug.includes(q) || desc.includes(q)
-        );
+        const desc = (A?.short_description || A?.description || "").toLowerCase();
+        return name.includes(q) || slug.includes(q) || desc.includes(q);
       });
     }
 
@@ -1118,17 +1458,13 @@ export default function CollectionsSegmentClient() {
         const v = normVariants(p);
         const colors = new Set(
           [
-            ...v.map((x) =>
-              x.color_name ? normSlug(String(x.color_name)) : ""
-            ),
+            ...v.map((x) => (x.color_name ? normSlug(String(x.color_name)) : "")),
             ...fallbackColors(p),
           ].filter(Boolean)
         );
         const sizes = new Set(
           [
-            ...v.map((x) =>
-              x.size_name ? String(x.size_name) : ""
-            ),
+            ...v.map((x) => (x.size_name ? String(x.size_name) : "")),
             ...fallbackSizes(p),
           ].filter(Boolean)
         );
@@ -1151,35 +1487,23 @@ export default function CollectionsSegmentClient() {
       })
     );
 
-    if (typeSel)
-      list = list.filter((p) => meta.get(p).types.includes(typeSel));
-    if (brandSel)
-      list = list.filter((p) => meta.get(p).brand === brandSel);
+    if (typeSel) list = list.filter((p) => meta.get(p).types.includes(typeSel));
+    if (brandSel) list = list.filter((p) => meta.get(p).brand === brandSel);
     if (colorSet.size)
-      list = list.filter((p) =>
-        [...colorSet].some((c) => meta.get(p).colors.has(c))
-      );
+      list = list.filter((p) => [...colorSet].some((c) => meta.get(p).colors.has(c)));
     if (sizeSet.size)
-      list = list.filter((p) =>
-        [...sizeSet].some((s) => meta.get(p).sizes.has(s))
-      );
+      list = list.filter((p) => [...sizeSet].some((s) => meta.get(p).sizes.has(s)));
     if (tagSet.size)
-      list = list.filter((p) =>
-        [...tagSet].some((t) => meta.get(p).tags.includes(t))
-      );
+      list = list.filter((p) => [...tagSet].some((t) => meta.get(p).tags.includes(t)));
 
     list = list.filter((p) => {
       const pr = meta.get(p).price;
-      return (
-        (minPrice ? pr >= minPrice : true) &&
-        (maxPrice ? pr <= maxPrice : true)
-      );
+      return (minPrice ? pr >= minPrice : true) && (maxPrice ? pr <= maxPrice : true);
     });
-    if (onlyInStock) list = list.filter((p) => meta.get(p).inStock);
-    if (minDiscount > 0)
-      list = list.filter((p) => meta.get(p).discount >= minDiscount);
 
-    // stable sorting (deterministic tie-breaker by name)
+    if (onlyInStock) list = list.filter((p) => meta.get(p).inStock);
+    if (minDiscount > 0) list = list.filter((p) => meta.get(p).discount >= minDiscount);
+
     if (sortBy === "price-asc") {
       list = [...list].sort((a, b) => {
         const A = meta.get(a),
@@ -1212,7 +1536,159 @@ export default function CollectionsSegmentClient() {
     tagSet,
   ]);
 
-  /* ---------- 5) styles etc. ---------- */
+  /* ===================== Infinite auto-load: ALWAYS, no manual paging needed ===================== */
+
+  const sentinelRef = useRef(null);
+
+  const hasMoreRemote = remotePage < remotePageCount;
+  const visible = useMemo(() => pageFiltered.slice(0, displayTarget), [pageFiltered, displayTarget]);
+
+  // ensure we have enough loaded products to satisfy displayTarget
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (loadingInitial) return;
+      if (loadingMore) return;
+      if (!hasMoreRemote) return;
+
+      // If serverFiltered is working, pageFiltered grows by ~100 each page.
+      // If we’re in catalogScan, pageFiltered may grow slower; keep fetching until we can fill displayTarget.
+      while (!cancelled && pageFiltered.length < displayTarget && remotePage < remotePageCount) {
+        const nextPage = (remotePage || 0) + 1;
+        const useServerFilters =
+          fetchMode === "serverFiltered" &&
+          [
+            selectedTier,
+            selectedAudience,
+            selectedCategory,
+            selectedSubCategory,
+            selectedEvent,
+            selectedGender,
+            selectedAge,
+          ].some(isNonEmpty);
+
+        const ok = await loadPage({ page: nextPage, useServerFilters });
+        if (!ok) break;
+
+        // small yield to avoid blocking UI
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    displayTarget,
+    pageFiltered.length,
+    remotePage,
+    remotePageCount,
+    hasMoreRemote,
+    loadingInitial,
+    loadingMore,
+    loadPage,
+    fetchMode,
+    selectedTier,
+    selectedAudience,
+    selectedCategory,
+    selectedSubCategory,
+    selectedEvent,
+    selectedGender,
+    selectedAge,
+  ]);
+
+  // IntersectionObserver: bump displayTarget by 100 when customer scrolls
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (!e.isIntersecting) return;
+          setDisplayTarget((c) => c + DISPLAY_STEP);
+        });
+      },
+      { rootMargin: "900px 0px" }
+    );
+
+    io.observe(sentinelRef.current);
+    return () => io.disconnect();
+  }, []);
+
+  // Quick View state
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickProduct, setQuickProduct] = useState(null);
+
+  /* ---------- price preset helpers ---------- */
+  const pricePresets = useMemo(() => {
+    const lo = facets.priceMin || 0;
+    const hi = facets.priceMax || 0;
+    if (hi <= lo) return [];
+    const span = hi - lo;
+    const step = Math.max(500, Math.round(span / 4 / 100) * 100);
+    return [
+      [lo, lo + step],
+      [lo + step, lo + step * 2],
+      [lo + step * 2, lo + step * 3],
+      [lo + step * 3, hi],
+    ];
+  }, [facets.priceMin, facets.priceMax]);
+
+  /* ---------- header title / subtitle ---------- */
+  const headerTitle =
+    selectedAudience
+      ? selectedAudience.replace(/-/g, " ").toUpperCase()
+      : selectedCategory
+      ? selectedCategory.replace(/-/g, " ").toUpperCase()
+      : "COLLECTIONS";
+
+  const headerSubtitle = useMemo(() => {
+    const parts = [];
+    if (selectedEvent) parts.push(pretty(selectedEvent));
+    if (selectedAudience) parts.push(pretty(selectedAudience));
+    if (selectedGender) parts.push(pretty(selectedGender));
+    if (selectedAge) parts.push(pretty(selectedAge));
+    if (selectedCategory) parts.push(pretty(selectedCategory));
+    if (selectedSubCategory) parts.push(pretty(selectedSubCategory));
+    const text = parts.join(" • ");
+    return text || "Curated by TDLC studio";
+  }, [
+    selectedEvent,
+    selectedAudience,
+    selectedGender,
+    selectedAge,
+    selectedCategory,
+    selectedSubCategory,
+  ]);
+
+  const copyShareLink = () => {
+    try {
+      navigator.clipboard.writeText(window.location.href);
+    } catch {}
+  };
+
+  const exhausted = !loadingInitial && !loadingMore && remotePage >= remotePageCount;
+
+  // Count line: prefer Strapi total only when serverFiltered is likely correct.
+  const showTotal =
+    fetchMode === "serverFiltered" &&
+    [
+      selectedTier,
+      selectedAudience,
+      selectedCategory,
+      selectedSubCategory,
+      selectedEvent,
+      selectedGender,
+      selectedAge,
+    ].some(isNonEmpty) &&
+    remoteTotal > 0;
+
+  const totalText = showTotal ? remoteTotal : pageFiltered.length;
+
+  /* ---------- styles ---------- */
   const S = {
     pageShell: {
       width: "100%",
@@ -1222,15 +1698,12 @@ export default function CollectionsSegmentClient() {
       paddingBottom: 96,
       position: "relative",
     },
-    // ⬇️ WIDENED: use global CSS vars for max-width + side padding
     pageInner: {
       width: "100%",
-      maxWidth: "100%", // ⬅️ remove central column – use full viewport width
+      maxWidth: "100%",
       margin: "0 auto",
-      // small, responsive side gutters for “international standard” feel
       padding: "28px clamp(16px, 4vw, 40px) 96px",
     },
-
     titleRow: {
       display: "flex",
       alignItems: "center",
@@ -1250,11 +1723,7 @@ export default function CollectionsSegmentClient() {
       boxShadow: "0 4px 16px rgba(12, 35, 64, 0.08)",
       color: "#3a3342",
     },
-    titleBlock: {
-      display: "flex",
-      flexDirection: "column",
-      gap: 4,
-    },
+    titleBlock: { display: "flex", flexDirection: "column", gap: 4 },
     title: {
       fontFamily: "'Playfair Display', serif",
       fontWeight: 900,
@@ -1286,12 +1755,7 @@ export default function CollectionsSegmentClient() {
       backdropFilter: "saturate(180%) blur(10px)",
       boxShadow: "0 10px 32px rgba(27, 29, 53, 0.12)",
     },
-    group: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      flexWrap: "wrap",
-    },
+    group: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
     label: {
       fontSize: 11,
       fontWeight: 800,
@@ -1375,6 +1839,9 @@ export default function CollectionsSegmentClient() {
       display: "grid",
       gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))",
       gap: 18,
+      listStyle: "none",
+      padding: 0,
+      margin: 0,
     },
     loadMore: {
       margin: "20px auto 0",
@@ -1388,12 +1855,7 @@ export default function CollectionsSegmentClient() {
       fontSize: 13,
       letterSpacing: ".08em",
     },
-    utilBar: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      marginLeft: "auto",
-    },
+    utilBar: { display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" },
     linkBtn: {
       height: 32,
       padding: "0 12px",
@@ -1431,7 +1893,6 @@ export default function CollectionsSegmentClient() {
       fontSize: 13,
       letterSpacing: ".08em",
     },
-    // Floating cart + wishlist (copied concept from AllProductsClient)
     iconDock: {
       position: "fixed",
       top: "calc(var(--nav-h, 88px) + 48px)",
@@ -1455,8 +1916,7 @@ export default function CollectionsSegmentClient() {
       boxShadow: "0 8px 22px rgba(15,33,71,.18)",
       cursor: "pointer",
       position: "relative",
-      transition:
-        "transform .1s ease-out, box-shadow .15s ease, border .15s ease",
+      transition: "transform .1s ease-out, box-shadow .15s ease, border .15s ease",
     },
     iconBtnHover: {
       transform: "translateY(-1px)",
@@ -1479,79 +1939,96 @@ export default function CollectionsSegmentClient() {
       justifyContent: "center",
       padding: "0 6px",
     },
+    loadingRow: {
+      padding: 22,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 10,
+      fontWeight: 800,
+      color: "#7a6c4b",
+      fontSize: 14,
+    },
+    skeleton: {
+      height: 320,
+      borderRadius: 18,
+      border: "1px solid #eee7d8",
+      background:
+        "linear-gradient(90deg, rgba(246,241,230,.9), rgba(255,255,255,.95), rgba(246,241,230,.9))",
+      backgroundSize: "200% 100%",
+      animation: "tdlsShimmer 1.2s ease-in-out infinite",
+    },
   };
 
-  /* ---------- price preset helpers ---------- */
-  const pricePresets = useMemo(() => {
-    const lo = facets.priceMin || 0;
-    const hi = facets.priceMax || 0;
-    if (hi <= lo) return [];
-    const span = hi - lo;
-    const step = Math.max(500, Math.round(span / 4 / 100) * 100);
-    return [
-      [lo, lo + step],
-      [lo + step, lo + step * 2],
-      [lo + step * 2, lo + step * 3],
-      [lo + step * 3, hi],
-    ];
-  }, [facets.priceMin, facets.priceMax]);
-
-  /* ---------- header title / subtitle ---------- */
-  const headerTitle =
-    selectedAudience
-      ? selectedAudience.replace(/-/g, " ").toUpperCase()
-      : selectedCategory
-      ? selectedCategory.replace(/-/g, " ").toUpperCase()
-      : "COLLECTIONS";
-
-  const headerSubtitle = useMemo(() => {
-    const parts = [];
-    if (selectedEvent) parts.push(pretty(selectedEvent));
-    if (selectedAudience) parts.push(pretty(selectedAudience));
-    if (selectedGender) parts.push(pretty(selectedGender));
-    if (selectedAge) parts.push(pretty(selectedAge));
-    if (selectedCategory) parts.push(pretty(selectedCategory));
-    if (selectedSubCategory) parts.push(pretty(selectedSubCategory));
-    const text = parts.join(" • ");
-    return text || "Curated by TDLC studio";
-  }, [
-    selectedEvent,
-    selectedAudience,
-    selectedGender,
-    selectedAge,
-    selectedCategory,
-    selectedSubCategory,
-  ]);
-
-  const copyShareLink = () => {
-    try {
-      navigator.clipboard.writeText(window.location.href);
-    } catch {}
-  };
+  const stableKey = (p, idx) =>
+    String(p?.id || p?.slug || p?.attributes?.slug || `row-${idx}`);
 
   /* ---------- render ---------- */
-  const total = pageFiltered.length;
-  const visible = pageFiltered.slice(0, visibleCount);
-
   return (
     <div style={S.pageShell}>
+      <style jsx global>{`
+        @keyframes tdlsSpin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+        .tdlsSpinner {
+          width: 16px;
+          height: 16px;
+          border-radius: 999px;
+          border: 2px solid rgba(122, 108, 75, 0.25);
+          border-top-color: rgba(122, 108, 75, 0.95);
+          animation: tdlsSpin 0.8s linear infinite;
+        }
+        @keyframes tdlsShimmer {
+          0% {
+            background-position: 200% 0;
+          }
+          100% {
+            background-position: -200% 0;
+          }
+        }
+
+        /* ✅ Route-scoped: kill any full-page debug grid overlay/background */
+        html[data-tdls-no-debug-grid="1"],
+        html[data-tdls-no-debug-grid="1"] body {
+          background-image: none !important;
+        }
+
+        html[data-tdls-no-debug-grid="1"]::before,
+        html[data-tdls-no-debug-grid="1"]::after,
+        html[data-tdls-no-debug-grid="1"] body::before,
+        html[data-tdls-no-debug-grid="1"] body::after {
+          content: "" !important;
+          background: none !important;
+          background-image: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+          display: none !important;
+        }
+
+        html[data-tdls-no-debug-grid="1"] .debug-grid,
+        html[data-tdls-no-debug-grid="1"] .grid-overlay,
+        html[data-tdls-no-debug-grid="1"] #grid-overlay,
+        html[data-tdls-no-debug-grid="1"] [data-debug-grid],
+        html[data-tdls-no-debug-grid="1"] [data-grid-overlay] {
+          display: none !important;
+        }
+      `}</style>
+
       {/* Floating cart + wishlist icons (aligned with AllProductsClient) */}
       <div style={S.iconDock} aria-label="Cart and wishlist">
         <button
           type="button"
-          style={{
-            ...S.iconBtn,
-            ...(hoverWhich === "cart" ? S.iconBtnHover : null),
-          }}
+          style={{ ...S.iconBtn, ...(hoverWhich === "cart" ? S.iconBtnHover : null) }}
           onMouseEnter={() => setHoverWhich("cart")}
           onMouseLeave={() => setHoverWhich(null)}
           onClick={() => router.push("/cart")}
           aria-label="Open cart"
         >
           <FaShoppingCart size={26} color="#0c2340" />
-          {cartCount > 0 && (
-            <span style={S.iconBadge}>{cartCount}</span>
-          )}
+          {cartCount > 0 && <span style={S.iconBadge}>{cartCount}</span>}
         </button>
 
         <button
@@ -1665,9 +2142,7 @@ export default function CollectionsSegmentClient() {
                 value={minPrice}
                 min={facets.priceMin}
                 max={maxPrice || undefined}
-                onChange={(e) =>
-                  setMinPrice(Math.max(0, Number(e.target.value) || 0))
-                }
+                onChange={(e) => setMinPrice(Math.max(0, Number(e.target.value) || 0))}
                 aria-label="Min price"
                 placeholder={`${facets.priceMin}`}
               />
@@ -1679,14 +2154,11 @@ export default function CollectionsSegmentClient() {
                 min={minPrice || 0}
                 max={facets.priceMax}
                 onChange={(e) =>
-                  setMaxPrice(
-                    Math.max(minPrice || 0, Number(e.target.value) || 0)
-                  )
+                  setMaxPrice(Math.max(minPrice || 0, Number(e.target.value) || 0))
                 }
                 aria-label="Max price"
                 placeholder={`${facets.priceMax}`}
               />
-              {/* dynamic quick presets */}
               {pricePresets.map(([a, b]) => (
                 <button
                   key={`${a}-${b}`}
@@ -1722,6 +2194,7 @@ export default function CollectionsSegmentClient() {
                 Only in stock
               </label>
             </div>
+
             <div style={S.group}>
               <span style={S.label}>Discount</span>
               <input
@@ -1731,9 +2204,7 @@ export default function CollectionsSegmentClient() {
                 min={0}
                 max={90}
                 onChange={(e) =>
-                  setMinDiscount(
-                    Math.max(0, Math.min(90, Number(e.target.value) || 0))
-                  )
+                  setMinDiscount(Math.max(0, Math.min(90, Number(e.target.value) || 0)))
                 }
                 aria-label="Minimum discount percent"
                 placeholder="0"
@@ -1760,15 +2231,14 @@ export default function CollectionsSegmentClient() {
                   <button
                     type="button"
                     style={S.linkBtn}
-                    onClick={() =>
-                      setShowMoreFilters((s) => !s)
-                    }
+                    onClick={() => setShowMoreFilters((s) => !s)}
                   >
                     More…
                   </button>
                 )}
               </div>
             )}
+
             {facets.sizes.length > 0 && (
               <div style={S.group}>
                 <span style={S.label}>Size</span>
@@ -1787,9 +2257,7 @@ export default function CollectionsSegmentClient() {
                   <button
                     type="button"
                     style={S.linkBtn}
-                    onClick={() =>
-                      setShowMoreFilters((s) => !s)
-                    }
+                    onClick={() => setShowMoreFilters((s) => !s)}
                   >
                     More…
                   </button>
@@ -1843,13 +2311,10 @@ export default function CollectionsSegmentClient() {
                       key={t}
                       type="button"
                       style={S.chip(tagSet.has(t))}
-                      onClick={() =>
-                        toggleSet(tagSet, t, setTagSet)
-                      }
+                      onClick={() => toggleSet(tagSet, t, setTagSet)}
                       title={pretty(t)}
                     >
-                      {pretty(t)}{" "}
-                      <span style={S.badge}>{n}</span>
+                      {pretty(t)} <span style={S.badge}>{n}</span>
                     </button>
                   ))}
                 </div>
@@ -1864,13 +2329,10 @@ export default function CollectionsSegmentClient() {
                       key={c}
                       type="button"
                       style={S.chip(colorSet.has(c))}
-                      onClick={() =>
-                        toggleSet(colorSet, c, setColorSet)
-                      }
+                      onClick={() => toggleSet(colorSet, c, setColorSet)}
                       title={pretty(c)}
                     >
-                      {pretty(c)}{" "}
-                      <span style={S.badge}>{n}</span>
+                      {pretty(c)} <span style={S.badge}>{n}</span>
                     </button>
                   ))}
                 </div>
@@ -1885,13 +2347,10 @@ export default function CollectionsSegmentClient() {
                       key={s}
                       type="button"
                       style={S.chip(sizeSet.has(s))}
-                      onClick={() =>
-                        toggleSet(sizeSet, s, setSizeSet)
-                      }
+                      onClick={() => toggleSet(sizeSet, s, setSizeSet)}
                       title={s}
                     >
-                      {s}{" "}
-                      <span style={S.badge}>{n}</span>
+                      {s} <span style={S.badge}>{n}</span>
                     </button>
                   ))}
                 </div>
@@ -1902,10 +2361,7 @@ export default function CollectionsSegmentClient() {
 
         {/* active filters row */}
         {activeChips.length > 0 && (
-          <div
-            style={S.activeRow}
-            aria-label="Active filters"
-          >
+          <div style={S.activeRow} aria-label="Active filters">
             {activeChips.map((c, i) => (
               <span key={i} style={S.activeChip}>
                 {c.v}
@@ -1955,26 +2411,30 @@ export default function CollectionsSegmentClient() {
 
         {/* count */}
         <div style={S.count}>
-          Showing {Math.min(visibleCount, total)} of {total} curated item
-          {total === 1 ? "" : "s"}
+          Showing {Math.min(displayTarget, pageFiltered.length)} of {totalText} curated item
+          {totalText === 1 ? "" : "s"}
         </div>
 
         {/* grid card */}
         <div style={S.gridCard}>
-          {/* grid */}
-          {loading ? (
-            <div
-              style={{
-                padding: 24,
-                textAlign: "center",
-                fontWeight: 700,
-                color: "#7a6c4b",
-                fontSize: 14,
-              }}
-            >
-              Curating your collection…
-            </div>
-          ) : pageFiltered.length === 0 ? (
+          {/* main render */}
+          {loadingInitial && pageFiltered.length === 0 ? (
+            <>
+              {/* skeleton grid first (no blank, no blink), message appears only if slow */}
+              <ul style={S.grid} aria-label="Loading products">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <li key={`sk-${i}`} style={S.skeleton} />
+                ))}
+              </ul>
+
+              {showLoadingHint && (
+                <div style={S.loadingRow}>
+                  <span className="tdlsSpinner" aria-hidden="true" />
+                  Curating your collection…
+                </div>
+              )}
+            </>
+          ) : pageFiltered.length === 0 && exhausted ? (
             <div
               style={{
                 padding: 28,
@@ -1989,51 +2449,56 @@ export default function CollectionsSegmentClient() {
               Try relaxing one or two filters.
             </div>
           ) : (
-            <ul style={S.grid}>
-              {visible.map((p) => (
-                <li
-                  key={
-                    p.id ||
-                    p.slug ||
-                    p?.attributes?.slug ||
-                    Math.random()
-                  }
+            <>
+              <ul style={S.grid}>
+                {visible.map((p, idx) => (
+                  <li key={stableKey(p, idx)}>
+                    <ProductCard
+                      product={p}
+                      onQuickView={(prod) => {
+                        setQuickProduct(prod || p);
+                        setQuickOpen(true);
+                      }}
+                    />
+                  </li>
+                ))}
+
+                {/* smooth loader placeholders at the end (prevents “grid blink”) */}
+                {loadingMore &&
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <li key={`more-sk-${i}`} style={S.skeleton} />
+                  ))}
+              </ul>
+
+              {/* auto infinite loader sentinel */}
+              <div ref={sentinelRef} style={{ height: 1 }} />
+
+              {/* optional manual “boost” button (never required) */}
+              {pageFiltered.length > visible.length && (
+                <button
+                  type="button"
+                  onClick={() => setDisplayTarget((c) => c + DISPLAY_STEP)}
+                  style={S.loadMore}
                 >
-                  <ProductCard
-                    product={p}
-                    onQuickView={(prod) => {
-                      setQuickProduct(prod || p);
-                      setQuickOpen(true);
-                    }}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
+                  Load next 100
+                </button>
+              )}
 
-          {/* infinite loader sentinel */}
-          {visibleCount < pageFiltered.length && (
-            <div
-              ref={sentinelRef}
-              style={{ height: 1 }}
-            />
-          )}
+              {loadingMore && (
+                <div style={S.loadingRow}>
+                  <span className="tdlsSpinner" aria-hidden="true" />
+                  Loading more…
+                </div>
+              )}
 
-          {/* optional manual load more button */}
-          {visibleCount < pageFiltered.length && !loading && (
-            <button
-              type="button"
-              onClick={() =>
-                setVisibleCount((c) => c + 24)
-              }
-              style={S.loadMore}
-            >
-              Load more pieces
-            </button>
+              {!!fetchError && (
+                <div style={{ ...S.loadingRow, color: "#7a102b" }}>{fetchError}</div>
+              )}
+            </>
           )}
         </div>
 
-        {/* Bottom floating bar (same pattern as AllProductsClient) */}
+        {/* Bottom floating bar */}
         <BottomFloatingBar />
 
         {/* Quick View */}

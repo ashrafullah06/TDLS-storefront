@@ -1,4 +1,4 @@
-//✅ FULL corrected file: app/api/strapi/route.js
+// ✅ FILE: app/api/strapi/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -47,19 +47,15 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 })();
 
 /**
- * ✅ Default products populate mode:
- * - "filtersafe" (recommended): includes all relations your filters need (taxonomy + variants.sizes)
- * - "light": taxonomy only (NOT recommended for your current UI; causes empty-filter false negatives)
- * - "full": populate=*
+ * ✅ Default /products list profile when there are NO filters:
+ * - "cardlite" (recommended): taxonomy + thumbnail (fast for BFBar/HomePanel/SlidingMenu)
+ * - "filtersafe": taxonomy + variants.sizes + thumbnail (heavier; only needed when filters exist)
  *
- * NOTE (production fix):
- * For /products list, we ALWAYS enforce a minimum “filter-safe” dataset (taxonomy + variants.sizes)
- * even if the caller passes populate=*, because Strapi's populate=* is shallow and can omit
- * nested relations (ex: variants.sizes). Missing those nested relations is the #1 reason your
- * UI sometimes shows: “No pieces match these filters right now…”.
+ * IMPORTANT:
+ * Regardless of this default, when a /products LIST request contains filters[...] we ALWAYS enforce "filtersafe".
  */
-const DEFAULT_PRODUCTS_POPULATE_MODE = String(
-  process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE || "filtersafe"
+const DEFAULT_PRODUCTS_LIST_PROFILE = String(
+  process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE || "cardlite"
 )
   .trim()
   .toLowerCase();
@@ -113,8 +109,6 @@ const PRODUCT_CACHE_CONTROL = (() => {
 
 function cacheHeaders(cc) {
   const v = String(cc || "no-store");
-  // Add extra headers that help Vercel/CDNs honor s-maxage & stale-on-error more consistently.
-  // (No cookies are set here; these are safe for public reads.)
   return {
     "cache-control": v,
     "CDN-Cache-Control": v,
@@ -170,7 +164,6 @@ function normalizeOrigin(raw) {
 }
 
 function assertNotLocalhostInProd(origin) {
-  // ✅ Only enforce on Vercel runtime; allow localhost for local `next start`.
   if (!IS_PROD || !IS_VERCEL) return;
 
   const h = new URL(origin).hostname;
@@ -201,17 +194,14 @@ try {
  * and does not contain CRLF or protocol tricks.
  *
  * ✅ Production stability: also accept full Strapi URLs ONLY if same-origin.
- * (Helps if any client accidentally passes https://cms.../api/... into `path`.)
  */
 function normalizeStrapiPath(input) {
   const p0 = String(input || "").trim();
   if (!p0) return "";
 
-  // Block protocol-relative and CRLF always
   if (p0.startsWith("//")) return "";
   if (/[\r\n]/.test(p0)) return "";
 
-  // If full URL, allow ONLY if it matches STRAPI_ORIGIN or STRAPI_API_BASE
   if (/^https?:\/\//i.test(p0)) {
     try {
       const u = new URL(p0);
@@ -221,7 +211,6 @@ function normalizeStrapiPath(input) {
       const ok = origin === STRAPI_ORIGIN || origin === new URL(STRAPI_API_BASE).origin;
       if (!ok) return "";
 
-      // Must contain /api/ path
       const idx = u.pathname.indexOf("/api/");
       if (idx === -1) return "";
 
@@ -302,7 +291,65 @@ function hasFiltersInPath(path) {
   return false;
 }
 
+/**
+ * ✅ NEW: Safe-bypass for your “lite taxonomy” /products requests
+ * These are NOT heavy (no deep populate, no wildcard, no variants/images),
+ * so we never sanitize them even if query-length/populate-count thresholds are crossed.
+ */
+function isSafeLiteProductsTaxonomyRequest(path) {
+  const { pathname, search } = splitPathAndQuery(path);
+  if (pathname !== "/products") return false;
+  if (!search) return false;
+
+  // If filters exist, we still treat it as potentially heavy (filtersafe will be enforced)
+  if (hasFiltersInPath(path)) return false;
+
+  const params = new URLSearchParams(search);
+
+  // wildcard populate is NOT lite
+  const pop = String(params.get("populate") || "").trim();
+  if (pop === "*") return false;
+
+  // must be object populate only (populate[rel]...)
+  if (!hasObjectPopulate(params)) return false;
+
+  // block deep populates
+  const blockedPrefixes = [
+    "populate[variants",
+    "populate[images",
+    "populate[thumbnail]",
+  ];
+  for (const k of params.keys()) {
+    for (const bp of blockedPrefixes) {
+      if (k.startsWith(bp)) return false;
+    }
+  }
+
+  // allow only populate[REL][fields][i] (or populate[REL][fields]) style
+  // (your request uses populate[rel][fields][0]=slug)
+  for (const k of params.keys()) {
+    if (!k.startsWith("populate[")) continue;
+
+    // ✅ FIX (SlidingMenuBar): JS regex anchors must be ^ and $ (not \A and \z).
+    // Allowed:
+    //   populate[rel][fields]
+    //   populate[rel][fields][0]
+    //   populate[rel][fields][1] ...
+    const ok = /^populate\[[^\]]+\]\[fields\](?:\[\d+\])?$/.test(k);
+    if (!ok) return false;
+  }
+
+  // keep it bounded
+  const popCount = countPopulateKeys(params);
+  if (popCount > Math.min(30, HEAVY_MAX_POPULATE_KEYS)) return false;
+
+  return true;
+}
+
 function isHeavyPopulateRequest(path) {
+  // ✅ Do not classify your lite taxonomy requests as heavy
+  if (isSafeLiteProductsTaxonomyRequest(path)) return false;
+
   const { search } = splitPathAndQuery(path);
   if (!search) return false;
 
@@ -359,7 +406,6 @@ const FAST_META_DEFAULT_PAGE_SIZE = (() => {
 /**
  * ✅ IMPORTANT PRODUCTION FIX:
  * audience-categories must include tier relations for your filter UI.
- * If a “thin” meta payload gets cached as any-meta, your filters can compute “0 matches” randomly.
  */
 const META_FILTERSAFE_POPULATES = new Map([
   [
@@ -443,7 +489,6 @@ function applyFastMetaProfile(pathname, params) {
     }
   }
 
-  // ✅ critical: keep tier relations for audience-categories
   applyMetaFilterSafePopulate(pathname, params);
 
   if (!params.get("pagination[pageSize]")) {
@@ -484,6 +529,20 @@ function applyProductsTaxonomyPopulate(params) {
     for (let i = 0; i < fields.length; i++) {
       params.set(`populate[${rel}][fields][${i}]`, String(fields[i]));
     }
+  }
+}
+
+/**
+ * "cardlite" profile:
+ * - taxonomy (fields only)
+ * - thumbnail
+ * - NO variants.sizes (keeps BFBar/HomePanel/SlidingMenu fast)
+ */
+function applyProductsCardLitePopulate(params) {
+  applyProductsTaxonomyPopulate(params);
+
+  if (!hasPopulateForRel(params, "thumbnail")) {
+    params.set("populate[thumbnail]", "*");
   }
 }
 
@@ -528,7 +587,15 @@ function applyProductDetailPopulate(params) {
   if (!hasPopulateForRel(params, "thumbnail")) params.set("populate[thumbnail]", "*");
 }
 
-function normalizePopulateStringToObject(params, mode = "products-list") {
+/**
+ * Convert populate="*" or populate="a,b,c" to deterministic populate object.
+ *
+ * mode:
+ * - "products-detail"
+ * - "products-list-filtersafe"
+ * - "products-list-cardlite"
+ */
+function normalizePopulateStringToObject(params, mode = "products-list-cardlite") {
   const raw = String(params.get("populate") || "").trim();
   if (!raw) return;
 
@@ -549,8 +616,10 @@ function normalizePopulateStringToObject(params, mode = "products-list") {
   if (hasStar) {
     if (mode === "products-detail") {
       applyProductDetailPopulate(params);
-    } else {
+    } else if (mode === "products-list-filtersafe") {
       applyProductsFilterSafePopulate(params);
+    } else {
+      applyProductsCardLitePopulate(params);
     }
     return;
   }
@@ -568,6 +637,16 @@ function normalizePopulateStringToObject(params, mode = "products-list") {
   }
 }
 
+/**
+ * Normalize /products requests:
+ * - detail: always ensure variants.sizes + taxonomy + images + thumbnail
+ * - list:
+ *   - if filters exist => enforce FILTERSAFE (taxonomy + variants.sizes + thumbnail), ignoring client populate
+ *   - else:
+ *       - if populate="*" => convert to CARDLITE
+ *       - if no populate at all => default CARDLITE
+ *       - if client provided populate[...] (lite queries) => RESPECT it (do not force variants)
+ */
 function normalizeProductsPath(p) {
   const { pathname, search } = splitPathAndQuery(p);
   if (!pathname.startsWith("/products")) return p;
@@ -577,34 +656,60 @@ function normalizeProductsPath(p) {
   const isList = pathname === "/products";
   const isDetail = !isList;
 
+  const listHasFilters = isList ? hasFiltersInPath(p) : false;
+  const listProfile =
+    listHasFilters
+      ? "filtersafe"
+      : (DEFAULT_PRODUCTS_LIST_PROFILE === "filtersafe" ? "filtersafe" : "cardlite");
+
+  // If caller mixed populate="*" with populate[rel]..., drop populate="*"
   if (params.has("populate") && hasObjectPopulate(params)) {
     params.delete("populate");
   }
 
+  // If populate is a string, normalize it according to mode
   if (params.has("populate") && !hasObjectPopulate(params)) {
-    normalizePopulateStringToObject(params, isDetail ? "products-detail" : "products-list");
+    normalizePopulateStringToObject(
+      params,
+      isDetail
+        ? "products-detail"
+        : listProfile === "filtersafe"
+          ? "products-list-filtersafe"
+          : "products-list-cardlite"
+    );
   }
 
   if (isDetail) {
-    if (!hasAnyPopulate(params)) {
-      applyProductDetailPopulate(params);
-    } else {
-      applyProductDetailPopulate(params);
-    }
+    // Always enforce detail minimums (safe even if caller already populated)
+    applyProductDetailPopulate(params);
   } else {
-    if (!hasAnyPopulate(params)) {
-      if (DEFAULT_PRODUCTS_POPULATE_MODE === "light") {
-        applyProductsFilterSafePopulate(params);
-      } else if (DEFAULT_PRODUCTS_POPULATE_MODE === "full") {
-        applyProductsFilterSafePopulate(params);
-      } else {
-        applyProductsFilterSafePopulate(params);
-      }
-    } else {
+    if (listProfile === "filtersafe") {
+      // Filtersafe list MUST be deterministic: strip client populate and enforce
+      stripPopulateParams(params);
       applyProductsFilterSafePopulate(params);
+    } else {
+      // Card-lite list:
+      // - If no populate directives at all, enforce cardlite.
+      // - If caller provided populate[...] (lite queries), keep it.
+      if (!hasAnyPopulate(params)) {
+        applyProductsCardLitePopulate(params);
+      } else {
+        // If caller explicitly asked for variants, ensure sizes.
+        if (hasPopulateForRel(params, "variants")) {
+          let hasSizes = false;
+          for (const k of params.keys()) {
+            if (k.startsWith("populate[variants][populate][sizes]")) {
+              hasSizes = true;
+              break;
+            }
+          }
+          if (!hasSizes) params.set("populate[variants][populate][sizes]", "*");
+        }
+      }
     }
   }
 
+  // pagination defaults for list
   if (isList) {
     const pageSizeKey = "pagination[pageSize]";
     const existing = params.get(pageSizeKey);
@@ -624,13 +729,38 @@ function normalizeProductsPath(p) {
 }
 
 /**
- * ✅ PUBLIC products list profile enforcement:
- * - Keep filters/sort/pagination/fields
- * - Strip ALL populate directives provided by client
- * - Re-apply deterministic “filter-safe” populate (taxonomy fields + variants.sizes + thumbnail)
+ * ✅ PUBLIC products list enforcement:
+ * We ONLY enforce deterministically when:
+ * - filters are present (must be filtersafe)
+ * - populate="*" or no populate is present (we rewrite to cardlite by default to keep BFBar/HomePanel fast)
  *
- * This removes the #1 production cause of slow/502 responses: client accidentally sending populate=* or populate[rel]=*
- * for many relations.
+ * If caller provided explicit populate[...] (lite queries), and there are no filters, we do NOT override it.
+ */
+function shouldForcePublicProductsList(path) {
+  const { pathname, search } = splitPathAndQuery(path);
+  if (pathname !== "/products") return false;
+
+  if (hasFiltersInPath(path)) return true;
+
+  const params = new URLSearchParams(search || "");
+  const pop = String(params.get("populate") || "").trim();
+
+  const hasAnyPop = hasAnyPopulate(params);
+  const hasObjPop = hasObjectPopulate(params);
+
+  if (!hasAnyPop) return true;
+  if (pop === "*") return true;
+
+  // explicit populate[...] => do NOT force
+  if (hasObjPop) return false;
+
+  return false;
+}
+
+/**
+ * Force to a safe public list profile (used by heavy-guard sanitizer).
+ * If filters exist => filtersafe
+ * Else => cardlite
  */
 function forcePublicProductsListPath(p) {
   const { pathname, search } = splitPathAndQuery(p);
@@ -638,14 +768,19 @@ function forcePublicProductsListPath(p) {
 
   const params = new URLSearchParams(search || "");
 
-  // Never allow noOptimize to bypass list enforcement on public requests
   if (params.get("noOptimize") === "1") params.delete("noOptimize");
 
-  // Strip any populate directives from client, then enforce filter-safe populate deterministically
-  stripPopulateParams(params);
-  applyProductsFilterSafePopulate(params);
+  const hasFilters = hasFiltersInPath(p);
 
-  // Ensure pagination keys exist
+  // strip client populate directives then apply deterministic profile
+  stripPopulateParams(params);
+
+  if (hasFilters) {
+    applyProductsFilterSafePopulate(params);
+  } else {
+    applyProductsCardLitePopulate(params);
+  }
+
   if (!params.get("pagination[pageSize]")) {
     params.set("pagination[pageSize]", String(DEFAULT_PRODUCTS_PAGESIZE));
   }
@@ -661,11 +796,7 @@ function sanitizeMetaPathForPublic(p) {
   const { pathname, search } = splitPathAndQuery(p);
   const params = new URLSearchParams(search || "");
 
-  // strip heavy populate but keep a deterministic filtersafe shape for known endpoints
   stripPopulateParams(params);
-
-  // ✅ critical: if this is a known meta endpoint, re-apply the fast profile
-  // (audience-categories will re-add tier relations)
   applyFastMetaProfile(pathname, params);
 
   const qs = params.toString();
@@ -673,9 +804,10 @@ function sanitizeMetaPathForPublic(p) {
 }
 
 function sanitizeProductsListPathForPublic(p) {
-  // Now reuses the stricter list profile (deterministic + safe)
   return forcePublicProductsListPath(p);
 }
+
+/* ───────── build upstream URL ───────── */
 
 function buildTargetUrl(normalizedPath) {
   const { pathname, search } = splitPathAndQuery(normalizedPath);
@@ -746,23 +878,13 @@ const MEM_PROD = G.__TDLS_STRAPI_MEM_PROD__ ?? (G.__TDLS_STRAPI_MEM_PROD__ = new
 const LAST_GOOD = G.__TDLS_STRAPI_LAST_GOOD__ ?? (G.__TDLS_STRAPI_LAST_GOOD__ = new Map());
 const STOCK_CACHE = G.__TDLS_STRAPI_STOCK__ ?? (G.__TDLS_STRAPI_STOCK__ = new Map());
 
-/**
- * IMPORTANT:
- * This key MUST represent a PRODUCTS LIST payload only.
- * (Previously it could be poisoned by /products/:slug detail payloads.)
- */
-const LAST_GOOD_ANY_PRODUCTS_KEY = "pub|prod|__any__";
+const LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY = "pub|prod|__any__|cardlite";
+const LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY = "pub|prod|__any__|filtersafe";
 
 function metaAnyKeyFromPathname(pathname) {
   return `pub|meta|__any__:${pathname}`;
 }
 
-/**
- * ✅ PRODUCTION FIX:
- * Your product list payload is often >1MB.
- * Previously MEM_MAX_BYTES default (1MB) caused mem-cache to NEVER store products,
- * leading to repeated upstream hits and random empty/timeout behavior.
- */
 const MEM_MAX_BYTES_META = (() => {
   const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES_META || 1024 * 1024);
   if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
@@ -910,7 +1032,12 @@ async function warmMetaCachesIfNeeded(baseHeaders) {
 
       if (memGet(MEM_META, cacheKey)?.payloadStr) return;
 
-      const dk = `warm|meta|${eff}`;
+      /**
+       * ✅ NEW: Use the SAME inflight key shape as real meta requests
+       * so concurrent UI requests join the warm promise (no double fetch).
+       */
+      const dk = `meta|${eff}|pub|${STRAPI_TOKEN ? "tok" : "notok"}|nc0|g0`;
+
       await runDedupe(dk, async () => {
         const res = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_META });
         if (!res.ok) return;
@@ -1176,17 +1303,18 @@ function isSuspectEmptyProductsResponse(data) {
   return Number.isFinite(total) && total > 0;
 }
 
-/**
- * Guard: ensure LAST_GOOD_ANY_PRODUCTS_KEY is truly a products LIST payload (array data).
- */
-function anyProductsListPayloadStr() {
-  const any = lastGoodGet(LAST_GOOD_ANY_PRODUCTS_KEY);
+function anyProductsListPayloadStr(profile /* "cardlite" | "filtersafe" */) {
+  const key =
+    profile === "filtersafe"
+      ? LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY
+      : LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY;
+
+  const any = lastGoodGet(key);
   if (!any?.payloadStr) return null;
 
   const parsed = safeJsonParse(any.payloadStr);
   const strapi = parsed?.data;
 
-  // Must be list (array data) AND have at least 1 item
   if (!Array.isArray(strapi?.data)) return null;
 
   const cnt = productCountFromStrapiPayload(strapi);
@@ -1196,7 +1324,7 @@ function anyProductsListPayloadStr() {
 }
 
 async function fetchBroaderProductsFallback(baseHeaders) {
-  // Use safer pageSize for fallback reliability (configurable)
+  // Fallback is intentionally unfiltered and safe (cardlite), for reliability.
   const fallbackPath = canonicalizePath(
     forcePublicProductsListPath(`/products?pagination[pageSize]=${BROAD_FALLBACK_PAGESIZE}`)
   );
@@ -1206,7 +1334,7 @@ async function fetchBroaderProductsFallback(baseHeaders) {
   try {
     res = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_PRODUCTS });
   } catch {
-    return null; // ✅ never throw; allow main pipeline to continue fallbacks
+    return null;
   }
 
   if (!res.ok) return null;
@@ -1293,12 +1421,19 @@ export async function GET(req) {
     const noCache = url.searchParams.get("noCache") === "1";
     const allowHeavy = url.searchParams.get("allowHeavy") === "1";
 
-    let effectivePath = canonicalizePath(normalizeProductsPath(canonicalizePath(normalizedPath0)));
+    // Normalize products/meta behavior (respects lite populate[...] when no filters exist)
+    let effectivePath = canonicalizePath(
+      normalizeProductsPath(canonicalizePath(normalizedPath0))
+    );
 
     let { pathname: effPathname } = splitPathAndQuery(effectivePath);
     let isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
     let isProductsList = isProductEndpoint && effPathname === "/products";
 
+    const productsListHasFilters = isProductsList ? hasFiltersInPath(effectivePath) : false;
+    const productsListProfile = productsListHasFilters ? "filtersafe" : "cardlite";
+
+    // Heavy guard (PUBLIC only)
     if (
       HEAVY_GUARD_ENABLED &&
       !allowHeavy &&
@@ -1318,6 +1453,7 @@ export async function GET(req) {
       isProductsList = isProductEndpoint && effPathname === "/products";
     }
 
+    // Meta path optimization (PUBLIC only)
     if (!hasClientSecret && !isProductEndpoint) {
       const normalizedMeta = normalizeMetaPath(effectivePath, { isPublic: true });
       effectivePath = canonicalizePath(normalizedMeta);
@@ -1328,13 +1464,13 @@ export async function GET(req) {
     }
 
     /**
-     * ✅ CRITICAL: enforce deterministic, safe list profile for PUBLIC /products
-     * This prevents frontend-bundle accidental populate=* / populate[rel]=* causing slow/502.
+     * ✅ PUBLIC /products list enforcement (conditional)
+     * - filters => force filtersafe
+     * - populate="*" OR no populate => force cardlite (fast default)
+     * - explicit populate[...] lite queries => do NOT override
      */
-    if (!hasClientSecret && isProductsList) {
-      const forced = canonicalizePath(forcePublicProductsListPath(effectivePath));
-      effectivePath = forced;
-
+    if (!hasClientSecret && isProductsList && shouldForcePublicProductsList(effectivePath)) {
+      effectivePath = canonicalizePath(forcePublicProductsListPath(effectivePath));
       ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
       isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
       isProductsList = isProductEndpoint && effPathname === "/products";
@@ -1374,6 +1510,7 @@ export async function GET(req) {
           "x-tdls-mem": "1",
           "x-tdls-guard": guarded ? "1" : "0",
           ...(isProductEndpoint ? { "x-tdls-products-count": String(cnt ?? 0) } : {}),
+          ...(isProductsList ? { "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite" } : {}),
         });
       }
     }
@@ -1383,8 +1520,6 @@ export async function GET(req) {
     }|${STRAPI_TOKEN ? "tok" : "notok"}|${noCache ? "nc1" : "nc0"}|${guarded ? "g1" : "g0"}`;
 
     const result = await runDedupe(dedupeKey, async () => {
-      // ✅ CRITICAL STABILITY FIX:
-      // Never let upstream fetch throws bypass your fallback pipeline.
       try {
         const delays = isProductEndpoint ? RETRY_DELAYS_PRODUCTS : RETRY_DELAYS_META;
 
@@ -1417,18 +1552,18 @@ export async function GET(req) {
                 if (!isSuspectEmptyProductsResponse(data2)) data = data2;
               } catch {}
             }
-          } catch {
-            // ignore; fallback logic below will cover empties if needed
-          }
+          } catch {}
         }
 
         if (isProductEndpoint) {
           data = await patchProductsWithPrismaStock(data);
         }
 
+        // Products-list resiliency: prefer profile-matched "any" fallbacks
         if (!hasClientSecret && isProductsList) {
           const countNow = productCountFromStrapiPayload(data);
           const hasFilters = hasFiltersInPath(effectivePath);
+          const wantAnyProfile = hasFilters ? "filtersafe" : "cardlite";
 
           if (countNow === 0) {
             const lgExact = lastGoodGet(lastGoodKey);
@@ -1442,20 +1577,20 @@ export async function GET(req) {
               };
             }
 
-            const anyList = anyProductsListPayloadStr();
+            const anyList = anyProductsListPayloadStr(wantAnyProfile);
             if (anyList) {
               return {
                 ok: true,
                 status: 200,
                 payloadStr: anyList,
                 degraded: true,
-                reason: hasFilters ? "EMPTY->ANY_PRODUCTS_CACHE_FILTERED" : "EMPTY->ANY_PRODUCTS_CACHE",
+                reason: hasFilters ? "EMPTY->ANY_PRODUCTS_PROFILE_FILTERED" : "EMPTY->ANY_PRODUCTS_PROFILE",
               };
             }
 
             const broad = await fetchBroaderProductsFallback(baseHeaders);
             if (broad) {
-              lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
+              lastGoodSet(LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY, broad, LAST_GOOD_ANY_TTL_MS);
               return {
                 ok: true,
                 status: 200,
@@ -1526,6 +1661,7 @@ export async function GET(req) {
           "x-tdls-upstream-status": String(result?.status || 0),
           "x-tdls-guard": guarded ? "1" : "0",
           ...(isProductEndpoint ? { "x-tdls-products-count": String(cnt ?? 0) } : {}),
+          ...(isProductsList ? { "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite" } : {}),
         });
       }
 
@@ -1544,7 +1680,8 @@ export async function GET(req) {
       }
 
       if (isProductsList) {
-        const anyList = anyProductsListPayloadStr();
+        const anyProfile = productsListHasFilters ? "filtersafe" : "cardlite";
+        const anyList = anyProductsListPayloadStr(anyProfile);
         if (anyList) {
           const parsed = safeJsonParse(anyList);
           const cnt = productCountFromStrapiPayload(parsed?.data);
@@ -1553,16 +1690,17 @@ export async function GET(req) {
             ...cacheHeaders(cacheControl),
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
-            "x-tdls-fallback": "any-products",
+            "x-tdls-fallback": "any-products-profile",
             "x-tdls-upstream-status": String(result?.status || 0),
             "x-tdls-guard": guarded ? "1" : "0",
             "x-tdls-products-count": String(cnt ?? 0),
+            "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite",
           });
         }
 
         const broad = await fetchBroaderProductsFallback(baseHeaders);
         if (broad) {
-          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, broad, LAST_GOOD_ANY_TTL_MS);
+          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY, broad, LAST_GOOD_ANY_TTL_MS);
 
           const parsed = safeJsonParse(broad);
           const cnt = productCountFromStrapiPayload(parsed?.data);
@@ -1575,6 +1713,7 @@ export async function GET(req) {
             "x-tdls-upstream-status": String(result?.status || 0),
             "x-tdls-guard": guarded ? "1" : "0",
             "x-tdls-products-count": String(cnt ?? 0),
+            "x-tdls-products-profile": "cardlite",
           });
         }
       }
@@ -1627,9 +1766,12 @@ export async function GET(req) {
         lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
       }
 
-      // ✅ Only store LIST payloads into ANY key (prevents “single-product” poisoning)
       if (isProductsList && isGoodProductPayload) {
-        lastGoodSet(LAST_GOOD_ANY_PRODUCTS_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
+        if (productsListHasFilters) {
+          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
+        } else {
+          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
+        }
       }
 
       if (!isProductEndpoint) {
@@ -1646,6 +1788,7 @@ export async function GET(req) {
       "x-tdls-fallback": result?.reason ? String(result.reason) : "0",
       "x-tdls-guard": guarded ? "1" : "0",
       ...(isProductEndpoint ? { "x-tdls-products-count": String(productCount ?? 0) } : {}),
+      ...(isProductsList ? { "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite" } : {}),
     });
   } catch (err) {
     const ms = Date.now() - t0;

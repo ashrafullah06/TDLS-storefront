@@ -47,6 +47,36 @@ const DEFAULT_TITLE = `${BRAND} — Premium multi-product ecommerce`;
 const DEFAULT_DESC =
   "TDLS is a premium multi-product ecommerce brand. Shop curated essentials across multiple categories with a clean, reliable buying experience.";
 
+/* ✅ GLOBAL “GRID / COLUMN FLASH” KILL SWITCH
+   - Applies during route transitions + loading.jsx too (because layout is always mounted)
+   - Does NOT change UI; only prevents unwanted background/pseudo overlays from flashing
+*/
+const TDLS_GLOBAL_GRIDKILL_CSS = `
+  /* Remove any global grid/stripe background images */
+  html,
+  body,
+  #app-shell,
+  main {
+    background-image: none !important;
+  }
+
+  /* Kill common overlay pseudo-elements that draw center dividers */
+  html::before,
+  html::after,
+  body::before,
+  body::after,
+  #app-shell::before,
+  #app-shell::after,
+  main::before,
+  main::after {
+    content: none !important;
+    background: none !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+  }
+`;
+
 /** @type {import("next").Metadata} */
 export const metadata = {
   metadataBase: new URL(SITE_URL),
@@ -154,6 +184,9 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body id="app-shell">
+        {/* ✅ MUST be first to prevent flash during loading/route transition */}
+        <style dangerouslySetInnerHTML={{ __html: TDLS_GLOBAL_GRIDKILL_CSS }} />
+
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}

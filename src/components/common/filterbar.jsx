@@ -1,18 +1,115 @@
 // components/common/filterbar.jsx
-import React, { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+"use client";
+
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import classNames from "classnames";
 import { useOptions } from "@/providers/optionsprovider";
+import { usePathname } from "next/navigation";
 import { FaFilter, FaTimes, FaChevronDown, FaChevronUp } from "react-icons/fa";
 
 /**
- * Universal FilterBar for TDLC: Tier, Audience, Category, Event, Age Group, Gender, Price
+ * Universal FilterBar for TDLS: Tier, Audience, Category, Event, Age Group, Gender, Price
  * Progressive disclosure, "See All" links, sticky and mobile-first.
  *
- * CHANGE GOAL:
- * - Keep desktop (md+) view essentially as-is.
- * - Make mobile/tiny screens truly compact: smaller paddings, font sizes, select widths,
- *   and prevent overflow with safe horizontal scroll.
+ * UNIVERSAL BEHAVIOR (updated):
+ * - Never leak “UI filters” (especially price) from one collection/listing page to another.
+ * - Preserve the page’s own scope (category/event/audience/tier) derived from the URL.
+ * - Do NOT wipe filters when leaving listing → product/details (so back-navigation is not harmed).
+ * - Treat “price == current max” as “All” (no active filter) to avoid stale max causing hidden products.
+ * - UI kept exactly the same.
  */
+
+const KNOWN_FILTER_KEYS = ["tier", "audience", "category", "event", "age", "gender", "price"];
+const AUDIENCE_SLUGS = new Set(["women", "men", "kids", "young", "home-decor"]);
+
+function safeDecode(seg) {
+  try {
+    return decodeURIComponent(seg || "");
+  } catch {
+    return String(seg || "");
+  }
+}
+
+/**
+ * Derive the listing "scope" from the pathname.
+ * This allows us to reset only the UI filters that should never leak,
+ * while preserving the page’s own scope.
+ */
+function deriveCollectionScope(pathname) {
+  const p = (pathname || "").split("?")[0].replace(/\/+$/, "");
+  const segs = p.split("/").filter(Boolean); // ["collections", ...]
+  if (segs[0] !== "collections") return { isListing: false, base: {}, scopeId: "nonlisting" };
+
+  // /collections/all/:categorySlug
+  if (segs[1] === "all") {
+    const cat = segs[2] ? safeDecode(segs[2]) : null;
+    const base = cat ? { category: cat } : {};
+    const scopeId = cat ? `collections:category:${cat}` : "collections:all";
+    return { isListing: true, base, scopeId };
+  }
+
+  // /collections/events/:eventSlug
+  if (segs[1] === "events") {
+    const ev = segs[2] ? safeDecode(segs[2]) : null;
+    const base = ev ? { event: ev } : {};
+    const scopeId = ev ? `collections:event:${ev}` : "collections:events";
+    return { isListing: true, base, scopeId };
+  }
+
+  // /collections/:slug  (audience OR tier)
+  if (segs[1]) {
+    const slug = safeDecode(segs[1]);
+    if (AUDIENCE_SLUGS.has(slug)) {
+      return { isListing: true, base: { audience: slug }, scopeId: `collections:audience:${slug}` };
+    }
+    return { isListing: true, base: { tier: slug }, scopeId: `collections:tier:${slug}` };
+  }
+
+  return { isListing: true, base: {}, scopeId: "collections:all" };
+}
+
+/**
+ * Keep any unknown keys (for parent/page logic) untouched.
+ * Only manage the keys FilterBar is responsible for.
+ */
+function stripKnownKeysKeepUnknown(obj) {
+  const out = {};
+  const src = obj || {};
+  for (const k in src) {
+    if (!KNOWN_FILTER_KEYS.includes(k)) out[k] = src[k];
+  }
+  return out;
+}
+
+function normalizeEmpty(v) {
+  if (v === "" || v == null) return undefined;
+  return v;
+}
+
+function shouldResetToBase(current, base) {
+  const cur = current || {};
+  const b = base || {};
+
+  for (const k of KNOWN_FILTER_KEYS) {
+    const cv = normalizeEmpty(cur[k]);
+    const bv = normalizeEmpty(b[k]);
+
+    // For price, we only care whether a price filter exists (value handled separately with max-normalization).
+    if (k === "price") {
+      if (cv === undefined && bv === undefined) continue;
+      // Any carried price when base has none should be cleared on scope change.
+      if (bv === undefined && cv !== undefined) return true;
+      // (base never sets price in our URL derivation)
+      continue;
+    }
+
+    if (cv === undefined && bv === undefined) continue;
+    if (String(cv) !== String(bv)) return true;
+  }
+
+  return false;
+}
+
 export default function FilterBar({
   filters,
   setFilters,
@@ -20,9 +117,6 @@ export default function FilterBar({
   className = "",
   style = {},
 }) {
-  const router = useRouter();
-
-  // OptionsProvider gives us all filterable values
   const {
     tiers,
     collections,
@@ -34,11 +128,14 @@ export default function FilterBar({
     maxPrice,
   } = useOptions();
 
+  const pathname = usePathname();
+
   // Build option lists
   const tierOptions = useMemo(
     () => (tiers || []).map((t) => ({ label: t.name, value: t.slug })),
     [tiers]
   );
+
   const audienceOptions = useMemo(
     () =>
       (collections || [])
@@ -46,6 +143,7 @@ export default function FilterBar({
         .map((c) => ({ label: c.name, value: c.slug })),
     [collections]
   );
+
   const categoryOptions = useMemo(
     () =>
       (categories || []).map((cat) => ({
@@ -58,6 +156,7 @@ export default function FilterBar({
       })),
     [categories]
   );
+
   const eventOptions = useMemo(
     () =>
       (events || []).map((ev) => ({
@@ -70,10 +169,12 @@ export default function FilterBar({
       })),
     [events]
   );
+
   const ageOptions = useMemo(
     () => (ageGroups || []).map((ag) => ({ label: ag.name, value: ag.slug })),
     [ageGroups]
   );
+
   const genderOptions = useMemo(
     () => (genderGroups || []).map((gg) => ({ label: gg.name, value: gg.slug })),
     [genderGroups]
@@ -87,8 +188,95 @@ export default function FilterBar({
   const stateFilters = filters ?? localFilters;
   const updateFilters = setFilters ?? setLocalFilters;
 
-  // Progressive disclosure: show only key filters by default
+  // Progressive disclosure
   const [showAll, setShowAll] = useState(false);
+
+  // Scope from URL (keeps page’s “base” intact)
+  const scope = useMemo(() => deriveCollectionScope(pathname), [pathname]);
+
+  // Refs for stable access inside effects
+  const latestFiltersRef = useRef(stateFilters);
+  const updateFiltersRef = useRef(updateFilters);
+  const lastScopeIdRef = useRef(scope.scopeId);
+  const lastWasListingRef = useRef(scope.isListing);
+
+  useEffect(() => {
+    latestFiltersRef.current = stateFilters;
+  }, [stateFilters]);
+
+  useEffect(() => {
+    updateFiltersRef.current = updateFilters;
+  }, [updateFilters]);
+
+  function resetToBase(reason = "") {
+    const cur = latestFiltersRef.current || {};
+    const unknown = stripKnownKeysKeepUnknown(cur);
+    const next = { ...unknown, ...scope.base };
+
+    // Avoid unnecessary updates
+    // (We compare only known keys; unknown keys already preserved.)
+    const wouldReset = shouldResetToBase(cur, scope.base);
+    const curPrice = normalizeEmpty(cur.price);
+    const hasPrice = curPrice !== undefined && curPrice !== null && curPrice !== "";
+    if (!wouldReset && !hasPrice) return;
+
+    try {
+      updateFiltersRef.current?.(next);
+    } catch {
+      // never block UI
+    }
+  }
+
+  /**
+   * UNIVERSAL RESET RULE:
+   * - Reset ONLY when moving between listing scopes (collections pages),
+   *   so price (and other UI filters) never leak into the next listing page.
+   * - Do NOT reset when leaving listing → non-listing (prevents harming back-navigation).
+   */
+  useEffect(() => {
+    const prevScopeId = lastScopeIdRef.current;
+    const prevWasListing = lastWasListingRef.current;
+
+    const nowScopeId = scope.scopeId;
+    const nowIsListing = scope.isListing;
+
+    if (prevWasListing && nowIsListing && prevScopeId !== nowScopeId) {
+      // Moved between listing pages -> reset to URL base
+      resetToBase("scope-change");
+      setShowAll(false);
+    }
+
+    lastScopeIdRef.current = nowScopeId;
+    lastWasListingRef.current = nowIsListing;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope.scopeId, scope.isListing]);
+
+  /**
+   * PRICE NORMALIZATION (critical):
+   * If price is equal/above current max, it is effectively “All”.
+   * Keeping it would become a *real* filter when customer moves to a page with higher max,
+   * which is exactly how products get hidden “automatically”.
+   */
+  useEffect(() => {
+    if (!showPrice) return;
+    const cur = latestFiltersRef.current || {};
+    const raw = normalizeEmpty(cur.price);
+    if (raw === undefined) return;
+
+    const p = Number(raw);
+    if (!Number.isFinite(p)) return;
+
+    if (p >= max) {
+      const unknown = stripKnownKeysKeepUnknown(cur);
+      const next = { ...unknown, ...scope.base }; // drop price
+      try {
+        updateFiltersRef.current?.(next);
+      } catch {
+        // never block UI
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [max, showPrice, scope.scopeId]);
 
   // Helper: "See All in This Category" link
   function seeAllLink() {
@@ -106,6 +294,7 @@ export default function FilterBar({
           See all in this category &rsaquo;
         </a>
       );
+
     if (stateFilters.tier)
       return (
         <a
@@ -116,6 +305,7 @@ export default function FilterBar({
           See all in this tier &rsaquo;
         </a>
       );
+
     if (stateFilters.audience)
       return (
         <a
@@ -126,6 +316,7 @@ export default function FilterBar({
           See all in this audience &rsaquo;
         </a>
       );
+
     if (stateFilters.event)
       return (
         <a
@@ -136,21 +327,65 @@ export default function FilterBar({
           See all in this event &rsaquo;
         </a>
       );
+
     return null;
   }
 
   // Filter handlers
   function handleSelect(type, value) {
+    // If user chose "All X" (empty value), remove the filter instead of storing "".
+    if (value === "" || value == null) {
+      if (!stateFilters[type]) return;
+
+      const f = { ...stateFilters };
+      delete f[type];
+
+      // If user clears the scope key (category/tier/audience/event), keep URL base intact by rebuilding from scope
+      // (prevents weird “empty UI but still on a scoped page” situations).
+      if (type === "category" || type === "tier" || type === "audience" || type === "event") {
+        const unknown = stripKnownKeysKeepUnknown(f);
+        updateFilters({ ...unknown, ...scope.base, ...stripKnownKeysKeepUnknown(stateFilters) });
+        return;
+      }
+
+      updateFilters(f);
+      return;
+    }
+
+    if (type === "price") {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return;
+
+      // If user slides to max, treat as “All” (no price filter)
+      if (n >= max) {
+        if (!stateFilters.price) return;
+        const f = { ...stateFilters };
+        delete f.price;
+        updateFilters(f);
+        return;
+      }
+
+      if (stateFilters.price === n) return;
+      updateFilters({ ...stateFilters, price: n });
+      return;
+    }
+
     if (stateFilters[type] === value) return;
     updateFilters({ ...stateFilters, [type]: value });
   }
+
   function handleRemove(type) {
     const f = { ...stateFilters };
     delete f[type];
     updateFilters(f);
   }
+
   function handleClearAll() {
-    updateFilters({});
+    // “Clear All” should NOT destroy the page’s own scope.
+    // It clears only UI filters and returns to the URL-derived base.
+    const unknown = stripKnownKeysKeepUnknown(stateFilters);
+    updateFilters({ ...unknown, ...scope.base });
+    setShowAll(false);
   }
 
   // Filter select box generator
@@ -196,7 +431,8 @@ export default function FilterBar({
   function renderPriceFilter() {
     if (!showPrice || min === max) return null;
 
-    const val = stateFilters.price || max;
+    // If no active price filter, show slider at max but do NOT store it in state
+    const val = stateFilters.price ?? max;
 
     return (
       <div className="flex items-center gap-2 flex-shrink-0 mr-2 sm:mr-4">
@@ -225,6 +461,13 @@ export default function FilterBar({
     const pills = [];
     for (let key in stateFilters) {
       if (!stateFilters[key]) continue;
+
+      // Do not show a no-op price pill (price >= max is normalized away, but keep safe)
+      if (key === "price") {
+        const p = Number(stateFilters[key]);
+        if (Number.isFinite(p) && p >= max) continue;
+      }
+
       let label = "";
       switch (key) {
         case "tier":
@@ -301,6 +544,7 @@ export default function FilterBar({
         </span>
       );
     }
+
     if (pills.length === 0) return null;
 
     return (
@@ -383,10 +627,3 @@ export default function FilterBar({
     </section>
   );
 }
-
-/**
- * NOTE:
- * This file previously did not import classNames but used it in seeAllLink().
- * To keep behavior intact and avoid runtime error, import it here.
- */
-import classNames from "classnames";
