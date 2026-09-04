@@ -7,7 +7,9 @@ set -euo pipefail
 PG_VERSION=16
 PG_CLUSTER=main
 
-if ! pg_lsclusters -h 2>/dev/null | awk '{print $4}' | grep -q online; then
+# Key off real readiness (not cluster status): a snapshot may have captured a
+# running cluster, leaving a stale postmaster.pid that pg_ctlcluster clears on start.
+if ! sudo -u postgres pg_isready -q 2>/dev/null; then
   echo "[start] Starting PostgreSQL ${PG_VERSION}/${PG_CLUSTER}..."
   sudo pg_ctlcluster "$PG_VERSION" "$PG_CLUSTER" start || true
 fi

@@ -25,7 +25,9 @@ if ! command -v pg_ctlcluster >/dev/null 2>&1; then
 fi
 
 # 2) Ensure the cluster is online (db push / seed below need it).
-if ! pg_lsclusters -h 2>/dev/null | awk '{print $4}' | grep -q online; then
+#    Key off real readiness so a stale postmaster.pid (from a snapshot that
+#    captured a running cluster) is cleared by pg_ctlcluster on start.
+if ! sudo -u postgres pg_isready -q 2>/dev/null; then
   log "Starting PostgreSQL cluster ${PG_VERSION}/${PG_CLUSTER}..."
   sudo pg_ctlcluster "$PG_VERSION" "$PG_CLUSTER" start || true
 fi
@@ -113,5 +115,11 @@ npx prisma db push --schema=prisma/app/schema.prisma --skip-generate
 
 log "Seeding superadmin (idempotent)..."
 npx dotenv -e .env -- node prisma/app/seed.js
+
+# Stop the cluster cleanly so that if this install state is captured in a
+# snapshot/build image it does not carry a stale postmaster.pid. start.sh
+# brings PostgreSQL back up on every boot.
+log "Stopping PostgreSQL cluster (clean state for snapshot)..."
+sudo pg_ctlcluster "$PG_VERSION" "$PG_CLUSTER" stop || true
 
 log "Install complete."
