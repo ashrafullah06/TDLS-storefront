@@ -17,32 +17,48 @@ const SITE_URL =
 /* ───────── SEO (no UI/UX or business logic impact) ───────── */
 
 const BRAND = "TDLS";
-const TITLE = `${BRAND} — Premium multi-product ecommerce`;
+
+const TITLE = "Shop TDLS | Refined Clothing & Timeless Style";
+
 const DESCRIPTION =
-  "TDLS is a premium multi-product ecommerce brand. Shop curated essentials across multiple categories with a clean, reliable buying experience.";
-const OG_IMAGE = `${SITE_URL}/favicon.ico`;
+  "Explore TDLS clothing shaped by refined design, effortless comfort and timeless character—pieces created to be worn with confidence and remembered.";
+
+const OG_IMAGE = `${SITE_URL}/tdls-social-preview`;
 
 export const metadata = {
-  title: TITLE,
+  /*
+   * ✅ absolute prevents:
+   * Shop TDLS | Refined Clothing & Timeless Style | TDLS
+   */
+  title: {
+    absolute: TITLE,
+  },
+
   description: DESCRIPTION,
-  alternates: { canonical: `${SITE_URL}/product` },
+
+  alternates: {
+    canonical: `${SITE_URL}/product`,
+  },
+
   openGraph: {
     type: "website",
     url: `${SITE_URL}/product`,
     siteName: BRAND,
     title: TITLE,
     description: DESCRIPTION,
+
     images: [
       {
         url: OG_IMAGE,
-        width: 256,
-        height: 256,
-        alt: BRAND,
+        width: 1200,
+        height: 630,
+        alt: "Shop TDLS — refined clothing, effortless comfort and timeless character.",
       },
     ],
   },
+
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: TITLE,
     description: DESCRIPTION,
     images: [OG_IMAGE],
@@ -61,12 +77,16 @@ export const metadata = {
 async function resolveRequestBaseUrl() {
   try {
     const h = await headers(); // ✅ Next.js 15: headers() is async
+
     const host =
       h.get("x-forwarded-host") ||
       h.get("host") ||
       SITE_URL.replace(/^https?:\/\//i, "");
+
     const proto =
-      h.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
+      h.get("x-forwarded-proto") ||
+      (host.includes("localhost") ? "http" : "https");
+
     return `${proto}://${host}`.replace(/\/+$/, "");
   } catch {
     return SITE_URL.replace(/\/+$/, "");
@@ -81,7 +101,9 @@ function safeJsonLd(obj) {
 
 function getStrapiText(val) {
   if (!val) return "";
+
   if (typeof val === "string") return val;
+
   return String(val);
 }
 
@@ -114,19 +136,26 @@ async function fetchProductsFromStrapi(appBaseUrl) {
 
   // /api/strapi?path=/products?populate=*
   const url = new URL("/api/strapi", base);
+
   url.searchParams.set("path", "/products?populate=*");
 
   const res = await fetch(url.toString(), {
     method: "GET",
+
     headers: {
       "x-strapi-sync-secret": STRAPI_PROXY_SECRET,
     },
+
     cache: "no-store",
-    next: { revalidate: 0 },
+
+    next: {
+      revalidate: 0,
+    },
   });
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
+
     throw new Error(
       `Strapi proxy HTTP error ${res.status} ${res.statusText} – ${
         txt || "no response body"
@@ -135,7 +164,9 @@ async function fetchProductsFromStrapi(appBaseUrl) {
   }
 
   const payload = await res.json().catch((e) => {
-    throw new Error("Failed to parse JSON from /api/strapi: " + e.message);
+    throw new Error(
+      "Failed to parse JSON from /api/strapi: " + e.message
+    );
   });
 
   if (!payload?.ok) {
@@ -148,6 +179,7 @@ async function fetchProductsFromStrapi(appBaseUrl) {
 
   // Strapi products live under payload.data.data
   const list = payload.data?.data;
+
   return Array.isArray(list) ? list : [];
 }
 
@@ -157,18 +189,23 @@ export default async function ProductIndexPage() {
   const requestBaseUrl = await resolveRequestBaseUrl(); // ✅ await the async helper
 
   const products = await fetchProductsFromStrapi(requestBaseUrl);
+
   const safeList = Array.isArray(products) ? products : [];
 
   // Optional: JSON-LD ItemList (no UI change) — helps crawlers understand this page lists products.
   const itemListJsonLd = {
     "@context": "https://schema.org",
     "@type": "ItemList",
+
     name: `${BRAND} Products`,
+
     itemListElement: safeList.slice(0, 24).map((p, idx) => {
       const slug = pickStrapiProductSlug(p);
+
       const url = slug
         ? `${SITE_URL.replace(/\/+$/, "")}/product/${encodeURIComponent(slug)}`
         : `${SITE_URL.replace(/\/+$/, "")}/product`;
+
       return {
         "@type": "ListItem",
         position: idx + 1,
@@ -184,7 +221,9 @@ export default async function ProductIndexPage() {
       <script
         id="tdls-product-index-itemlist"
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: safeJsonLd(itemListJsonLd) }}
+        dangerouslySetInnerHTML={{
+          __html: safeJsonLd(itemListJsonLd),
+        }}
       />
 
       {/* Shared premium navbar, same as cart & collections */}
@@ -192,7 +231,10 @@ export default async function ProductIndexPage() {
 
       {/* AllProductsClient is a "use client" component */}
       {/* siteBaseUrl prop is provided to keep SSR/CSR origin consistent (no UI change). */}
-      <AllProductsClient products={safeList} siteBaseUrl={requestBaseUrl} />
+      <AllProductsClient
+        products={safeList}
+        siteBaseUrl={requestBaseUrl}
+      />
     </>
   );
 }

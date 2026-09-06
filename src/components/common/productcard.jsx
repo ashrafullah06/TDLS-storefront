@@ -3,6 +3,7 @@
 
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCart as use_cart } from "@/components/common/cart_context";
 import styles from "./productcard.module.css";
 
@@ -338,6 +339,7 @@ const normalizeVariants = (p) => {
           barcode,
           pid: pv_prisma,
           prisma_id: pv_prisma,
+
           product_code,
           base_sku,
           product_barcode,
@@ -746,6 +748,7 @@ const getVariantPriceRange = (variants, sel) => {
 
 /* ---------------- component ---------------- */
 export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
+  const router = useRouter();
   const cartCtx = use_cart();
 
   const uiScale = useUiScale();
@@ -839,6 +842,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     () => (product ? derivePrice(product, variants, selection) : null),
     [product, variants, selection]
   );
+
   const stock = useMemo(
     () => (product ? deriveStock(product, variants, selection) : null),
     [product, variants, selection]
@@ -855,6 +859,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     product?.title ||
     product?.attributes?.title ||
     "Product";
+
   const slug = product?.slug || product?.attributes?.slug || "";
 
   const productCodes = product?.codes || product?.attributes?.codes || {};
@@ -935,13 +940,17 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
   useEffect(() => {
     const el = mediaRef.current;
     if (!el) return;
+
     const onKey = (e) => {
       if (e.key === "ArrowLeft" && images.length > 1)
         setIdx((i) => (i - 1 + images.length) % images.length);
+
       if (e.key === "ArrowRight" && images.length > 1)
         setIdx((i) => (i + 1) % images.length);
     };
+
     el.addEventListener("keydown", onKey);
+
     return () => el.removeEventListener("keydown", onKey);
   }, [images.length]);
 
@@ -961,12 +970,14 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
       triggerNudge("color");
       return { ok: false };
     }
+
     if (requiresSize && !selection.size) {
       setError("Please select a size to continue.");
       scrollToBlock("size");
       triggerNudge("size");
       return { ok: false };
     }
+
     return { ok: true };
   };
 
@@ -975,6 +986,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
       setError("This item is currently out of stock.");
       return { ok: false };
     }
+
     return { ok: true };
   };
 
@@ -989,12 +1001,14 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     if (!stockCheck.ok) return;
 
     const qty = 1;
+
     if (stock != null && qty > stock) {
       setError(`Only ${stock} piece(s) available in stock for this selection.`);
       return;
     }
 
     const chosen = pickVariantForSelection(variants, selection);
+
     if (!chosen) {
       setError("No valid variant found for this selection.");
       return;
@@ -1010,13 +1024,32 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
       chosen?.material ||
       null;
 
-    const gsm = product?.gsm || A?.gsm || A?.GSM || chosen?.gsm || chosen?.GSM || null;
+    const gsm =
+      product?.gsm ||
+      A?.gsm ||
+      A?.GSM ||
+      chosen?.gsm ||
+      chosen?.GSM ||
+      null;
 
-    const fit = product?.fit || A?.fit || A?.fit_type || chosen?.fit || null;
+    const fit =
+      product?.fit ||
+      A?.fit ||
+      A?.fit_type ||
+      chosen?.fit ||
+      null;
 
-    const sizeStockId = chosen?.size_stock_id || chosen?.size_id || chosen?.id || null;
+    const sizeStockId =
+      chosen?.size_stock_id ||
+      chosen?.size_id ||
+      chosen?.id ||
+      null;
 
-    const variantPrismaId = chosen?.prisma_id || chosen?.pid || chosen?.variant_pid || null;
+    const variantPrismaId =
+      chosen?.prisma_id ||
+      chosen?.pid ||
+      chosen?.variant_pid ||
+      null;
 
     const sku = chosen?.sku || baseSku || null;
     const barcode = chosen?.barcode || productBarcode || null;
@@ -1029,9 +1062,12 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
       (product?.id != null ? String(product.id) : null);
 
     const vidExternal =
-      variantPrismaId || sku || (sizeStockId != null ? String(sizeStockId) : null);
+      variantPrismaId ||
+      sku ||
+      (sizeStockId != null ? String(sizeStockId) : null);
 
-    const maxAvailable = typeof stock === "number" && stock > 0 ? stock : null;
+    const maxAvailable =
+      typeof stock === "number" && stock > 0 ? stock : null;
 
     const metadata = {
       productCode,
@@ -1111,8 +1147,55 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     // ✅ Still only the global cart; no separate minicart.
   };
 
-  /* ---------------- social share ---------------- */
+  /* ---------------- product-page navigation ---------------- */
   const productPath = slug ? `/product/${slug}` : "";
+
+  /**
+   * The whole LOWER/SOLID part of the ProductCard should navigate to
+   * the full product-description page, except its existing interactive
+   * controls.
+   *
+   * We intentionally do NOT wrap the whole body inside a Link because
+   * the body contains buttons and links. Nested interactive elements
+   * would be invalid HTML and could break Add to Cart, color/size
+   * selection, Share, Copy, etc.
+   */
+  const handleBodyNavigation = useCallback(
+    (event) => {
+      if (!productPath) return;
+
+      const target = event?.target;
+
+      if (!target || typeof target.closest !== "function") return;
+
+      /**
+       * Never navigate when the customer clicked an existing control.
+       *
+       * `closest()` also protects clicks on children inside those
+       * controls, such as a span/checkmark inside a color button.
+       */
+      const interactive = target.closest(
+        [
+          "button",
+          "a",
+          "input",
+          "select",
+          "textarea",
+          "label",
+          "[role='button']",
+          "[role='link']",
+          "[data-product-card-no-nav='true']",
+        ].join(",")
+      );
+
+      if (interactive) return;
+
+      router.push(productPath);
+    },
+    [productPath, router]
+  );
+
+  /* ---------------- social share ---------------- */
 
   // IMPORTANT: deterministic base for SSR/CSR (no window-based branching during render)
   const stableBase = useMemo(() => {
@@ -1135,6 +1218,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
 
   const shareUrlWithUtm = useMemo(() => {
     const base = canonicalUrl || productPath;
+
     return addUtm(base, {
       utm_source: "share",
       utm_medium: "productcard",
@@ -1142,23 +1226,33 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     });
   }, [canonicalUrl, productPath]);
 
-  const shareLinks = useMemo(() => buildShareLinks(shareUrlWithUtm, shareText), [
-    shareUrlWithUtm,
-    shareText,
-  ]);
+  const shareLinks = useMemo(
+    () => buildShareLinks(shareUrlWithUtm, shareText),
+    [shareUrlWithUtm, shareText]
+  );
 
   const handleShare = useCallback(async () => {
     setError(null);
 
     const url =
       shareUrlWithUtm ||
-      (typeof window !== "undefined" ? window.location?.origin + productPath : productPath);
+      (typeof window !== "undefined"
+        ? window.location?.origin + productPath
+        : productPath);
 
-    const payload = { title: name, text: shareText, url };
+    const payload = {
+      title: name,
+      text: shareText,
+      url,
+    };
 
     // Prefer native share on mobile
     try {
-      if (typeof navigator !== "undefined" && typeof navigator.share === "function" && url) {
+      if (
+        typeof navigator !== "undefined" &&
+        typeof navigator.share === "function" &&
+        url
+      ) {
         await navigator.share(payload);
         setShareOpen(false);
         return;
@@ -1174,12 +1268,15 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
   const handleCopyLink = useCallback(async () => {
     const url =
       shareUrlWithUtm ||
-      (typeof window !== "undefined" ? window.location?.origin + productPath : productPath);
+      (typeof window !== "undefined"
+        ? window.location?.origin + productPath
+        : productPath);
 
     if (!url) return;
 
     const ok = await copyToClipboard(url);
     setShareToast(ok ? "Link copied" : "Copy failed");
+
     window.setTimeout(() => setShareToast(null), 1400);
   }, [shareUrlWithUtm, productPath]);
 
@@ -1196,6 +1293,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
       if (btn && btn.contains(t)) return;
 
       setShareOpen(false);
+
       // restore focus to button for keyboard users
       try {
         shareBtnRef.current?.focus?.();
@@ -1204,6 +1302,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
 
     document.addEventListener("mousedown", onDown, true);
     document.addEventListener("touchstart", onDown, true);
+
     return () => {
       document.removeEventListener("mousedown", onDown, true);
       document.removeEventListener("touchstart", onDown, true);
@@ -1217,6 +1316,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     const onKey = (e) => {
       if (e.key === "Escape") {
         setShareOpen(false);
+
         try {
           shareBtnRef.current?.focus?.();
         } catch (_) {}
@@ -1224,6 +1324,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     };
 
     document.addEventListener("keydown", onKey, true);
+
     // focus first action
     window.setTimeout(() => {
       try {
@@ -1264,7 +1365,9 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         justifyContent: "center",
         transition:
           "transform .16s ease-out, box-shadow .16s ease-out, background .16s ease-out",
-        transform: active ? "translateY(-2px) scale(1.05)" : "translateY(0) scale(1)",
+        transform: active
+          ? "translateY(-2px) scale(1.05)"
+          : "translateY(0) scale(1)",
         boxShadow: active
           ? "0 6px 14px rgba(15,33,71,0.25)"
           : "0 1px 3px rgba(15,33,71,0.12)",
@@ -1280,7 +1383,9 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        boxShadow: active ? "0 0 0 2px rgba(15,33,71,0.3)" : "none",
+        boxShadow: active
+          ? "0 0 0 2px rgba(15,33,71,0.3)"
+          : "none",
       }),
 
       swatchDot: (code, isLight) => ({
@@ -1307,7 +1412,11 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           ? "2px solid #0f2147"
           : "1px solid #cfd6e9",
         color: danger ? "#b91c1c" : active ? "#fff" : "#1f2a59",
-        background: danger ? "rgba(248,113,113,.08)" : active ? "#0f2147" : "#fff",
+        background: danger
+          ? "rgba(248,113,113,.08)"
+          : active
+          ? "#0f2147"
+          : "#fff",
         opacity: danger ? 0.7 : 1,
         transition:
           "transform .18s ease-out, box-shadow .18s ease-out, background .18s ease-out, border-color .18s ease-out, color .18s ease-out",
@@ -1346,7 +1455,8 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         color: "#0f2147",
         border: "1px solid rgba(15,33,71,0.25)",
         cursor: "pointer",
-        transition: "transform .18s ease-out, box-shadow .18s ease-out",
+        transition:
+          "transform .18s ease-out, box-shadow .18s ease-out",
         transform: "translateY(0)",
         touchAction: "manipulation",
       },
@@ -1355,19 +1465,35 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
 
   /* ---------------- render ---------------- */
   const stockLabel =
-    stock != null ? (stock > 0 ? `In stock (${stock})` : "Out of stock") : null;
+    stock != null
+      ? stock > 0
+        ? `In stock (${stock})`
+        : "Out of stock"
+      : null;
 
   const skuForMicro = selectedVariant?.sku || baseSku || null;
   const imageForMicro = images?.[0] || ogImageForShare || null;
 
-  const showFromPrefix = priceRange?.hasRange && !selection.size; // if user hasn't pinned size, show "From"
+  const showFromPrefix =
+    priceRange?.hasRange && !selection.size;
+
   const displayPriceText = useMemo(() => {
     if (price == null) return money(currencyCode, price);
-    if (showFromPrefix && typeof priceRange?.min === "number") {
+
+    if (
+      showFromPrefix &&
+      typeof priceRange?.min === "number"
+    ) {
       return `From ${money(currencyCode, priceRange.min)}`;
     }
+
     return money(currencyCode, price);
-  }, [price, currencyCode, showFromPrefix, priceRange?.min]);
+  }, [
+    price,
+    currencyCode,
+    showFromPrefix,
+    priceRange?.min,
+  ]);
 
   const helperHintStyle = {
     marginTop: 6,
@@ -1385,14 +1511,33 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
     >
       {/* Microdata: helps external platforms/crawlers interpret the product */}
       <meta itemProp="name" content={name} />
-      {imageForMicro ? <meta itemProp="image" content={imageForMicro} /> : null}
-      {skuForMicro ? <meta itemProp="sku" content={skuForMicro} /> : null}
+
+      {imageForMicro ? (
+        <meta itemProp="image" content={imageForMicro} />
+      ) : null}
+
+      {skuForMicro ? (
+        <meta itemProp="sku" content={skuForMicro} />
+      ) : null}
 
       {/* Offers microdata */}
       {price != null ? (
-        <div itemProp="offers" itemScope itemType="https://schema.org/Offer" className="srOnly">
-          <meta itemProp="priceCurrency" content={currencyCode} />
-          <meta itemProp="price" content={String(price)} />
+        <div
+          itemProp="offers"
+          itemScope
+          itemType="https://schema.org/Offer"
+          className="srOnly"
+        >
+          <meta
+            itemProp="priceCurrency"
+            content={currencyCode}
+          />
+
+          <meta
+            itemProp="price"
+            content={String(price)}
+          />
+
           <link
             itemProp="availability"
             href={
@@ -1401,13 +1546,25 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                 : "https://schema.org/OutOfStock"
             }
           />
-          {canonicalUrl ? <meta itemProp="url" content={canonicalUrl} /> : null}
+
+          {canonicalUrl ? (
+            <meta
+              itemProp="url"
+              content={canonicalUrl}
+            />
+          ) : null}
         </div>
       ) : null}
 
       {/* MEDIA */}
-      <div className={`${styles.media} tdlsPcMedia`} ref={mediaRef} tabIndex={0}>
-        <div className={`${styles.imageWrap} tdlsPcImageWrap`}>
+      <div
+        className={`${styles.media} tdlsPcMedia`}
+        ref={mediaRef}
+        tabIndex={0}
+      >
+        <div
+          className={`${styles.imageWrap} tdlsPcImageWrap`}
+        >
           {images.length ? (
             <img
               src={images[idx]}
@@ -1425,15 +1582,28 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
               <button
                 type="button"
                 className={`${styles.navBtn} tdlsPcNavBtn`}
-                onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)}
+                onClick={() =>
+                  setIdx(
+                    (i) =>
+                      (i - 1 + images.length) %
+                      images.length
+                  )
+                }
                 aria-label="Previous image"
               >
                 ‹
               </button>
+
               <button
                 type="button"
                 className={`${styles.navBtn} tdlsPcNavBtn`}
-                onClick={() => setIdx((i) => (i + 1) % images.length)}
+                onClick={() =>
+                  setIdx(
+                    (i) =>
+                      (i + 1) %
+                      images.length
+                  )
+                }
                 aria-label="Next image"
               >
                 ›
@@ -1454,9 +1624,19 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         </div>
       </div>
 
-      {/* BODY */}
-      <div className={`${styles.body} tdlsPcBody`}>
-        <Link href={slug ? `/product/${slug}` : "#"} prefetch={false} aria-label={name}>
+      {/* BODY
+          Clicking any NON-INTERACTIVE area here opens the full product page.
+          Existing buttons/links keep their normal actions.
+      */}
+      <div
+        className={`${styles.body} tdlsPcBody`}
+        onClick={handleBodyNavigation}
+      >
+        <Link
+          href={productPath || "#"}
+          prefetch={false}
+          aria-label={name}
+        >
           <h3
             className={`${styles.title} tdlsPcTitle`}
             style={{
@@ -1481,7 +1661,10 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           <div className={styles.metaRow}>
             <span
               style={{
-                fontSize: Math.max(10, Math.round(10 * uiScale)),
+                fontSize: Math.max(
+                  10,
+                  Math.round(10 * uiScale)
+                ),
                 fontWeight: 700,
                 textTransform: "uppercase",
                 letterSpacing: ".14em",
@@ -1499,17 +1682,30 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
             <span
               className={styles.stockBadge}
               style={{
-                fontSize: Math.max(10, Math.round(10 * uiScale)),
+                fontSize: Math.max(
+                  10,
+                  Math.round(10 * uiScale)
+                ),
                 fontWeight: 800,
-                padding: `${Math.round(3 * uiScale)}px ${Math.round(8 * uiScale)}px`,
+                padding: `${Math.round(
+                  3 * uiScale
+                )}px ${Math.round(8 * uiScale)}px`,
                 borderRadius: 999,
                 textTransform: "uppercase",
                 letterSpacing: ".08em",
                 borderWidth: 1,
                 borderStyle: "solid",
                 ...(stock > 0
-                  ? { color: "#065f46", background: "#ecfdf5", borderColor: "#a7f3d0" }
-                  : { color: "#b91c1c", background: "#fee2e2", borderColor: "#fecaca" }),
+                  ? {
+                      color: "#065f46",
+                      background: "#ecfdf5",
+                      borderColor: "#a7f3d0",
+                    }
+                  : {
+                      color: "#b91c1c",
+                      background: "#fee2e2",
+                      borderColor: "#fecaca",
+                    }),
               }}
             >
               {stockLabel}
@@ -1517,15 +1713,26 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           </div>
         )}
 
-        <div className={`${styles.priceRow} tdlsPcPriceRow`}>
-          <span className={`${styles.price} tdlsPcPrice`}>{displayPriceText}</span>
+        <div
+          className={`${styles.priceRow} tdlsPcPriceRow`}
+        >
+          <span
+            className={`${styles.price} tdlsPcPrice`}
+          >
+            {displayPriceText}
+          </span>
 
           {/* Optional subtle range hint (only when range exists and size not chosen) */}
-          {priceRange?.hasRange && !selection.size && typeof priceRange.max === "number" ? (
+          {priceRange?.hasRange &&
+          !selection.size &&
+          typeof priceRange.max === "number" ? (
             <span
               style={{
                 marginLeft: 8,
-                fontSize: Math.max(10, Math.round(10 * uiScale)),
+                fontSize: Math.max(
+                  10,
+                  Math.round(10 * uiScale)
+                ),
                 fontWeight: 700,
                 color: "#6b7280",
                 letterSpacing: ".02em",
@@ -1533,7 +1740,11 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
               aria-label="Price range"
               title="Prices vary by size/variant"
             >
-              • up to {money(currencyCode, priceRange.max)}
+              • up to{" "}
+              {money(
+                currencyCode,
+                priceRange.max
+              )}
             </span>
           ) : null}
         </div>
@@ -1542,14 +1753,30 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         {!!colors.length && (
           <div
             ref={colorBlockRef}
-            className={`tdlsOptBlock ${nudge.color ? "tdlsNudge" : ""}`}
-            style={{ marginTop: 8, textAlign: "center" }}
+            className={`tdlsOptBlock ${
+              nudge.color ? "tdlsNudge" : ""
+            }`}
+            style={{
+              marginTop: 8,
+              textAlign: "center",
+            }}
           >
-            <div style={{ ...UX.sectionLabel, textAlign: "center" }}>Color</div>
+            <div
+              style={{
+                ...UX.sectionLabel,
+                textAlign: "center",
+              }}
+            >
+              Color
+            </div>
 
             {/* Inline guidance (NOT on CTA) */}
-            {requiresColor && !selection.color ? (
-              <div style={helperHintStyle} aria-live="polite">
+            {requiresColor &&
+            !selection.color ? (
+              <div
+                style={helperHintStyle}
+                aria-live="polite"
+              >
                 Choose a color to continue.
               </div>
             ) : null}
@@ -1562,55 +1789,118 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                 flexWrap: "wrap",
                 justifyContent: "center",
                 maxWidth: "100%",
-                marginTop: requiresColor && !selection.color ? 8 : 0,
+                marginTop:
+                  requiresColor &&
+                  !selection.color
+                    ? 8
+                    : 0,
               }}
             >
               {colors.map((c) => {
-                const active = selection.color === c.name;
-                const code = c.code || c.name;
-                const light = isLightColor(code);
+                const active =
+                  selection.color === c.name;
+
+                const code =
+                  c.code || c.name;
+
+                const light =
+                  isLightColor(code);
+
                 return (
                   <button
                     key={c.name}
                     type="button"
                     onClick={() => {
                       setSelection((sel) => {
-                        const nextColor = c.name;
+                        const nextColor =
+                          c.name;
+
                         const hasSameSize =
                           sel.size &&
                           variants.some(
-                            (v) => v.color_name === nextColor && v.size_name === sel.size
+                            (v) =>
+                              v.color_name ===
+                                nextColor &&
+                              v.size_name ===
+                                sel.size
                           );
-                        return { color: nextColor, size: hasSameSize ? sel.size : null };
+
+                        return {
+                          color: nextColor,
+                          size: hasSameSize
+                            ? sel.size
+                            : null,
+                        };
                       });
+
                       setError(null);
-                      setNudge((prev) => ({ ...prev, color: false }));
+
+                      setNudge((prev) => ({
+                        ...prev,
+                        color: false,
+                      }));
                     }}
-                    style={UX.swatchButton(active)}
+                    style={UX.swatchButton(
+                      active
+                    )}
                     aria-label={c.name}
                     title={c.name}
                   >
-                    <span style={UX.swatchFrame(active)}>
-                      <span style={UX.swatchDot(code, light)} />
+                    <span
+                      style={UX.swatchFrame(
+                        active
+                      )}
+                    >
+                      <span
+                        style={UX.swatchDot(
+                          code,
+                          light
+                        )}
+                      />
                     </span>
+
                     {active && (
                       <span
                         aria-hidden="true"
                         style={{
-                          position: "absolute",
+                          position:
+                            "absolute",
                           bottom: -2,
                           right: -2,
-                          height: Math.round(14 * uiScale),
-                          width: Math.round(14 * uiScale),
-                          borderRadius: "999px",
-                          background: "#0f2147",
-                          color: "#ffffff",
-                          fontSize: Math.max(9, Math.round(9 * uiScale)),
-                          fontWeight: 800,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          boxShadow: "0 0 0 1px #e5e7eb",
+                          height:
+                            Math.round(
+                              14 *
+                                uiScale
+                            ),
+                          width:
+                            Math.round(
+                              14 *
+                                uiScale
+                            ),
+                          borderRadius:
+                            "999px",
+                          background:
+                            "#0f2147",
+                          color:
+                            "#ffffff",
+                          fontSize:
+                            Math.max(
+                              9,
+                              Math.round(
+                                9 *
+                                  uiScale
+                              )
+                            ),
+                          fontWeight:
+                            800,
+                          display:
+                            "flex",
+                          alignItems:
+                            "center",
+                          justifyContent:
+                            "center",
+                          boxShadow:
+                            "0 0 0 1px #e5e7eb",
                         }}
                       >
                         ✓
@@ -1626,12 +1916,21 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
               <div
                 style={{
                   marginTop: 6,
-                  fontSize: Math.max(11, Math.round(11 * uiScale)),
+                  fontSize:
+                    Math.max(
+                      11,
+                      Math.round(
+                        11 *
+                          uiScale
+                      )
+                    ),
                   fontWeight: 600,
-                  color: "#0f2147",
+                  color:
+                    "#0f2147",
                 }}
               >
-                Selected: {selection.color}
+                Selected:{" "}
+                {selection.color}
               </div>
             )}
           </div>
@@ -1641,14 +1940,32 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         {!!sizes.length && (
           <div
             ref={sizeBlockRef}
-            className={`tdlsOptBlock ${nudge.size ? "tdlsNudge" : ""}`}
-            style={{ marginTop: 6, textAlign: "center" }}
+            className={`tdlsOptBlock ${
+              nudge.size
+                ? "tdlsNudge"
+                : ""
+            }`}
+            style={{
+              marginTop: 6,
+              textAlign: "center",
+            }}
           >
-            <div style={{ ...UX.sectionLabel, textAlign: "center" }}>Size</div>
+            <div
+              style={{
+                ...UX.sectionLabel,
+                textAlign: "center",
+              }}
+            >
+              Size
+            </div>
 
             {/* Inline guidance (NOT on CTA) */}
-            {requiresSize && !selection.size ? (
-              <div style={helperHintStyle} aria-live="polite">
+            {requiresSize &&
+            !selection.size ? (
+              <div
+                style={helperHintStyle}
+                aria-live="polite"
+              >
                 Choose a size to continue.
               </div>
             ) : null}
@@ -1657,28 +1974,60 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
               className="tdlsPcOptionsRow"
               style={{
                 display: "flex",
-                gap: Math.round(8 * uiScale),
+                gap: Math.round(
+                  8 *
+                    uiScale
+                ),
                 flexWrap: "wrap",
-                justifyContent: "center",
-                maxWidth: "100%",
-                marginTop: requiresSize && !selection.size ? 8 : 0,
+                justifyContent:
+                  "center",
+                maxWidth:
+                  "100%",
+                marginTop:
+                  requiresSize &&
+                  !selection.size
+                    ? 8
+                    : 0,
               }}
             >
               {sizes.map((s) => {
-                const active = selection.size === s;
-                const sizeStock = sizeStockMap.get(s);
-                const isOOS = sizeStock != null && sizeStock <= 0;
+                const active =
+                  selection.size === s;
+
+                const sizeStock =
+                  sizeStockMap.get(s);
+
+                const isOOS =
+                  sizeStock != null &&
+                  sizeStock <= 0;
+
                 return (
                   <button
                     key={s}
                     type="button"
                     onClick={() => {
                       if (isOOS) return;
-                      setSelection((sel) => ({ ...sel, size: s }));
+
+                      setSelection(
+                        (sel) => ({
+                          ...sel,
+                          size: s,
+                        })
+                      );
+
                       setError(null);
-                      setNudge((prev) => ({ ...prev, size: false }));
+
+                      setNudge(
+                        (prev) => ({
+                          ...prev,
+                          size: false,
+                        })
+                      );
                     }}
-                    style={UX.chip(active, isOOS)}
+                    style={UX.chip(
+                      active,
+                      isOOS
+                    )}
                     title={
                       isOOS
                         ? `${s} - Out of stock`
@@ -1689,7 +2038,9 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                     disabled={isOOS}
                   >
                     {s}
-                    {isOOS ? " (OOS)" : ""}
+                    {isOOS
+                      ? " (OOS)"
+                      : ""}
                   </button>
                 );
               })}
@@ -1702,12 +2053,23 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           <div
             style={{
               marginTop: 10,
-              padding: `${Math.round(6 * uiScale)}px ${Math.round(10 * uiScale)}px`,
+              padding: `${Math.round(
+                6 * uiScale
+              )}px ${Math.round(
+                10 * uiScale
+              )}px`,
               borderRadius: 999,
-              border: "1px solid #fecaca",
+              border:
+                "1px solid #fecaca",
               background: "#fef2f2",
               color: "#b91c1c",
-              fontSize: Math.max(11, Math.round(11 * uiScale)),
+              fontSize: Math.max(
+                11,
+                Math.round(
+                  11 *
+                    uiScale
+                )
+              ),
               fontWeight: 600,
               textAlign: "center",
             }}
@@ -1725,21 +2087,39 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
             marginTop: 10,
             display: "flex",
             justifyContent: "center",
-            gap: Math.round(10 * uiScale),
+            gap: Math.round(
+              10 * uiScale
+            ),
             flexWrap: "wrap",
           }}
         >
           <button
             type="button"
             onClick={handleAddToCart}
-            disabled={stock != null && stock <= 0}
+            disabled={
+              stock != null &&
+              stock <= 0
+            }
             style={{
               ...UX.primaryBtn,
-              opacity: stock != null && stock <= 0 ? 0.6 : 1,
-              cursor: stock != null && stock <= 0 ? "not-allowed" : "pointer",
+              opacity:
+                stock != null &&
+                stock <= 0
+                  ? 0.6
+                  : 1,
+              cursor:
+                stock != null &&
+                stock <= 0
+                  ? "not-allowed"
+                  : "pointer",
             }}
             aria-label="Add to Cart"
-            title={stock != null && stock <= 0 ? "Out of stock" : "Add to Cart"}
+            title={
+              stock != null &&
+              stock <= 0
+                ? "Out of stock"
+                : "Add to Cart"
+            }
           >
             Add to Cart
           </button>
@@ -1773,15 +2153,28 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
             className="tdlsSharePanel"
             role="dialog"
             aria-label="Share options"
+            data-product-card-no-nav="true"
           >
-            <div className="tdlsShareTitle">Share</div>
+            <div className="tdlsShareTitle">
+              Share
+            </div>
 
             {/* Small preview strip for share (uses OG image if present, otherwise product first image) */}
-            <div className="tdlsSharePreview" aria-label="Share preview">
-              <div className="tdlsShareThumb" aria-hidden="true">
-                {ogImageForShare || images?.[0] ? (
+            <div
+              className="tdlsSharePreview"
+              aria-label="Share preview"
+            >
+              <div
+                className="tdlsShareThumb"
+                aria-hidden="true"
+              >
+                {ogImageForShare ||
+                images?.[0] ? (
                   <img
-                    src={ogImageForShare || images?.[0]}
+                    src={
+                      ogImageForShare ||
+                      images?.[0]
+                    }
                     alt=""
                     loading="lazy"
                     decoding="async"
@@ -1790,31 +2183,67 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
                   <div className="tdlsShareThumbPh" />
                 )}
               </div>
+
               <div className="tdlsSharePreviewText">
-                <div className="tdlsShareName">{name}</div>
+                <div className="tdlsShareName">
+                  {name}
+                </div>
+
                 <div className="tdlsShareSub">
-                  {tierText ? tierText : "TDLS"}
-                  {typeof price === "number" ? ` • ${money(currencyCode, price)}` : ""}
+                  {tierText
+                    ? tierText
+                    : "TDLS"}
+
+                  {typeof price ===
+                  "number"
+                    ? ` • ${money(
+                        currencyCode,
+                        price
+                      )}`
+                    : ""}
                 </div>
               </div>
             </div>
 
             <div className="tdlsShareLinks">
               <a
-                ref={firstShareLinkRef}
-                href={shareLinks.whatsapp}
+                ref={
+                  firstShareLinkRef
+                }
+                href={
+                  shareLinks.whatsapp
+                }
                 target="_blank"
                 rel="noopener noreferrer"
               >
                 WhatsApp
               </a>
-              <a href={shareLinks.facebook} target="_blank" rel="noopener noreferrer">
+
+              <a
+                href={
+                  shareLinks.facebook
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 Facebook
               </a>
-              <a href={shareLinks.x} target="_blank" rel="noopener noreferrer">
+
+              <a
+                href={shareLinks.x}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 X
               </a>
-              <a href={shareLinks.linkedin} target="_blank" rel="noopener noreferrer">
+
+              <a
+                href={
+                  shareLinks.linkedin
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 LinkedIn
               </a>
             </div>
@@ -1822,7 +2251,11 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         )}
 
         {/* Copy toast */}
-        {shareToast && <div className="tdlsShareToast">{shareToast}</div>}
+        {shareToast && (
+          <div className="tdlsShareToast">
+            {shareToast}
+          </div>
+        )}
       </div>
 
       {/* Local styles: only touch responsiveness + overflow safety (desktop preserved) */}
@@ -1844,50 +2277,114 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
         .tdlsProductCard {
           max-width: 100%;
           min-width: 0;
-          overflow: hidden; /* prevents accidental horizontal spill */
+          overflow: hidden;
         }
+
+        /*
+         * Lower/solid section is the product-page click area.
+         * The pointer tells customers that the non-control area is clickable.
+         */
         .tdlsPcBody {
           min-width: 0;
           max-width: 100%;
+          cursor: pointer;
         }
+
         .tdlsPcTitle {
           min-width: 0;
           max-width: 100%;
+        }
+
+        /*
+         * Existing controls retain their expected cursors and behavior.
+         * The body click handler separately prevents these controls from
+         * triggering product-page navigation.
+         */
+        .tdlsPcBody :global(button),
+        .tdlsPcBody :global(a),
+        .tdlsPcBody :global([role="button"]),
+        .tdlsPcBody :global([role="link"]) {
+          cursor: pointer;
+        }
+
+        .tdlsPcBody :global(button:disabled) {
+          cursor: not-allowed;
+        }
+
+        .tdlsPcBody :global(input),
+        .tdlsPcBody :global(select),
+        .tdlsPcBody :global(textarea),
+        .tdlsPcBody :global(label),
+        .tdlsPcBody
+          :global(
+            [data-product-card-no-nav="true"]
+          ) {
+          cursor: default;
         }
 
         /* Intelligent guidance (nudge highlight) */
         .tdlsOptBlock {
           border-radius: 14px;
         }
+
         .tdlsNudge {
-          outline: 2px solid rgba(15, 33, 71, 0.22);
-          box-shadow: 0 0 0 6px rgba(15, 33, 71, 0.06);
-          animation: tdlsNudgePulse 0.9s ease-out 1;
+          outline: 2px solid
+            rgba(15, 33, 71, 0.22);
+          box-shadow: 0 0 0 6px
+            rgba(15, 33, 71, 0.06);
+          animation: tdlsNudgePulse
+            0.9s ease-out 1;
         }
+
         @keyframes tdlsNudgePulse {
           0% {
             transform: translateY(0);
-            box-shadow: 0 0 0 0 rgba(15, 33, 71, 0.0);
+            box-shadow: 0 0 0 0
+              rgba(
+                15,
+                33,
+                71,
+                0
+              );
           }
+
           35% {
-            transform: translateY(-1px);
-            box-shadow: 0 0 0 8px rgba(15, 33, 71, 0.08);
+            transform: translateY(
+              -1px
+            );
+            box-shadow: 0 0 0 8px
+              rgba(
+                15,
+                33,
+                71,
+                0.08
+              );
           }
+
           100% {
             transform: translateY(0);
-            box-shadow: 0 0 0 6px rgba(15, 33, 71, 0.06);
+            box-shadow: 0 0 0 6px
+              rgba(
+                15,
+                33,
+                71,
+                0.06
+              );
           }
         }
 
         /* Share panel: premium, compact */
         .tdlsSharePanel {
           margin-top: 10px;
-          border: 1px solid rgba(15, 33, 71, 0.14);
+          border: 1px solid
+            rgba(15, 33, 71, 0.14);
           background: #ffffff;
           border-radius: 14px;
           padding: 10px 12px;
-          box-shadow: 0 10px 30px rgba(15, 33, 71, 0.12);
+          box-shadow: 0 10px 30px
+            rgba(15, 33, 71, 0.12);
         }
+
         .tdlsShareTitle {
           font-weight: 800;
           letter-spacing: 0.06em;
@@ -1904,35 +2401,52 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           gap: 10px;
           padding: 10px;
           border-radius: 12px;
-          border: 1px solid rgba(15, 33, 71, 0.12);
-          background: rgba(15, 33, 71, 0.03);
+          border: 1px solid
+            rgba(15, 33, 71, 0.12);
+          background: rgba(
+            15,
+            33,
+            71,
+            0.03
+          );
           margin-bottom: 10px;
           max-width: 100%;
         }
+
         .tdlsShareThumb {
           width: 46px;
           height: 46px;
           border-radius: 12px;
           overflow: hidden;
           background: #ffffff;
-          border: 1px solid rgba(15, 33, 71, 0.12);
+          border: 1px solid
+            rgba(15, 33, 71, 0.12);
           flex: 0 0 auto;
         }
+
         .tdlsShareThumb img {
           width: 100%;
           height: 100%;
           object-fit: cover;
           display: block;
         }
+
         .tdlsShareThumbPh {
           width: 100%;
           height: 100%;
-          background: rgba(15, 33, 71, 0.06);
+          background: rgba(
+            15,
+            33,
+            71,
+            0.06
+          );
         }
+
         .tdlsSharePreviewText {
           min-width: 0;
           flex: 1 1 auto;
         }
+
         .tdlsShareName {
           font-weight: 850;
           color: #0f2147;
@@ -1942,10 +2456,16 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
+
         .tdlsShareSub {
           margin-top: 4px;
           font-weight: 700;
-          color: rgba(15, 33, 71, 0.72);
+          color: rgba(
+            15,
+            33,
+            71,
+            0.72
+          );
           font-size: 11px;
           letter-spacing: 0.02em;
           overflow: hidden;
@@ -1958,13 +2478,15 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           flex-wrap: wrap;
           gap: 8px;
         }
+
         .tdlsShareLinks a {
           display: inline-flex;
           align-items: center;
           justify-content: center;
           padding: 8px 10px;
           border-radius: 999px;
-          border: 1px solid rgba(15, 33, 71, 0.2);
+          border: 1px solid
+            rgba(15, 33, 71, 0.2);
           color: #0f2147;
           text-decoration: none;
           font-weight: 800;
@@ -1974,8 +2496,10 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           max-width: 100%;
           outline: none;
         }
+
         .tdlsShareLinks a:focus-visible {
-          box-shadow: 0 0 0 3px rgba(15, 33, 71, 0.18);
+          box-shadow: 0 0 0 3px
+            rgba(15, 33, 71, 0.18);
         }
 
         .tdlsShareToast {
@@ -1983,8 +2507,14 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           text-align: center;
           padding: 8px 10px;
           border-radius: 999px;
-          background: rgba(15, 33, 71, 0.06);
-          border: 1px solid rgba(15, 33, 71, 0.12);
+          background: rgba(
+            15,
+            33,
+            71,
+            0.06
+          );
+          border: 1px solid
+            rgba(15, 33, 71, 0.12);
           color: #0f2147;
           font-weight: 700;
           font-size: 12px;
@@ -1995,10 +2525,15 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
           .tdlsPcMedia {
             min-width: 0;
           }
+
           .tdlsPcImageWrap {
-            /* Prevent overly tall media on small screens; avoids pushing title/CTA off-screen */
+            /*
+             * Prevent overly tall media on small screens;
+             * avoids pushing title/CTA off-screen.
+             */
             aspect-ratio: 4 / 5;
           }
+
           .tdlsPcImage {
             width: 100%;
             height: 100%;
@@ -2015,6 +2550,7 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
             font-size: 10px;
             padding: 7px 9px;
           }
+
           .tdlsShareThumb {
             width: 42px;
             height: 42px;
@@ -2028,9 +2564,11 @@ export default function ProductCard({ product, onQuickView, siteBaseUrl }) {
             font-size: 9px;
             padding: 6px 8px;
           }
+
           .tdlsShareName {
             font-size: 11px;
           }
+
           .tdlsShareSub {
             font-size: 10px;
           }

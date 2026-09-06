@@ -15,6 +15,7 @@ import AdminRouteGate from "@/components/admin/admin_route_gate"; // ✅ client 
 
 // ✅ Client-only deferred boot helpers (ssr:false must live in a Client Component)
 import ClientBoot from "@/components/common/client_boot";
+import SlidingMenuBarPreloader from "@/components/common/slidingmenubar.preloader";
 
 /* ------------------------- URL + asset normalization ------------------------- */
 const SITE_URL = (() => {
@@ -28,24 +29,39 @@ const SITE_URL = (() => {
   return url.replace(/\/+$/, "");
 })();
 
+/*
+ * ✅ SEO/SOCIAL:
+ * - NEXT_PUBLIC_OG_IMAGE may still override the default.
+ * - Otherwise use the dedicated 1200×630 TDLS social preview route.
+ */
 const OG_IMAGE = (() => {
   const v = (process.env.NEXT_PUBLIC_OG_IMAGE || "").trim();
-  if (!v) return "/favicon.ico";
+
+  if (!v) return "/tdls-social-preview";
   if (/^https?:\/\//i.test(v)) return v;
+
   return v.startsWith("/") ? v : `/${v}`;
 })();
 
 const OG_IMAGE_ABS = new URL(OG_IMAGE, SITE_URL).toString();
 
-const OG_IS_FAVICON = /\/favicon\.ico$/i.test(OG_IMAGE);
-const OG_W = OG_IS_FAVICON ? 256 : 1200;
-const OG_H = OG_IS_FAVICON ? 256 : 630;
+// Keep favicon/logo identity separate from the large social preview image.
+const LOGO_IMAGE_ABS = new URL("/favicon.ico", SITE_URL).toString();
+
+const OG_W = 1200;
+const OG_H = 630;
 
 /* ---------------- SEO identity (no UI/UX or business logic impact) ---------------- */
+
 const BRAND = "TDLS";
-const DEFAULT_TITLE = `${BRAND} — Premium multi-product ecommerce`;
+
+const DEFAULT_TITLE = "TDLS | Refined Style. Effortless Confidence.";
+
 const DEFAULT_DESC =
-  "TDLS is a premium multi-product ecommerce brand. Shop curated essentials across multiple categories with a clean, reliable buying experience.";
+  "TDLS is where refined design meets effortless confidence. Timeless in character, effortless in comfort—created to be felt, lived in, and remembered.";
+
+const SOCIAL_DESC =
+  "TDLS is where refined design meets effortless confidence. Created for those who believe style is more than what you wear—it is how you feel, how you move, and what you leave behind. Timeless in character, effortless in comfort, unmistakably TDLS.";
 
 /* ✅ GLOBAL “GRID / COLUMN FLASH” KILL SWITCH
    - Applies during route transitions + loading.jsx too (because layout is always mounted)
@@ -81,30 +97,43 @@ const TDLS_GLOBAL_GRIDKILL_CSS = `
 export const metadata = {
   metadataBase: new URL(SITE_URL),
 
-  title: { default: DEFAULT_TITLE, template: `%s | ${BRAND}` },
+  title: {
+    default: DEFAULT_TITLE,
+    template: `%s | ${BRAND}`,
+  },
+
   description: DEFAULT_DESC,
 
-  alternates: { canonical: "./" },
+  alternates: {
+    canonical: "./",
+  },
 
   applicationName: BRAND,
   referrer: "origin-when-cross-origin",
   category: "ecommerce",
   creator: BRAND,
   publisher: BRAND,
+
   keywords: [
     "TDLS",
-    "premium ecommerce",
+    "premium clothing",
+    "premium fashion",
     "online shopping",
     "fashion",
     "accessories",
-    "home decor",
     "Bangladesh",
   ],
-  formatDetection: { email: false, address: false, telephone: false },
+
+  formatDetection: {
+    email: false,
+    address: false,
+    telephone: false,
+  },
 
   robots: {
     index: true,
     follow: true,
+
     googleBot: {
       index: true,
       follow: true,
@@ -119,22 +148,23 @@ export const metadata = {
     url: SITE_URL,
     siteName: BRAND,
     title: DEFAULT_TITLE,
-    description: DEFAULT_DESC,
+    description: SOCIAL_DESC,
     locale: "en_US",
+
     images: [
       {
         url: OG_IMAGE,
         width: OG_W,
         height: OG_H,
-        alt: BRAND,
+        alt: "TDLS — refined design, effortless confidence and timeless character.",
       },
     ],
   },
 
   twitter: {
-    card: OG_IS_FAVICON ? "summary" : "summary_large_image",
+    card: "summary_large_image",
     title: DEFAULT_TITLE,
-    description: DEFAULT_DESC,
+    description: SOCIAL_DESC,
     images: [OG_IMAGE],
   },
 
@@ -156,10 +186,18 @@ export const viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#faf9f6" },
-    { media: "(prefers-color-scheme: dark)", color: "#050b1f" },
+    {
+      media: "(prefers-color-scheme: light)",
+      color: "#faf9f6",
+    },
+    {
+      media: "(prefers-color-scheme: dark)",
+      color: "#050b1f",
+    },
   ],
+
   colorScheme: "light dark",
 };
 
@@ -168,17 +206,30 @@ export default function RootLayout({ children }) {
     "@context": "https://schema.org",
     "@type": "Organization",
     "@id": `${SITE_URL}/#organization`,
+
     name: BRAND,
     url: SITE_URL,
-    logo: OG_IMAGE_ABS, // ✅ absolute for schema correctness
+
+    // ✅ Organization logo must be a logo/icon,
+    // not the large Open Graph sharing artwork.
+    logo: LOGO_IMAGE_ABS,
+
+    image: OG_IMAGE_ABS,
+    description: DEFAULT_DESC,
   };
 
   const siteJsonLd = {
     "@context": "https://schema.org",
     "@type": "WebSite",
     "@id": `${SITE_URL}/#website`,
+
     name: BRAND,
     url: SITE_URL,
+    description: DEFAULT_DESC,
+
+    publisher: {
+      "@id": `${SITE_URL}/#organization`,
+    },
   };
 
   return (
@@ -189,17 +240,25 @@ export default function RootLayout({ children }) {
 
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(orgJsonLd),
+          }}
         />
+
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(siteJsonLd) }}
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(siteJsonLd),
+          }}
         />
 
         <AdminRouteGate
           adminTree={<main role="main">{children}</main>}
           siteTree={
             <Providers>
+              {/* Start menu data loading as soon as the customer tree hydrates on every device. */}
+              <SlidingMenuBarPreloader />
+
               {/* ✅ All ssr:false dynamics moved into a client-only boot component */}
               <ClientBoot />
 

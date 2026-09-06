@@ -820,9 +820,17 @@ function readCssVarPx(vars, fallbackPx) {
 /* ------------------------------ data model (CLEAN) ------------------------------ */
 
 const FETCH_TIMEOUT_MS = 16000;
-const LS_KEY = "tdls:slidingmenubar:data:v8";
-const LS_TS = "tdls:slidingmenubar:ts:v8";
+const LS_KEY = "tdls:slidingmenubar:data:v10";
+const LS_TS = "tdls:slidingmenubar:ts:v10";
 const LS_TTL_MS = 6 * 60 * 60 * 1000;
+
+// Shared with slidingmenubar.preloader.jsx.
+// The small preloader can fetch before this large menu chunk is needed, then
+// this module consumes that already-fetched payload without another request.
+const PRELOAD_GLOBAL_KEY = "__TDLS_SMB_PRELOAD_STATE__";
+const RAW_LS_KEY = "tdls:slidingmenubar:raw-products:v1";
+const RAW_LS_TS = "tdls:slidingmenubar:raw-products-ts:v1";
+const RAW_LS_TTL_MS = 6 * 60 * 60 * 1000;
 
 let __menuPromise = null;
 let __menuData = null;
@@ -864,92 +872,126 @@ function unwrapProxyOk(raw) {
 }
 
 async function fetchFromStrapi(path) {
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timer =
-    controller && typeof window !== "undefined"
-      ? window.setTimeout(() => {
-          try {
-            controller.abort();
-          } catch {}
-        }, FETCH_TIMEOUT_MS)
-      : null;
-
   const doFetch = async (url) => {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller?.signal,
-    });
-    if (!res.ok) return null;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer =
+      controller && typeof window !== "undefined"
+        ? window.setTimeout(() => {
+            try {
+              controller.abort();
+            } catch {}
+          }, FETCH_TIMEOUT_MS)
+        : null;
 
-    const raw = await res.json().catch(() => null);
-    const unwrapped = unwrapProxyOk(raw);
-    if (unwrapped == null) return null;
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: controller?.signal,
+      });
+      if (!res.ok) return null;
 
-    // If Strapi itself returns { error: ... } treat as failure
-    if (unwrapped?.error && unwrapped?.data == null) return null;
+      const raw = await res.json().catch(() => null);
+      const unwrapped = unwrapProxyOk(raw);
+      if (unwrapped == null) return null;
 
-    return unwrapped;
+      if (unwrapped?.error && unwrapped?.data == null) return null;
+      return unwrapped;
+    } catch {
+      return null;
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
   };
 
-  try {
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
-    // ✅ primary (encoded)
-    const q1 = encodeURIComponent(normalizedPath);
-    const r1 = await doFetch(`/api/strapi?path=${q1}`);
-    if (r1 != null) return r1;
+  // Encode the complete Strapi path so inner query-string '&' characters are
+  // never interpreted as query params belonging to /api/strapi itself.
+  const encoded = encodeURIComponent(normalizedPath);
+  return doFetch(`/api/strapi?path=${encoded}`);
+}
 
-    // ⚠️ fallback raw is unsafe for queries containing &, but kept for compatibility
-    const r2 = await doFetch(`/api/strapi?path=${normalizedPath}`);
-    if (r2 != null) return r2;
+function splitRelationScalar(value) {
+  if (value == null) return [];
+  if (typeof value === "number") return [String(value)];
+  if (typeof value !== "string") return [];
 
-    return null;
-  } catch {
-    return null;
-  } finally {
-    if (timer) window.clearTimeout(timer);
+  const raw = value.trim();
+  if (!raw) return [];
+
+  if ((raw.startsWith("[") && raw.endsWith("]")) || (raw.startsWith("{") && raw.endsWith("}"))) {
+    const parsed = safeJsonParse(raw);
+    if (Array.isArray(parsed)) return parsed.flatMap(splitRelationScalar);
+    if (parsed && typeof parsed === "object") {
+      const candidate = parsed.slug ?? parsed.handle ?? parsed.key ?? parsed.uid ?? parsed.code ?? parsed.name ?? parsed.title;
+      return candidate == null ? [] : splitRelationScalar(candidate);
+    }
   }
+
+  // Some optimized endpoints serialize slug arrays as comma/pipe separated text.
+  if (raw.includes(",") || raw.includes("|")) {
+    return raw
+      .split(/[|,]/g)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+
+  return [raw];
+}
+
+function relationValues(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.flatMap(relationValues);
+  if (typeof v === "string" || typeof v === "number") return splitRelationScalar(v);
+
+  if (typeof v === "object") {
+    if (Object.prototype.hasOwnProperty.call(v, "data")) return relationValues(v.data);
+    if (Array.isArray(v.slugs)) return relationValues(v.slugs);
+    if (Array.isArray(v.items)) return relationValues(v.items);
+    return [v];
+  }
+
+  return [];
+}
+
+function entityStableId(entity, fallbackSlug = "") {
+  const e = normalizeEntity(entity) || {};
+  const candidate = e.id ?? e.documentId ?? e.document_id ?? e.uid ?? "";
+  if (candidate !== "") return String(candidate);
+  const slug = normSlug(fallbackSlug || e.slug || e.name || e.title || "");
+  return slug ? `slug:${slug}` : "";
 }
 
 /**
- * ✅ Hardened relation slug extraction:
- * - supports Strapi relations, normalized objects, arrays, and string/enums
+ * Hardened relation slug extraction:
+ * - Strapi v4/v5 relation objects
+ * - flattened *_slugs arrays
+ * - scalar, JSON-string, comma/pipe serialized slug lists
  */
 function relSlugs(entity, keys) {
   const e = normalizeEntity(entity) || {};
   const out = [];
 
   for (const k of keys) {
-    const v = e?.[k];
-    if (v == null) continue;
+    for (const raw of relationValues(e?.[k])) {
+      if (raw == null) continue;
 
-    if (typeof v === "string" || typeof v === "number") {
-      const s = normSlug(v);
-      if (s) out.push(s);
-      continue;
-    }
-
-    if (v && typeof v === "object" && !Array.isArray(v) && !("data" in v)) {
-      const d = normalizeEntity(v) || v;
-      const s0 = normSlug(d?.slug || d?.handle || d?.key || d?.uid || d?.code || d?.name || d?.title || "");
-      if (s0) out.push(s0);
-    }
-
-    const arr = unwrapStrapiArray(v);
-    for (const rRaw of arr) {
-      if (rRaw == null) continue;
-
-      if (typeof rRaw === "string" || typeof rRaw === "number") {
-        const s1 = normSlug(rRaw);
-        if (s1) out.push(s1);
+      if (typeof raw === "string" || typeof raw === "number") {
+        const slug = normSlug(raw);
+        if (slug) out.push(slug);
         continue;
       }
 
-      const r = normalizeEntity(rRaw) || {};
-      const s = normSlug(r.slug || r.handle || r.key || r.uid || r.code || r.name || r.title || "");
-      if (s) out.push(s);
+      const r = normalizeEntity(raw) || {};
+      const candidates = relationValues(
+        r.slug ?? r.handle ?? r.key ?? r.uid ?? r.code ?? r.name ?? r.title ?? r.label ?? r.slugs ?? []
+      );
+      for (const candidate of candidates) {
+        const slug = normSlug(candidate);
+        if (slug) out.push(slug);
+      }
     }
   }
 
@@ -964,49 +1006,108 @@ function relSlugNameMapFromProducts(products, relKeys) {
     const p = normalizeEntity(pRaw) || {};
 
     for (const relKey of keys) {
-      const v = p?.[relKey];
-      if (v == null) continue;
+      for (const raw of relationValues(p?.[relKey])) {
+        if (raw == null) continue;
 
-      if (typeof v === "string" || typeof v === "number") {
-        const s = normSlug(v);
-        if (!s) continue;
-        const name = titleizeSlug(s);
-        if (!m.has(s)) m.set(s, name);
-        continue;
-      }
-
-      if (v && typeof v === "object" && !Array.isArray(v) && !("data" in v)) {
-        const r = normalizeEntity(v) || v;
-        const s = normSlug(r.slug || r.name || r.title || "");
-        if (s) {
-          const name = (r.name || r.title || r.label || "").toString().trim() || titleizeSlug(s);
-          if (!m.has(s)) m.set(s, name);
-        }
-      }
-
-      const arr = unwrapStrapiArray(v);
-      for (const rRaw of arr) {
-        if (rRaw == null) continue;
-
-        if (typeof rRaw === "string" || typeof rRaw === "number") {
-          const s = normSlug(rRaw);
-          if (!s) continue;
-          const name = titleizeSlug(s);
-          if (!m.has(s)) m.set(s, name);
+        if (typeof raw === "string" || typeof raw === "number") {
+          const slug = normSlug(raw);
+          if (slug && !m.has(slug)) m.set(slug, titleizeSlug(slug));
           continue;
         }
 
-        const r = normalizeEntity(rRaw) || {};
-        const s = normSlug(r.slug || r.name || r.title || "");
-        if (!s) continue;
-        const name = (r.name || r.title || r.label || "").toString().trim() || titleizeSlug(s);
-        if (!m.has(s)) m.set(s, name);
+        const r = normalizeEntity(raw) || {};
+        const slug = normSlug(r.slug || r.handle || r.key || r.uid || r.code || r.name || r.title || r.label || "");
+        if (!slug) continue;
+        const name = (r.name || r.title || r.label || "").toString().trim() || titleizeSlug(slug);
+        if (!m.has(slug)) m.set(slug, name);
       }
     }
   }
 
   return m;
 }
+
+// Support both normal Strapi relations and the flattened `*_slugs` product
+// shape returned by this project's optimized /api/strapi products endpoint.
+const PRODUCT_TIER_KEYS = [
+  "tiers",
+  "tiers_slugs",
+  "brand_tiers",
+  "brand_tiers_slugs",
+  "collection_tiers",
+  "collection_tiers_slugs",
+  "product_collections",
+  "product_collections_slugs",
+  "events_products_collections",
+  "events_products_collections_slugs",
+  "events_products_collection",
+  "event_products_collections",
+  "event_product_collections",
+  "collections",
+  "collections_slugs",
+  "collection",
+  "tier",
+  "tier_slug",
+  "tierSlug",
+  "tier_slugs",
+  "product_tiers",
+  "product_tiers_slugs",
+  "collection_slugs",
+  "product_collection_slugs",
+  "events_products_collection_slugs",
+];
+
+const PRODUCT_AUDIENCE_KEYS = [
+  "audience_categories",
+  "audience_categories_slugs",
+  "audiences",
+  "audiences_slugs",
+  "audience_category",
+  "audienceCategory",
+  "audience_category_slugs",
+  "audience_slugs",
+];
+
+const PRODUCT_CATEGORY_KEYS = [
+  "categories",
+  "categories_slugs",
+  "category",
+  "product_categories",
+  "product_categories_slugs",
+  "product_category",
+  "category_slugs",
+  "product_category_slugs",
+];
+
+const PRODUCT_SUBCATEGORY_KEYS = [
+  "sub_categories",
+  "sub_categories_slugs",
+  "sub_category",
+  "subCategories",
+  "subCategory",
+  "sub_category_slugs",
+  "subCategorySlugs",
+];
+
+const PRODUCT_GENDER_KEYS = [
+  "gender_groups",
+  "gender_groups_slugs",
+  "gender_group",
+  "genderGroups",
+  "genderGroup",
+  "gender_group_slugs",
+  "genderGroupSlugs",
+];
+
+const PRODUCT_AGE_KEYS = [
+  "age_groups",
+  "age_groups_slugs",
+  "age_group",
+  "ageGroups",
+  "ageGroup",
+  "age_group_slugs",
+  "ageGroupSlugs",
+];
 
 function buildIndexFromAudienceSeed(audienceRowsStrapi) {
   const prodById = new Map();
@@ -1019,38 +1120,31 @@ function buildIndexFromAudienceSeed(audienceRowsStrapi) {
 
     const aName = (a.name || a.title || "").toString().trim() || titleizeSlug(aSlug);
 
-    const aTierSlugs = relSlugs(a, [
-      "tiers",
-      "brand_tiers",
-      "collection_tiers",
-      "product_collections",
-      "events_products_collections",
-      "events_products_collection",
-      "event_products_collections",
-      "event_product_collections",
-    ]);
+    const aTierSlugs = relSlugs(a, PRODUCT_TIER_KEYS);
 
-    // ✅ extra hardening: products relation key can drift (still real, no placeholders)
+    // Product relation key can drift; accept only actual related product objects.
     const productRelationKeys = ["products", "items", "pieces", "product_list", "product_lists"];
     const mergedProducts = [];
     for (const k of productRelationKeys) {
-      const chunk = unwrapStrapiArray(a?.[k]).map(normalizeEntity).filter(Boolean);
-      for (const p of chunk) mergedProducts.push(p);
+      for (const rawProduct of relationValues(a?.[k])) {
+        if (!rawProduct || typeof rawProduct !== "object") continue;
+        const product = normalizeEntity(rawProduct);
+        if (product) mergedProducts.push(product);
+      }
     }
 
-    const prods = (mergedProducts.length ? mergedProducts : unwrapStrapiArray(a?.products).map(normalizeEntity))
-      .filter(Boolean)
-      .filter(isProductVisible);
+    const prods = mergedProducts.filter(isProductVisible);
 
     const productIds = [];
     for (const p of prods) {
-      if (!p?.id) continue;
-      productIds.push(p.id);
-      if (!prodById.has(p.id)) prodById.set(p.id, p);
+      const productId = entityStableId(p, p?.slug);
+      if (!productId) continue;
+      productIds.push(productId);
+      if (!prodById.has(productId)) prodById.set(productId, { ...p, __menuId: productId });
     }
 
     audRows.push({
-      id: a.id ?? `aud-${aSlug}`,
+      id: entityStableId(a, aSlug) || `aud-${aSlug}`,
       slug: aSlug,
       name: aName,
       tierSlugs: aTierSlugs,
@@ -1065,33 +1159,19 @@ function buildIndexFromAudienceSeed(audienceRowsStrapi) {
     if (!isProductVisible(p)) continue;
 
     const slug = normSlug(p.slug || "");
-    if (!p.id || !slug) continue;
+    const productId = p.__menuId || entityStableId(p, slug);
+    if (!productId || !slug) continue;
 
     const name = (p.name || p.title || "").toString().trim() || titleizeSlug(slug);
 
-    const tierSlugs = relSlugs(p, [
-      "tiers",
-      "brand_tiers",
-      "collection_tiers",
-      "product_collections",
-      "events_products_collections",
-      "events_products_collection",
-      "event_products_collections",
-      "event_product_collections",
-      "collections",
-      "collection",
-      "tier",
-      "tier_slug",
-      "tierSlug",
-    ]);
+    const tierSlugs = relSlugs(p, PRODUCT_TIER_KEYS);
+    const categorySlugs = relSlugs(p, PRODUCT_CATEGORY_KEYS);
+    const subCategorySlugs = relSlugs(p, PRODUCT_SUBCATEGORY_KEYS);
+    const genderGroupSlugs = relSlugs(p, PRODUCT_GENDER_KEYS);
+    const ageGroupSlugs = relSlugs(p, PRODUCT_AGE_KEYS);
 
-    const categorySlugs = relSlugs(p, ["categories", "category", "product_categories", "product_category"]);
-    const subCategorySlugs = relSlugs(p, ["sub_categories", "sub_category", "subCategories", "subCategory"]);
-    const genderGroupSlugs = relSlugs(p, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]);
-    const ageGroupSlugs = relSlugs(p, ["age_groups", "age_group", "ageGroups", "ageGroup"]);
-
-    productIndex.set(p.id, {
-      id: p.id,
+    productIndex.set(productId, {
+      id: productId,
       slug,
       name,
       tierSlugs,
@@ -1103,10 +1183,10 @@ function buildIndexFromAudienceSeed(audienceRowsStrapi) {
   }
 
   const nameMaps = {
-    categories: relSlugNameMapFromProducts(products, ["categories", "category", "product_categories", "product_category"]),
-    subCategories: relSlugNameMapFromProducts(products, ["sub_categories", "sub_category", "subCategories", "subCategory"]),
-    genderGroups: relSlugNameMapFromProducts(products, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]),
-    ageGroups: relSlugNameMapFromProducts(products, ["age_groups", "age_group", "ageGroups", "ageGroup"]),
+    categories: relSlugNameMapFromProducts(products, PRODUCT_CATEGORY_KEYS),
+    subCategories: relSlugNameMapFromProducts(products, PRODUCT_SUBCATEGORY_KEYS),
+    genderGroups: relSlugNameMapFromProducts(products, PRODUCT_GENDER_KEYS),
+    ageGroups: relSlugNameMapFromProducts(products, PRODUCT_AGE_KEYS),
   };
 
   const validIds = new Set(Array.from(productIndex.keys()));
@@ -1130,8 +1210,11 @@ function productBelongsToTier({ tier, productTierSlugs, audienceTierMatch }) {
   const t = normSlug(tier);
   if (!t) return true;
 
-  if (productTierSlugs && productTierSlugs.length) return productTierSlugs.some((s) => tierMatches(t, s));
-  return !!audienceTierMatch;
+  const productTierMatch = (productTierSlugs || []).some((s) => tierMatches(t, s));
+
+  // Product and audience tier relations are both real relations. A stale or
+  // secondary product collection must not override a valid audience-tier link.
+  return productTierMatch || !!audienceTierMatch;
 }
 
 function resolveNameFromMap(map, slug) {
@@ -1302,7 +1385,15 @@ function loadFromLocalStorage() {
     ageGroups: new Map(parsed?.nameMaps?.ageGroups || []),
   };
 
-  return { audienceRows, productIndex: prodIndex, nameMaps, _fromCache: true };
+  const cleanedAudienceRows = audienceRows
+    .map((a) => ({
+      ...a,
+      productIds: Array.from(new Set(a?.productIds || [])).filter((id) => prodIndex.has(id)),
+    }))
+    .filter((a) => (a.productIds || []).length > 0);
+
+  if (!cleanedAudienceRows.length || !prodIndex.size) return null;
+  return { audienceRows: cleanedAudienceRows, productIndex: prodIndex, nameMaps, _fromCache: true };
 }
 
 function saveToLocalStorage({ audienceRows, productIndex, nameMaps }) {
@@ -1324,6 +1415,68 @@ function saveToLocalStorage({ audienceRows, productIndex, nameMaps }) {
       })
     );
   } catch {}
+}
+
+function getSharedPreloadState() {
+  if (typeof globalThis === "undefined") return null;
+
+  const root = globalThis;
+  if (!root[PRELOAD_GLOBAL_KEY]) {
+    root[PRELOAD_GLOBAL_KEY] = {
+      ok: false,
+      inFlight: false,
+      promise: null,
+      rawOk: false,
+      rawPayload: null,
+      rawTs: 0,
+      menuData: null,
+      lastFailAt: 0,
+      retryCount: 0,
+    };
+  }
+
+  return root[PRELOAD_GLOBAL_KEY];
+}
+
+function rawRowsFromPayload(raw) {
+  const payload = unwrapProxyOk(raw);
+  if (!payload) return [];
+  return unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+}
+
+function readPreloadedRawProducts() {
+  if (typeof window === "undefined") return [];
+
+  const state = getSharedPreloadState();
+  if (state?.rawPayload) {
+    const rows = rawRowsFromPayload(state.rawPayload);
+    if (rows.length) return rows;
+  }
+
+  if (!canUseLS()) return [];
+
+  try {
+    const ts = Number(window.localStorage.getItem(RAW_LS_TS) || 0);
+    if (!Number.isFinite(ts) || ts <= 0) return [];
+    if (Date.now() - ts > RAW_LS_TTL_MS) return [];
+
+    const text = window.localStorage.getItem(RAW_LS_KEY);
+    if (!text) return [];
+
+    const raw = safeJsonParse(text);
+    const rows = rawRowsFromPayload(raw);
+    if (!rows.length) return [];
+
+    if (state) {
+      state.rawOk = true;
+      state.rawPayload = raw;
+      state.rawTs = ts;
+    }
+
+    return rows;
+  } catch {
+    return [];
+  }
 }
 
 async function fetchAudienceSeedFromStrapi() {
@@ -1358,19 +1511,26 @@ async function fetchAudienceSeedFromStrapi() {
 }
 
 async function fetchProductsFallback() {
+  // First consume the payload already fetched by the boot preloader.
+  // This is the critical hand-off that prevents a second request on menu click.
+  const preloaded = readPreloadedRawProducts();
+  if (preloaded.length) return preloaded;
+
+  // Keep the primary request shallow and production-safe. These are the only
+  // product/taxonomy fields required to build Tier → Audience → Category → Products.
   const strict =
     "/products?pagination[pageSize]=500" +
-    "&fields[0]=slug&fields[1]=name&fields[2]=title&fields[3]=status&fields[4]=disable_frontend&fields[5]=is_archived" +
-    "&populate[audience_categories][fields][0]=slug&populate[audience_categories][fields][1]=name&populate[audience_categories][fields][2]=title" +
-    "&populate[categories][fields][0]=slug&populate[categories][fields][1]=name&populate[categories][fields][2]=title" +
-    "&populate[sub_categories][fields][0]=slug&populate[sub_categories][fields][1]=name&populate[sub_categories][fields][2]=title" +
-    "&populate[gender_groups][fields][0]=slug&populate[gender_groups][fields][1]=name&populate[gender_groups][fields][2]=title" +
-    "&populate[age_groups][fields][0]=slug&populate[age_groups][fields][1]=name&populate[age_groups][fields][2]=title" +
-    "&populate[tiers][fields][0]=slug&populate[tiers][fields][1]=name&populate[tiers][fields][2]=title" +
-    "&populate[brand_tiers][fields][0]=slug&populate[brand_tiers][fields][1]=name&populate[brand_tiers][fields][2]=title" +
-    "&populate[collection_tiers][fields][0]=slug&populate[collection_tiers][fields][1]=name&populate[collection_tiers][fields][2]=title" +
-    "&populate[events_products_collections][fields][0]=slug&populate[events_products_collections][fields][1]=name&populate[events_products_collections][fields][2]=title" +
-    "&populate[product_collections][fields][0]=slug&populate[product_collections][fields][1]=name&populate[product_collections][fields][2]=title";
+    "&fields[0]=slug&fields[1]=name&fields[2]=status&fields[3]=disable_frontend&fields[4]=is_archived" +
+    "&populate[audience_categories][fields][0]=slug&populate[audience_categories][fields][1]=name" +
+    "&populate[categories][fields][0]=slug&populate[categories][fields][1]=name" +
+    "&populate[sub_categories][fields][0]=slug&populate[sub_categories][fields][1]=name" +
+    "&populate[gender_groups][fields][0]=slug&populate[gender_groups][fields][1]=name" +
+    "&populate[age_groups][fields][0]=slug&populate[age_groups][fields][1]=name" +
+    "&populate[tiers][fields][0]=slug&populate[tiers][fields][1]=name" +
+    "&populate[brand_tiers][fields][0]=slug&populate[brand_tiers][fields][1]=name" +
+    "&populate[collection_tiers][fields][0]=slug&populate[collection_tiers][fields][1]=name" +
+    "&populate[events_products_collections][fields][0]=slug&populate[events_products_collections][fields][1]=name" +
+    "&populate[product_collections][fields][0]=slug&populate[product_collections][fields][1]=name";
 
   let payload = await fetchFromStrapi(strict);
   let rows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
@@ -1385,39 +1545,25 @@ async function fetchProductsFallback() {
 function buildIndexFallbackFromProducts(products) {
   const audMap = new Map();
   const productIndex = new Map();
+  const visibleProducts = [];
 
   for (const p0 of products || []) {
     const p = normalizeEntity(p0) || {};
     if (!isProductVisible(p)) continue;
 
     const slug = normSlug(p.slug || "");
-    if (!p.id || !slug) continue;
+    const productId = entityStableId(p, slug);
+    if (!productId || !slug) continue;
 
     const name = (p.name || p.title || "").toString().trim() || titleizeSlug(slug);
+    const tierSlugs = relSlugs(p, PRODUCT_TIER_KEYS);
+    const categorySlugs = relSlugs(p, PRODUCT_CATEGORY_KEYS);
+    const subCategorySlugs = relSlugs(p, PRODUCT_SUBCATEGORY_KEYS);
+    const genderGroupSlugs = relSlugs(p, PRODUCT_GENDER_KEYS);
+    const ageGroupSlugs = relSlugs(p, PRODUCT_AGE_KEYS);
 
-    const tierSlugs = relSlugs(p, [
-      "tiers",
-      "brand_tiers",
-      "collection_tiers",
-      "product_collections",
-      "events_products_collections",
-      "events_products_collection",
-      "event_products_collections",
-      "event_product_collections",
-      "collections",
-      "collection",
-      "tier",
-      "tier_slug",
-      "tierSlug",
-    ]);
-
-    const categorySlugs = relSlugs(p, ["categories", "category", "product_categories", "product_category"]);
-    const subCategorySlugs = relSlugs(p, ["sub_categories", "sub_category", "subCategories", "subCategory"]);
-    const genderGroupSlugs = relSlugs(p, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]);
-    const ageGroupSlugs = relSlugs(p, ["age_groups", "age_group", "ageGroups", "ageGroup"]);
-
-    productIndex.set(p.id, {
-      id: p.id,
+    productIndex.set(productId, {
+      id: productId,
       slug,
       name,
       tierSlugs,
@@ -1426,42 +1572,42 @@ function buildIndexFallbackFromProducts(products) {
       genderGroupSlugs,
       ageGroupSlugs,
     });
+    visibleProducts.push(p);
 
-    const audienceKeys = ["audience_categories", "audiences", "audience_category", "audienceCategory"];
-    const auds = [];
-    for (const k of audienceKeys) {
-      const chunk = unwrapStrapiArray(p?.[k]).map(normalizeEntity).filter(Boolean);
-      for (const a of chunk) auds.push(a);
+    const audienceMeta = new Map();
+    for (const key of PRODUCT_AUDIENCE_KEYS) {
+      for (const rawAudience of relationValues(p?.[key])) {
+        if (!rawAudience || typeof rawAudience !== "object") continue;
+        const audience = normalizeEntity(rawAudience) || {};
+        const audienceSlug = normSlug(audience.slug || audience.name || audience.title || audience.label || "");
+        if (audienceSlug && !audienceMeta.has(audienceSlug)) audienceMeta.set(audienceSlug, audience);
+      }
     }
 
-    for (const a of auds) {
-      const aSlug = normSlug(a.slug || a.name || a.title || "");
-      if (!aSlug) continue;
-      const aName = (a.name || a.title || "").toString().trim() || titleizeSlug(aSlug);
+    const audienceNames = relSlugNameMapFromProducts([p], PRODUCT_AUDIENCE_KEYS);
+    const audienceSlugs = relSlugs(p, PRODUCT_AUDIENCE_KEYS);
 
-      const aTierSlugs = relSlugs(a, [
-        "tiers",
-        "brand_tiers",
-        "collection_tiers",
-        "product_collections",
-        "events_products_collections",
-        "events_products_collection",
-        "event_products_collections",
-        "event_product_collections",
-      ]);
+    for (const aSlug of audienceSlugs) {
+      if (!aSlug) continue;
+      const audience = audienceMeta.get(aSlug) || {};
+      const aName =
+        (audience.name || audience.title || audience.label || "").toString().trim() ||
+        audienceNames.get(aSlug) ||
+        titleizeSlug(aSlug);
+      const aTierSlugs = relSlugs(audience, PRODUCT_TIER_KEYS);
 
       const prev = audMap.get(aSlug);
       if (!prev) {
         audMap.set(aSlug, {
-          id: a.id ?? `aud-${aSlug}`,
+          id: entityStableId(audience, aSlug) || `aud-${aSlug}`,
           slug: aSlug,
           name: aName,
           tierSlugs: aTierSlugs,
-          productIds: [p.id],
+          productIds: [productId],
         });
       } else {
-        prev.productIds.push(p.id);
-        if (aTierSlugs?.length) {
+        prev.productIds.push(productId);
+        if (aTierSlugs.length) {
           prev.tierSlugs = Array.from(new Set([...(prev.tierSlugs || []), ...aTierSlugs]));
         }
       }
@@ -1471,18 +1617,52 @@ function buildIndexFallbackFromProducts(products) {
   const audienceRows = Array.from(audMap.values())
     .map((a) => ({
       ...a,
-      productIds: Array.from(new Set(a.productIds)),
+      productIds: Array.from(new Set(a.productIds)).filter((id) => productIndex.has(id)),
     }))
     .filter((a) => (a.productIds || []).length > 0);
 
   const nameMaps = {
-    categories: relSlugNameMapFromProducts(products, ["categories", "category", "product_categories", "product_category"]),
-    subCategories: relSlugNameMapFromProducts(products, ["sub_categories", "sub_category", "subCategories", "subCategory"]),
-    genderGroups: relSlugNameMapFromProducts(products, ["gender_groups", "gender_group", "genderGroups", "genderGroup"]),
-    ageGroups: relSlugNameMapFromProducts(products, ["age_groups", "age_group", "ageGroups", "ageGroup"]),
+    categories: relSlugNameMapFromProducts(visibleProducts, PRODUCT_CATEGORY_KEYS),
+    subCategories: relSlugNameMapFromProducts(visibleProducts, PRODUCT_SUBCATEGORY_KEYS),
+    genderGroups: relSlugNameMapFromProducts(visibleProducts, PRODUCT_GENDER_KEYS),
+    ageGroups: relSlugNameMapFromProducts(visibleProducts, PRODUCT_AGE_KEYS),
   };
 
   return { audienceRows, productIndex, nameMaps };
+}
+
+function hasUsableBuiltMenu(data) {
+  return (
+    (data?.audienceRows?.length || 0) > 0 &&
+    (data?.productIndex?.size || 0) > 0
+  );
+}
+
+function publishBuiltMenu(data, { fromCache = false } = {}) {
+  if (!hasUsableBuiltMenu(data)) return null;
+
+  const built = { ...data, _fromCache: !!fromCache };
+  __menuData = built;
+  __menuLastGood = built;
+  saveToLocalStorage(built);
+
+  const state = getSharedPreloadState();
+  if (state) {
+    state.menuData = built;
+    state.ok = true;
+  }
+
+  return built;
+}
+
+function buildMenuFromPreloadedRawProducts() {
+  const rows = readPreloadedRawProducts();
+  if (!rows.length) return null;
+
+  const built = buildIndexFallbackFromProducts(rows);
+  if (!hasUsableBuiltMenu(built)) return null;
+
+  return publishBuiltMenu(built, { fromCache: true });
 }
 
 async function fetchAndBuildFresh() {
@@ -1507,9 +1687,7 @@ async function fetchAndBuildFresh() {
 
   const meaningful = (built?.audienceRows?.length || 0) > 0 && (built?.productIndex?.size || 0) > 0;
   if (meaningful) {
-    saveToLocalStorage(built);
-    __menuLastGood = built;
-    return { ...built, _fromCache: false };
+    return publishBuiltMenu(built, { fromCache: false });
   }
 
   const fallback = __menuLastGood || __menuData || loadFromLocalStorage();
@@ -1528,39 +1706,82 @@ async function fetchAndBuildFresh() {
 }
 
 /**
- * ✅ FIX (critical): when refresh is triggered, return the refresh promise (fresh data),
- * not the stale snapshot. This is what makes options actually appear after fetch.
+ * Preload contract:
+ * - use raw payload from the standalone preloader first
+ * - then use processed localStorage cache
+ * - if another standalone preload is in-flight, wait for that same promise
+ * - only perform our own fetch when no usable preload/cache exists, or when a
+ *   caller explicitly asks for a fresh background refresh
  */
-async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
-  // If a fetch is already in-flight, await it
+async function preloadMenuDataOnce({ backgroundRefresh = true, fromPreloader = false } = {}) {
+  // An in-module fetch/build already owns the work.
   if (__menuPromise) return __menuPromise;
 
-  // Ensure we have a snapshot for instant usage
+  // Convert the standalone preloader's raw payload before touching the network.
+  if (!__menuData) {
+    const preloaded = buildMenuFromPreloadedRawProducts();
+    if (preloaded) __menuData = preloaded;
+  }
+
+  // Processed cache is the second instant source.
   if (!__menuData) {
     const cached = loadFromLocalStorage();
     if (cached) {
       __menuData = cached;
       __menuLastGood = __menuLastGood || cached;
-      if (!backgroundRefresh) return __menuData;
+
+      const state = getSharedPreloadState();
+      if (state) state.menuData = cached;
     }
-  } else {
-    if (!backgroundRefresh) return __menuData;
   }
 
-  // Start (or refresh) the singleton fetch and return it so callers can setState with fresh data
+  // A normal menu consumer should never start a duplicate request while the
+  // standalone preloader is already fetching/building the same data.
+  if (!fromPreloader) {
+    const state = getSharedPreloadState();
+    if (!__menuData && state?.inFlight && state?.promise) {
+      try {
+        const sharedData = await state.promise;
+        if (hasUsableBuiltMenu(sharedData)) {
+          __menuData = sharedData;
+          __menuLastGood = __menuLastGood || sharedData;
+          return sharedData;
+        }
+      } catch {}
+
+      // The shared preload may have published raw data before failing later.
+      const preloadedAfterWait = buildMenuFromPreloadedRawProducts();
+      if (preloadedAfterWait) return preloadedAfterWait;
+    }
+  }
+
+  // If usable data is already present and no explicit refresh was requested,
+  // return immediately. This is what makes opening the menu instant.
+  if (__menuData && !backgroundRefresh) return __menuData;
+
+  // If no data exists at all we must fetch, even when backgroundRefresh=false.
   __menuPromise = fetchAndBuildFresh()
     .then((fresh) => {
-      __menuData = fresh;
+      if (hasUsableBuiltMenu(fresh)) {
+        __menuData = fresh;
+        __menuLastGood = fresh;
+      }
       return fresh;
     })
     .catch(() => {
-      const fallback = __menuLastGood || __menuData || loadFromLocalStorage();
+      const preloaded = buildMenuFromPreloadedRawProducts();
+      const fallback = preloaded || __menuLastGood || __menuData || loadFromLocalStorage();
       __menuData =
         fallback ||
         ({
           audienceRows: [],
           productIndex: new Map(),
-          nameMaps: { categories: new Map(), subCategories: new Map(), genderGroups: new Map(), ageGroups: new Map() },
+          nameMaps: {
+            categories: new Map(),
+            subCategories: new Map(),
+            genderGroups: new Map(),
+            ageGroups: new Map(),
+          },
         });
       return __menuData;
     })
@@ -1571,56 +1792,49 @@ async function preloadMenuDataOnce({ backgroundRefresh = true } = {}) {
   return __menuPromise;
 }
 
-export function warmSlidingMenuBar() {
-  return preloadMenuDataOnce({ backgroundRefresh: true });
+export function warmSlidingMenuBar({ forceRefresh = true, fromPreloader = false } = {}) {
+  return preloadMenuDataOnce({
+    backgroundRefresh: !!forceRefresh,
+    fromPreloader: !!fromPreloader,
+  });
 }
 
 export function SlidingMenuBarPreloader() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const run = () => {
-      try {
-        warmSlidingMenuBar();
-      } catch {}
-    };
-
-    if (typeof window.requestIdleCallback === "function") {
-      const id = window.requestIdleCallback(run, { timeout: 1200 });
-      return () => {
-        try {
-          window.cancelIdleCallback?.(id);
-        } catch {}
-      };
-    }
-
-    const t = window.setTimeout(run, 220);
-    return () => window.clearTimeout(t);
+    // Do not defer to requestIdleCallback. If this compatibility preloader is
+    // mounted directly, begin warming immediately.
+    try {
+      void warmSlidingMenuBar({ forceRefresh: true });
+    } catch {}
   }, []);
 
   return null;
 }
 
-// Auto-warm (only once per load; no UI change)
+// Auto-warm fallback for deployments that import this menu module directly.
+// When the standalone small preloader owns an in-flight request, do not create
+// a duplicate request from this larger module.
 if (typeof window !== "undefined") {
   try {
     if (!window.__tdlsSlidingMenuBarAutoWarm) {
       window.__tdlsSlidingMenuBarAutoWarm = true;
 
-      const kick = () => {
-        try {
-          warmSlidingMenuBar();
-        } catch {}
-      };
-
-      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(kick, { timeout: 1400 });
-      else window.setTimeout(kick, 240);
+      const shared = getSharedPreloadState();
+      if (!shared?.inFlight && !shared?.promise) {
+        void warmSlidingMenuBar({ forceRefresh: true }).catch(() => {});
+      }
 
       document.addEventListener(
         "visibilitychange",
         () => {
           try {
-            if (document.visibilityState === "visible") warmSlidingMenuBar();
+            if (document.visibilityState !== "visible") return;
+            const state = getSharedPreloadState();
+            if (!state?.inFlight && !state?.promise) {
+              void warmSlidingMenuBar({ forceRefresh: true }).catch(() => {});
+            }
           } catch {}
         },
         { passive: true }
@@ -1686,8 +1900,14 @@ export default function Slidingmenubar({ open, onClose }) {
       if (kind === "aud") {
         setHoverAudienceSlug(slug);
         setHoverCategorySlug("");
+        setSelectedSubCategory("");
+        setSelectedGenderGroup("");
+        setSelectedAgeGroup("");
       } else {
         setHoverCategorySlug(slug);
+        setSelectedSubCategory("");
+        setSelectedGenderGroup("");
+        setSelectedAgeGroup("");
       }
     }, ms);
   }, []);
@@ -1734,7 +1954,15 @@ export default function Slidingmenubar({ open, onClose }) {
   useEffect(() => {
     let alive = true;
 
-    // instant snapshot
+    // Instant snapshot: preloaded raw payload first, processed cache second.
+    if (!__menuData) {
+      const preloaded = buildMenuFromPreloadedRawProducts();
+      if (preloaded) {
+        __menuData = preloaded;
+        __menuLastGood = __menuLastGood || preloaded;
+      }
+    }
+
     if (!__menuData) {
       const cached = loadFromLocalStorage();
       if (cached) {
@@ -1764,7 +1992,9 @@ export default function Slidingmenubar({ open, onClose }) {
     (async () => {
       try {
         setLoading(true);
-        const data = await preloadMenuDataOnce({ backgroundRefresh: true }); // ✅ now awaits fresh, not stale
+        // Consume the preloaded/shared snapshot without forcing another request
+        // merely because the customer opened the menu.
+        const data = await preloadMenuDataOnce({ backgroundRefresh: false });
         if (!alive) return;
 
         setAudienceRows(data?.audienceRows || []);
@@ -2077,6 +2307,25 @@ export default function Slidingmenubar({ open, onClose }) {
     () => buildFacetOptions({ baseProducts: baseProductsForFacets, productIndex, nameMaps }),
     [baseProductsForFacets, productIndex, nameMaps]
   );
+
+  // Never keep a refinement that no longer belongs to the active
+  // Tier + Audience + Category branch. This prevents silent zero-result states.
+  useEffect(() => {
+    if (selectedSubCategory && !facetOptions.subCategories.some((x) => x.slug === selectedSubCategory)) {
+      setSelectedSubCategory("");
+    }
+    if (selectedGenderGroup && !facetOptions.genderGroups.some((x) => x.slug === selectedGenderGroup)) {
+      setSelectedGenderGroup("");
+    }
+    if (selectedAgeGroup && !facetOptions.ageGroups.some((x) => x.slug === selectedAgeGroup)) {
+      setSelectedAgeGroup("");
+    }
+  }, [
+    facetOptions,
+    selectedSubCategory,
+    selectedGenderGroup,
+    selectedAgeGroup,
+  ]);
 
   const products = useMemo(() => {
     if (!flyAudience?.raw) return [];
@@ -2885,6 +3134,9 @@ export default function Slidingmenubar({ open, onClose }) {
                             onSelect={() => {
                               setHoverAudienceSlug(a.slug);
                               setHoverCategorySlug("");
+                              setSelectedSubCategory("");
+                              setSelectedGenderGroup("");
+                              setSelectedAgeGroup("");
                               setMobileSection("categories");
                             }}
                             href={buildCollectionsHref({
@@ -2949,6 +3201,9 @@ export default function Slidingmenubar({ open, onClose }) {
                             active={c.slug === flyCategorySlug}
                             onSelect={() => {
                               setHoverCategorySlug(c.slug);
+                              setSelectedSubCategory("");
+                              setSelectedGenderGroup("");
+                              setSelectedAgeGroup("");
                               setMobileSection("products");
                             }}
                             href={buildCollectionsHref({
