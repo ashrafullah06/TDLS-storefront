@@ -1,13 +1,12 @@
 // FILE: app/product/page.jsx
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
+export const runtime = "nodejs";
 
 import AllProductsClient from "./all-products-client";
 import Navbar from "@/components/common/navbar";
 import { headers } from "next/headers";
 
 /* ───────── env helpers ───────── */
-
-const STRAPI_PROXY_SECRET = process.env.STRAPI_SYNC_SECRET || "";
 
 // Canonical public site URL (for SEO/social). Keep stable.
 const SITE_URL =
@@ -76,7 +75,7 @@ export const metadata = {
  */
 async function resolveRequestBaseUrl() {
   try {
-    const h = await headers(); // ✅ Next.js 15: headers() is async
+    const h = await headers();
 
     const host =
       h.get("x-forwarded-host") ||
@@ -128,13 +127,13 @@ function pickStrapiProductName(node) {
 /* ───────── Strapi fetch helper (via Next proxy) ───────── */
 
 async function fetchProductsFromStrapi(appBaseUrl) {
-  if (!STRAPI_PROXY_SECRET) {
-    throw new Error("STRAPI_SYNC_SECRET is not set in environment");
-  }
-
   const base = (appBaseUrl || SITE_URL).replace(/\/+$/, "");
 
-  // /api/strapi?path=/products?populate=*
+  /*
+   * Public catalog reads must remain public so /api/strapi can use its
+   * existing CDN + memory cache. Supplying STRAPI_SYNC_SECRET here would
+   * intentionally disable that cache inside the proxy.
+   */
   const url = new URL("/api/strapi", base);
 
   url.searchParams.set("path", "/products?populate=*");
@@ -143,13 +142,12 @@ async function fetchProductsFromStrapi(appBaseUrl) {
     method: "GET",
 
     headers: {
-      "x-strapi-sync-secret": STRAPI_PROXY_SECRET,
+      Accept: "application/json",
     },
 
-    cache: "no-store",
-
     next: {
-      revalidate: 0,
+      revalidate,
+      tags: ["tdls-products-index"],
     },
   });
 
@@ -177,7 +175,6 @@ async function fetchProductsFromStrapi(appBaseUrl) {
     );
   }
 
-  // Strapi products live under payload.data.data
   const list = payload.data?.data;
 
   return Array.isArray(list) ? list : [];
@@ -186,13 +183,12 @@ async function fetchProductsFromStrapi(appBaseUrl) {
 /* ───────── Page component ───────── */
 
 export default async function ProductIndexPage() {
-  const requestBaseUrl = await resolveRequestBaseUrl(); // ✅ await the async helper
+  const requestBaseUrl = await resolveRequestBaseUrl();
 
   const products = await fetchProductsFromStrapi(requestBaseUrl);
 
   const safeList = Array.isArray(products) ? products : [];
 
-  // Optional: JSON-LD ItemList (no UI change) — helps crawlers understand this page lists products.
   const itemListJsonLd = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -217,7 +213,6 @@ export default async function ProductIndexPage() {
 
   return (
     <>
-      {/* JSON-LD (no UI) */}
       <script
         id="tdls-product-index-itemlist"
         type="application/ld+json"
@@ -226,11 +221,8 @@ export default async function ProductIndexPage() {
         }}
       />
 
-      {/* Shared premium navbar, same as cart & collections */}
       <Navbar />
 
-      {/* AllProductsClient is a "use client" component */}
-      {/* siteBaseUrl prop is provided to keep SSR/CSR origin consistent (no UI change). */}
       <AllProductsClient
         products={safeList}
         siteBaseUrl={requestBaseUrl}

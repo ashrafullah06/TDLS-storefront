@@ -35,7 +35,6 @@
     "gql:auto:fragments": "node ./scripts/auto-fragment.mjs",
     "gql:codegen": "dotenv -e .env.local -- graphql-codegen --config src/lib/graphql/codegen.yml",
     "lint": "next lint",
-    "postbuild": "next-sitemap",
     "db:push:dev": "dotenv -e .env.development -- prisma db push",
     "db:migrate:dev": "dotenv -e .env.development -- prisma migrate dev",
     "db:generate:dev": "dotenv -e .env.development -- prisma generate",
@@ -74,7 +73,6 @@
     "next": "15.3.8",
     "next-auth": "5.0.0-beta.29",
     "next-pwa": "5.6.0",
-    "next-sitemap": "4.2.3",
     "nodemailer": "6.10.1",
     "openai": "5.12.0",
     "pdf-lib": "^1.17.1",
@@ -106,7 +104,7 @@
     "@eslint/eslintrc": "3.0.0",
     "@graphql-codegen/cli": "5.0.7",
     "@graphql-codegen/client-preset": "4.8.3",
-    "@graphql-tools/load": "8.1.2",
+    "@graphql-tools/load": "8.1.0",
     "@graphql-tools/url-loader": "8.0.33",
     "@graphql-tools/utils": "10.9.1",
     "@prisma/engines": "6.14.0",
@@ -139,7 +137,7 @@
     "@prisma/engines": "6.14.0"
   },
   "engines": {
-  "node": "24.x"
-},
+    "node": "24.x"
+  },
   "packageManager": "npm@10.8.2"
 }
