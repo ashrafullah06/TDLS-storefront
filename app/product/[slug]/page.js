@@ -408,13 +408,25 @@ function buildScopedOptions(product) {
 /* ========= REVIEWS ========= */
 
 function getStrapiBase() {
+  /*
+   * Keep the same Strapi origin priority used by the corrected
+   * product-detail fetcher and /api/strapi proxy.
+   */
   const raw =
-    process.env.NEXT_PUBLIC_STRAPI_API_URL ||
+    process.env.STRAPI_API_ORIGIN ||
+    process.env.STRAPI_URL ||
+    process.env.NEXT_PUBLIC_STRAPI_URL ||
     process.env.NEXT_PUBLIC_STRAPI_ORIGIN ||
+    process.env.NEXT_PUBLIC_STRAPI_API_URL ||
+    process.env.NEXT_PUBLIC_STRAPI_API_ORIGIN ||
     process.env.STRAPI_API_URL ||
     "http://localhost:1337";
 
-  return raw
+  return String(
+    raw ||
+    ""
+  )
+    .trim()
     .replace(
       /\/+$/,
       ""
@@ -908,6 +920,11 @@ export async function generateMetadata(
     ) ||
     {};
 
+  /*
+   * fetchproductbyslug is cached per server render/request, so this lookup
+   * and the ProductPage lookup below do not need to create duplicate
+   * product-detail work.
+   */
   const raw =
     await fetchproductbyslug(
       slug
@@ -1079,6 +1096,13 @@ export default async function ProductPage(
   /*
    * Critical request:
    * only product data itself must finish before we can render the page.
+   *
+   * fetchproductbyslug now has:
+   * - pageSize=1
+   * - explicit product_variants populate
+   * - hard per-attempt timeout
+   * - bounded retry
+   * - server-request deduplication
    */
   const raw =
     await fetchproductbyslug(
@@ -1127,16 +1151,14 @@ export default async function ProductPage(
   }
 
   /*
-   * Reviews and stock are independent. Run them in PARALLEL.
+   * Reviews and stock are independent.
    *
-   * Reviews: hard network timeout.
-   * Stock: bounded wait, then existing Strapi fallback.
+   * They run in parallel and are BOTH non-critical.
+   * A review API problem or Prisma/Neon problem must never prevent
+   * ClientUX from rendering once the Strapi product itself is available.
    */
-  const [
-    reviews,
-    prismaStock,
-  ] =
-    await Promise.all([
+  const auxiliaryResults =
+    await Promise.allSettled([
       fetchReviews(
         product.id
       ),
@@ -1146,6 +1168,38 @@ export default async function ProductPage(
         slug,
       }),
     ]);
+
+  const reviewsResult =
+    auxiliaryResults[0];
+
+  const stockResult =
+    auxiliaryResults[1];
+
+  const reviews =
+    reviewsResult.status ===
+      "fulfilled" &&
+    Array.isArray(
+      reviewsResult.value
+    )
+      ? reviewsResult.value
+      : [];
+
+  const prismaStockFallback = {
+    stockQty:
+      null,
+
+    stockByVariantKey:
+      {},
+  };
+
+  const prismaStock =
+    stockResult.status ===
+      "fulfilled" &&
+    stockResult.value &&
+    typeof stockResult.value ===
+      "object"
+      ? stockResult.value
+      : prismaStockFallback;
 
   const aggregateRating =
     reviews.length
@@ -1411,7 +1465,8 @@ export default async function ProductPage(
           scopedOptions
         }
         stockByVariantKey={
-          prismaStock.stockByVariantKey
+          prismaStock.stockByVariantKey ||
+          {}
         }
         isOutOfStock={
           !isInStock

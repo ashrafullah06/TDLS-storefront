@@ -29,6 +29,9 @@ const BRAND = "TDLS";
 const OG_IMAGE =
   `${SITE_URL}/tdls-social-preview`;
 
+const COLLECTION_FETCH_TIMEOUT_MS =
+  15000;
+
 function getServerAppOrigin() {
   if (
     process.env.NODE_ENV !==
@@ -506,6 +509,40 @@ function buildProductsStrapiPath({
   return `/products?${p.toString()}`;
 }
 
+async function fetchWithTimeout(
+  url,
+  options = {},
+  timeoutMs = COLLECTION_FETCH_TIMEOUT_MS
+) {
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(
+      () => {
+        try {
+          controller.abort();
+        } catch {}
+      },
+      timeoutMs
+    );
+
+  try {
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal:
+          controller.signal,
+      }
+    );
+  } finally {
+    clearTimeout(
+      timer
+    );
+  }
+}
+
 async function fetchInitialProducts({
   tier,
   event,
@@ -542,7 +579,7 @@ async function fetchInitialProducts({
     );
 
     const res =
-      await fetch(
+      await fetchWithTimeout(
         proxyUrl.toString(),
         {
           method:

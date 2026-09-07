@@ -126,58 +126,485 @@ function pickStrapiProductName(node) {
 
 /* ───────── Strapi fetch helper (via Next proxy) ───────── */
 
-async function fetchProductsFromStrapi(appBaseUrl) {
-  const base = (appBaseUrl || SITE_URL).replace(/\/+$/, "");
+/*
+ * Must remain aligned with the storefront display step.
+ *
+ * AllProductsClient initially displays 24 products and reveals another
+ * 24 as the customer scrolls.
+ *
+ * IMPORTANT:
+ * We still fetch the COMPLETE catalog here because AllProductsClient performs
+ * its filters/sorting/infinite reveal against the products array supplied by
+ * this page. We simply avoid asking Strapi/Railway for the whole catalog in
+ * one oversized request.
+ */
+const PRODUCTS_PAGE_SIZE = 24;
+
+/*
+ * Keep only a few Strapi requests in flight at once.
+ *
+ * This prevents the paginated fix from turning into a burst of simultaneous
+ * Railway/Strapi requests on a larger catalog.
+ */
+const PRODUCTS_FETCH_CONCURRENCY = 3;
+
+/*
+ * Hard safety ceiling only. A real catalog should never approach this.
+ * This protects against malformed pagination metadata causing an endless loop.
+ */
+const MAX_PRODUCT_PAGES = 1000;
+
+/**
+ * Build the exact Strapi request required by the All Products page.
+ *
+ * Do NOT use populate=* here.
+ *
+ * The explicit populate structure has two purposes:
+ * 1. it prevents the proxy from replacing this request with the generic
+ *    card-lite profile;
+ * 2. it asks only for relations this page/ProductCard actually needs.
+ *
+ * Existing filtering/UI behavior remains intact.
+ */
+function buildProductsStrapiPath(page) {
+  const params = new URLSearchParams();
+
+  params.set(
+    "pagination[page]",
+    String(page)
+  );
+
+  params.set(
+    "pagination[pageSize]",
+    String(PRODUCTS_PAGE_SIZE)
+  );
+
+  params.set(
+    "pagination[withCount]",
+    "true"
+  );
+
+  /*
+   * Product media used by ProductCard / QuickView.
+   */
+  params.set(
+    "populate[image]",
+    "*"
+  );
+
+  params.set(
+    "populate[images]",
+    "*"
+  );
+
+  params.set(
+    "populate[gallery]",
+    "*"
+  );
+
+  /*
+   * Current TDLS Strapi product relation.
+   *
+   * Keep sizes/image/color populated because ProductCard and the filtering
+   * system derive price, stock, colors and sizes from product_variants.
+   */
+  params.set(
+    "populate[product_variants][populate][sizes]",
+    "*"
+  );
+
+  params.set(
+    "populate[product_variants][populate][image]",
+    "*"
+  );
+
+  params.set(
+    "populate[product_variants][populate][color]",
+    "*"
+  );
+
+  /*
+   * Taxonomy relations actually used by the All Products filter system.
+   * Limit each relation to slug/name so this remains substantially lighter
+   * than populate=*.
+   */
+  const taxonomyRelations = [
+    "audience_categories",
+    "categories",
+    "sub_categories",
+    "events_products_collections",
+    "gender_groups",
+    "age_groups",
+  ];
+
+  for (const relation of taxonomyRelations) {
+    params.set(
+      `populate[${relation}][fields][0]`,
+      "slug"
+    );
+
+    params.set(
+      `populate[${relation}][fields][1]`,
+      "name"
+    );
+  }
+
+  return `/products?${params.toString()}`;
+}
+
+function readPagination(payload) {
+  const p =
+    payload?.meta?.pagination ||
+    null;
+
+  if (!p) {
+    return {
+      page: 1,
+      pageSize: PRODUCTS_PAGE_SIZE,
+      pageCount: 1,
+      total: 0,
+    };
+  }
+
+  const page =
+    Number(p.page);
+
+  const pageSize =
+    Number(p.pageSize);
+
+  const total =
+    Number(p.total);
+
+  const explicitPageCount =
+    Number(p.pageCount);
+
+  const safePage =
+    Number.isFinite(page) &&
+    page > 0
+      ? Math.floor(page)
+      : 1;
+
+  const safePageSize =
+    Number.isFinite(pageSize) &&
+    pageSize > 0
+      ? Math.floor(pageSize)
+      : PRODUCTS_PAGE_SIZE;
+
+  const safeTotal =
+    Number.isFinite(total) &&
+    total >= 0
+      ? Math.floor(total)
+      : 0;
+
+  let pageCount =
+    Number.isFinite(explicitPageCount) &&
+    explicitPageCount > 0
+      ? Math.floor(explicitPageCount)
+      : safeTotal > 0
+      ? Math.ceil(
+          safeTotal /
+            safePageSize
+        )
+      : 1;
+
+  pageCount = Math.min(
+    MAX_PRODUCT_PAGES,
+    Math.max(
+      1,
+      pageCount
+    )
+  );
+
+  return {
+    page: safePage,
+    pageSize: safePageSize,
+    pageCount,
+    total: safeTotal,
+  };
+}
+
+async function fetchProductsPageFromStrapi(
+  appBaseUrl,
+  page
+) {
+  const base =
+    (
+      appBaseUrl ||
+      SITE_URL
+    ).replace(
+      /\/+$/,
+      ""
+    );
 
   /*
    * Public catalog reads must remain public so /api/strapi can use its
    * existing CDN + memory cache. Supplying STRAPI_SYNC_SECRET here would
    * intentionally disable that cache inside the proxy.
    */
-  const url = new URL("/api/strapi", base);
+  const url =
+    new URL(
+      "/api/strapi",
+      base
+    );
 
-  url.searchParams.set("path", "/products?populate=*");
+  url.searchParams.set(
+    "path",
+    buildProductsStrapiPath(
+      page
+    )
+  );
 
-  const res = await fetch(url.toString(), {
-    method: "GET",
+  const res =
+    await fetch(
+      url.toString(),
+      {
+        method: "GET",
 
-    headers: {
-      Accept: "application/json",
-    },
+        headers: {
+          Accept:
+            "application/json",
+        },
 
-    next: {
-      revalidate,
-      tags: ["tdls-products-index"],
-    },
-  });
+        next: {
+          revalidate,
+
+          tags: [
+            "tdls-products-index",
+          ],
+        },
+      }
+    );
 
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
+    const txt =
+      await res
+        .text()
+        .catch(
+          () => ""
+        );
 
     throw new Error(
       `Strapi proxy HTTP error ${res.status} ${res.statusText} – ${
-        txt || "no response body"
+        txt ||
+        "no response body"
       }`
     );
   }
 
-  const payload = await res.json().catch((e) => {
-    throw new Error(
-      "Failed to parse JSON from /api/strapi: " + e.message
-    );
-  });
+  const payload =
+    await res
+      .json()
+      .catch(
+        (e) => {
+          throw new Error(
+            "Failed to parse JSON from /api/strapi: " +
+              e.message
+          );
+        }
+      );
 
   if (!payload?.ok) {
     throw new Error(
-      `Strapi proxy payload error: ${payload?.error || "UNKNOWN"} – ${
-        payload?.message || ""
+      `Strapi proxy payload error: ${
+        payload?.error ||
+        "UNKNOWN"
+      } – ${
+        payload?.message ||
+        ""
       }`
     );
   }
 
-  const list = payload.data?.data;
+  const strapiPayload =
+    payload?.data ||
+    {};
 
-  return Array.isArray(list) ? list : [];
+  const list =
+    Array.isArray(
+      strapiPayload?.data
+    )
+      ? strapiPayload.data
+      : [];
+
+  return {
+    products: list,
+
+    pagination:
+      readPagination(
+        strapiPayload
+      ),
+  };
+}
+
+function mergeUniqueProducts(
+  target,
+  incoming
+) {
+  const out =
+    Array.isArray(target)
+      ? target
+      : [];
+
+  const seen =
+    new Set(
+      out.map(
+        (product) =>
+          String(
+            product?.id ??
+              product?.attributes
+                ?.id ??
+              product?.slug ??
+              product?.attributes
+                ?.slug ??
+              ""
+          )
+      )
+    );
+
+  for (
+    const product of
+      Array.isArray(incoming)
+        ? incoming
+        : []
+  ) {
+    const key =
+      String(
+        product?.id ??
+          product?.attributes
+            ?.id ??
+          product?.slug ??
+          product?.attributes
+            ?.slug ??
+          ""
+      );
+
+    /*
+     * Products should always have either id or slug, but preserve unknown
+     * objects rather than deleting data if Strapi ever returns an unusual row.
+     */
+    if (!key) {
+      out.push(
+        product
+      );
+
+      continue;
+    }
+
+    if (
+      seen.has(key)
+    ) {
+      continue;
+    }
+
+    seen.add(key);
+
+    out.push(
+      product
+    );
+  }
+
+  return out;
+}
+
+async function fetchProductsFromStrapi(
+  appBaseUrl
+) {
+  /*
+   * First request gives us both the first 24 products and Strapi's real
+   * pageCount/total.
+   */
+  const first =
+    await fetchProductsPageFromStrapi(
+      appBaseUrl,
+      1
+    );
+
+  const allProducts =
+    mergeUniqueProducts(
+      [],
+      first.products
+    );
+
+  const pageCount =
+    Math.min(
+      MAX_PRODUCT_PAGES,
+      Math.max(
+        1,
+        Number(
+          first.pagination
+            ?.pageCount ||
+            1
+        )
+      )
+    );
+
+  if (
+    pageCount <=
+    1
+  ) {
+    return allProducts;
+  }
+
+  /*
+   * Retrieve the remaining pages in small batches.
+   *
+   * This preserves the original "all products" behavior without sending one
+   * huge request to Railway/Strapi.
+   */
+  for (
+    let startPage = 2;
+    startPage <=
+    pageCount;
+    startPage +=
+    PRODUCTS_FETCH_CONCURRENCY
+  ) {
+    const pages = [];
+
+    for (
+      let offset = 0;
+      offset <
+        PRODUCTS_FETCH_CONCURRENCY;
+      offset++
+    ) {
+      const page =
+        startPage +
+        offset;
+
+      if (
+        page >
+        pageCount
+      ) {
+        break;
+      }
+
+      pages.push(
+        page
+      );
+    }
+
+    const results =
+      await Promise.all(
+        pages.map(
+          (page) =>
+            fetchProductsPageFromStrapi(
+              appBaseUrl,
+              page
+            )
+        )
+      );
+
+    for (
+      const result of
+        results
+    ) {
+      mergeUniqueProducts(
+        allProducts,
+        result.products
+      );
+    }
+  }
+
+  return allProducts;
 }
 
 /* ───────── Page component ───────── */

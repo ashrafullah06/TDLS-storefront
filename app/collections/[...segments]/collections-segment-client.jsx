@@ -2281,6 +2281,7 @@ export default function CollectionsSegmentClient({
       async ({
         page,
         useServerFilters,
+        noCache = false,
       }) => {
         const baseQS =
           `pagination[page]=${page}` +
@@ -2305,6 +2306,21 @@ export default function CollectionsSegmentClient({
         const strapiPath =
           `/products?${qs}`;
 
+        const proxyQS =
+          new URLSearchParams();
+
+        proxyQS.set(
+          "path",
+          strapiPath
+        );
+
+        if (noCache) {
+          proxyQS.set(
+            "noCache",
+            "1"
+          );
+        }
+
         const ctrl =
           new AbortController();
 
@@ -2314,9 +2330,7 @@ export default function CollectionsSegmentClient({
 
         const res =
           await fetchWithTimeout(
-            `/api/strapi?path=${encodeURIComponent(
-              strapiPath
-            )}`,
+            `/api/strapi?${proxyQS.toString()}`,
             {
               method:
                 "GET",
@@ -2342,7 +2356,8 @@ export default function CollectionsSegmentClient({
 
         if (
           !res.ok ||
-          !raw
+          !raw ||
+          raw?.ok === false
         ) {
           return {
             ok: false,
@@ -2734,12 +2749,11 @@ export default function CollectionsSegmentClient({
   /*
    * RESET + boot:
    *
-   * 1. use SSR page-1 result if available;
-   * 2. otherwise use route cache immediately;
-   * 3. only then perform one page-1 browser request.
-   *
-   * The old code fetched page 1 again even though the
-   * server had already fetched it.
+   * 1. use a valid non-empty SSR page-1 result immediately;
+   * 2. otherwise use route cache immediately if available;
+   * 3. retry page 1 in the browser with noCache=1;
+   * 4. if a filtered request still fails or unexpectedly returns empty,
+   *    fall back to catalogScan and use the existing local collection matcher.
    */
   useEffect(
     () => {
@@ -2814,9 +2828,99 @@ export default function CollectionsSegmentClient({
         serverMode
       );
 
+      const applyInitialResult =
+        (result, mode) => {
+          if (
+            !result?.ok
+          ) {
+            return false;
+          }
+
+          const pg =
+            result.pagination ||
+            {
+              page: 1,
+              pageSize:
+                PAGE_SIZE,
+              pageCount: 1,
+              total:
+                Array.isArray(
+                  result.items
+                )
+                  ? result.items
+                      .length
+                  : 0,
+            };
+
+          const items =
+            Array.isArray(
+              result.items
+            )
+              ? result.items
+              : [];
+
+          setFetchMode(
+            mode
+          );
+
+          setRawProducts(
+            items
+          );
+
+          setRemotePage(
+            Number(
+              pg?.page ||
+                1
+            )
+          );
+
+          setRemotePageCount(
+            Number(
+              pg?.pageCount ||
+                1
+            )
+          );
+
+          setRemoteTotal(
+            Number(
+              pg?.total ||
+                items.length ||
+                0
+            )
+          );
+
+          loadedPagesRef.current =
+            new Set([
+              Number(
+                pg?.page ||
+                  1
+              ),
+            ]);
+
+          setLoadingInitial(
+            false
+          );
+
+          if (
+            items.length
+          ) {
+            writeRouteCache(
+              routeKey,
+              items,
+              pg
+            );
+          }
+
+          return true;
+        };
+
       /*
        * The server already fetched page 1.
-       * Use it directly and do not fetch the same data again.
+       * A non-empty SSR result is authoritative and should be used directly.
+       *
+       * A selected collection with an empty SSR result is retried because an
+       * upstream/proxy failure used to be indistinguishable from a genuine
+       * empty collection.
        */
       if (
         initialOk &&
@@ -2827,65 +2931,30 @@ export default function CollectionsSegmentClient({
             initialStrapi
           );
 
-        const pg =
-          seeded.pagination;
-
-        setRawProducts(
-          seeded.items
-        );
-
-        setRemotePage(
-          Number(
-            pg?.page ||
-              1
-          )
-        );
-
-        setRemotePageCount(
-          Number(
-            pg?.pageCount ||
-              1
-          )
-        );
-
-        setRemoteTotal(
-          Number(
-            pg?.total ||
-              seeded.items
-                .length ||
-              0
-          )
-        );
-
-        loadedPagesRef.current.add(
-          Number(
-            pg?.page ||
-              1
-          )
-        );
-
-        setLoadingInitial(
-          false
-        );
-
         if (
           seeded.items
-            .length
+            .length > 0 ||
+          !hasAnySelection
         ) {
-          writeRouteCache(
-            routeKey,
-            seeded.items,
-            pg
+          applyInitialResult(
+            {
+              ok: true,
+              items:
+                seeded.items,
+              pagination:
+                seeded.pagination,
+            },
+            serverMode
           );
-        }
 
-        return () => {
-          abortAll();
-        };
+          return () => {
+            abortAll();
+          };
+        }
       }
 
       /*
-       * SSR failed:
+       * SSR failed or returned a suspicious empty selected collection:
        * use the most recent route cache immediately if available.
        */
       const cached =
@@ -2944,19 +3013,33 @@ export default function CollectionsSegmentClient({
       }
 
       /*
-       * Only one browser page-1 request if SSR did not succeed.
+       * Browser recovery:
+       *
+       * - Retry the exact filtered page once with proxy caches bypassed.
+       * - If that request fails OR returns an unexpected empty selected page,
+       *   switch to catalogScan. The existing matchesCollection() function then
+       *   performs the route matching locally while additional catalog pages are
+       *   loaded automatically as needed.
        */
       (async () => {
-        const ok =
-          await loadPage({
-            page: 1,
+        let filteredResult =
+          null;
 
-            useServerFilters:
-              hasAnySelection,
+        try {
+          filteredResult =
+            await fetchStrapiPage({
+              page: 1,
 
-            allowCacheWrite:
-              true,
-          });
+              useServerFilters:
+                hasAnySelection,
+
+              noCache:
+                true,
+            });
+        } catch {
+          filteredResult =
+            null;
+        }
 
         if (
           routeKeyRef.current !==
@@ -2966,7 +3049,83 @@ export default function CollectionsSegmentClient({
         }
 
         if (
-          !ok &&
+          filteredResult?.ok &&
+          (
+            !hasAnySelection ||
+            filteredResult.items
+              .length > 0
+          )
+        ) {
+          applyInitialResult(
+            filteredResult,
+            serverMode
+          );
+
+          return;
+        }
+
+        if (
+          hasAnySelection
+        ) {
+          let catalogResult =
+            null;
+
+          try {
+            catalogResult =
+              await fetchStrapiPage({
+                page: 1,
+
+                useServerFilters:
+                  false,
+
+                noCache:
+                  true,
+              });
+          } catch {
+            catalogResult =
+              null;
+          }
+
+          if (
+            routeKeyRef.current !==
+            routeKey
+          ) {
+            return;
+          }
+
+          if (
+            catalogResult?.ok
+          ) {
+            applyInitialResult(
+              catalogResult,
+              "catalogScan"
+            );
+
+            return;
+          }
+        }
+
+        /*
+         * If the filtered request itself was valid but genuinely empty and the
+         * catalog fallback was unavailable, settle on that valid empty result
+         * rather than leaving the route in a loading state.
+         */
+        if (
+          filteredResult?.ok
+        ) {
+          applyInitialResult(
+            filteredResult,
+            serverMode
+          );
+
+          return;
+        }
+
+        setLoadingInitial(
+          false
+        );
+
+        if (
           !(
             cached?.items
               ?.length > 0
@@ -3166,6 +3325,25 @@ export default function CollectionsSegmentClient({
           return [];
         }
 
+        /*
+         * In serverFiltered mode Strapi has already applied the route filters.
+         * Do not reject those products a second time just because one of the
+         * populated relation aliases is absent from the response shape.
+         *
+         * catalogScan is the recovery mode, so only that mode needs the local
+         * matchesCollection() relationship check.
+         */
+        if (
+          fetchMode ===
+          "serverFiltered"
+        ) {
+          return rawProducts.filter(
+            (p) =>
+              p &&
+              !p.disable_frontend
+          );
+        }
+
         return rawProducts.filter(
           matchesCollection
         );
@@ -3173,6 +3351,7 @@ export default function CollectionsSegmentClient({
       [
         rawProducts,
         matchesCollection,
+        fetchMode,
       ]
     );
 
@@ -4349,55 +4528,63 @@ export default function CollectionsSegmentClient({
             return;
           }
 
-          while (
-            !cancelled &&
+          if (
             pageFiltered
-              .length <
-              displayTarget &&
-            remotePage <
-              remotePageCount
+              .length >=
+              displayTarget
           ) {
-            const nextPage =
-              (
-                remotePage ||
-                0
-              ) + 1;
-
-            const useServerFilters =
-              fetchMode ===
-                "serverFiltered" &&
-              [
-                selectedTier,
-                selectedAudience,
-                selectedCategory,
-                selectedSubCategory,
-                selectedEvent,
-                selectedGender,
-                selectedAge,
-              ].some(
-                isNonEmpty
-              );
-
-            const ok =
-              await loadPage({
-                page:
-                  nextPage,
-
-                useServerFilters,
-              });
-
-            if (!ok) {
-              break;
-            }
-
-            await new Promise(
-              (r) =>
-                setTimeout(
-                  r,
-                  0
-                )
-            );
+            return;
           }
+
+          const nextPage =
+            (
+              remotePage ||
+              0
+            ) + 1;
+
+          if (
+            nextPage >
+            remotePageCount
+          ) {
+            return;
+          }
+
+          const useServerFilters =
+            fetchMode ===
+              "serverFiltered" &&
+            [
+              selectedTier,
+              selectedAudience,
+              selectedCategory,
+              selectedSubCategory,
+              selectedEvent,
+              selectedGender,
+              selectedAge,
+            ].some(
+              isNonEmpty
+            );
+
+          const ok =
+            await loadPage({
+              page:
+                nextPage,
+
+              useServerFilters,
+            });
+
+          if (
+            cancelled ||
+            !ok
+          ) {
+            return;
+          }
+
+          /*
+           * Load only one remote page per effect pass. React state updates
+           * remotePage/pageFiltered, which safely triggers the next pass if
+           * more data is still required. This avoids a stale-state loop that
+           * could repeatedly request the same page.
+           */
         };
 
       run();
@@ -4431,10 +4618,14 @@ export default function CollectionsSegmentClient({
   useEffect(
     () => {
       if (
+        loadingInitial ||
         !sentinelRef.current
       ) {
         return;
       }
+
+      const node =
+        sentinelRef.current;
 
       const io =
         new IntersectionObserver(
@@ -4462,13 +4653,21 @@ export default function CollectionsSegmentClient({
         );
 
       io.observe(
-        sentinelRef.current
+        node
       );
 
-      return () =>
+      return () => {
+        io.unobserve(
+          node
+        );
+
         io.disconnect();
+      };
     },
-    []
+    [
+      loadingInitial,
+      pageFiltered.length,
+    ]
   );
 
   // Quick View state

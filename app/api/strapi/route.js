@@ -49,7 +49,7 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 /**
  * ✅ Default /products list profile when there are NO filters:
  * - "cardlite" (recommended): taxonomy + thumbnail (fast for BFBar/HomePanel/SlidingMenu)
- * - "filtersafe": taxonomy + variants.sizes + thumbnail (heavier; only needed when filters exist)
+ * - "filtersafe": taxonomy + product_variants.sizes + thumbnail (heavier; only needed when filters exist)
  *
  * IMPORTANT:
  * Regardless of this default, when a /products LIST request contains filters[...] we ALWAYS enforce "filtersafe".
@@ -169,6 +169,7 @@ function assertNotLocalhostInProd(origin) {
   const h = new URL(origin).hostname;
   const isLocal =
     h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
+
   if (isLocal) {
     throw new Error(
       `Invalid STRAPI_URL for production (localhost): ${origin}. Set STRAPI_URL/STRAPI_API_ORIGIN to your real Strapi domain (https://...).`
@@ -186,7 +187,8 @@ try {
   assertNotLocalhostInProd(STRAPI_ORIGIN);
   STRAPI_API_BASE = STRAPI_ORIGIN + "/api";
 } catch (e) {
-  STRAPI_BOOT_ERROR = e instanceof Error ? e.message : String(e || "BOOT_ERROR");
+  STRAPI_BOOT_ERROR =
+    e instanceof Error ? e.message : String(e || "BOOT_ERROR");
 }
 
 /**
@@ -206,9 +208,13 @@ function normalizeStrapiPath(input) {
     try {
       const u = new URL(p0);
       const origin = u.origin;
+
       if (!STRAPI_ORIGIN || !STRAPI_API_BASE) return "";
 
-      const ok = origin === STRAPI_ORIGIN || origin === new URL(STRAPI_API_BASE).origin;
+      const ok =
+        origin === STRAPI_ORIGIN ||
+        origin === new URL(STRAPI_API_BASE).origin;
+
       if (!ok) return "";
 
       const idx = u.pathname.indexOf("/api/");
@@ -216,6 +222,7 @@ function normalizeStrapiPath(input) {
 
       const rel = u.pathname.slice(idx + 4) + (u.search || "");
       const relTrim = rel.startsWith("/") ? rel : `/${rel}`;
+
       return relTrim;
     } catch {
       return "";
@@ -223,71 +230,138 @@ function normalizeStrapiPath(input) {
   }
 
   const p = p0;
+
   if (!p) return "";
+
   return p.startsWith("/") ? p : `/${p}`;
 }
 
 function splitPathAndQuery(p) {
   const s = String(p || "");
   const i = s.indexOf("?");
-  if (i === -1) return { pathname: s, search: "" };
-  return { pathname: s.slice(0, i), search: s.slice(i + 1) };
+
+  if (i === -1) {
+    return {
+      pathname: s,
+      search: "",
+    };
+  }
+
+  return {
+    pathname: s.slice(0, i),
+    search: s.slice(i + 1),
+  };
 }
 
 /**
  * ✅ Canonicalize query params (stable cache keys in production)
  */
 function canonicalizePath(p) {
-  const { pathname, search } = splitPathAndQuery(p);
-  if (!search) return pathname;
+  const { pathname, search } =
+    splitPathAndQuery(p);
 
-  const params = new URLSearchParams(search);
-  const entries = Array.from(params.entries());
-  entries.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  if (!search) {
+    return pathname;
+  }
 
-  const out = new URLSearchParams();
-  for (const [k, v] of entries) out.append(k, v);
+  const params =
+    new URLSearchParams(search);
 
-  const qs = out.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  const entries =
+    Array.from(params.entries());
+
+  entries.sort(
+    (a, b) =>
+      a[0].localeCompare(b[0]) ||
+      a[1].localeCompare(b[1])
+  );
+
+  const out =
+    new URLSearchParams();
+
+  for (const [k, v] of entries) {
+    out.append(k, v);
+  }
+
+  const qs =
+    out.toString();
+
+  return qs
+    ? `${pathname}?${qs}`
+    : pathname;
 }
 
 function hasAnyPopulate(params) {
-  if (params.has("populate")) return true;
-  for (const k of params.keys()) {
-    if (k.startsWith("populate[")) return true;
+  if (params.has("populate")) {
+    return true;
   }
+
+  for (const k of params.keys()) {
+    if (k.startsWith("populate[")) {
+      return true;
+    }
+  }
+
   return false;
 }
 
 function hasObjectPopulate(params) {
   for (const k of params.keys()) {
-    if (k.startsWith("populate[")) return true;
+    if (k.startsWith("populate[")) {
+      return true;
+    }
   }
+
   return false;
 }
 
 function countPopulateKeys(params) {
   let c = 0;
+
   for (const k of params.keys()) {
-    if (k === "populate" || k.startsWith("populate[")) c++;
+    if (
+      k === "populate" ||
+      k.startsWith("populate[")
+    ) {
+      c++;
+    }
   }
+
   return c;
 }
 
 function stripPopulateParams(params) {
   for (const k of Array.from(params.keys())) {
-    if (k === "populate" || k.startsWith("populate[")) params.delete(k);
+    if (
+      k === "populate" ||
+      k.startsWith("populate[")
+    ) {
+      params.delete(k);
+    }
   }
 }
 
 function hasFiltersInPath(path) {
-  const { search } = splitPathAndQuery(path);
-  if (!search) return false;
-  const params = new URLSearchParams(search);
-  for (const k of params.keys()) {
-    if (k === "filters" || k.startsWith("filters[") || k.includes("filters[")) return true;
+  const { search } =
+    splitPathAndQuery(path);
+
+  if (!search) {
+    return false;
   }
+
+  const params =
+    new URLSearchParams(search);
+
+  for (const k of params.keys()) {
+    if (
+      k === "filters" ||
+      k.startsWith("filters[") ||
+      k.includes("filters[")
+    ) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -297,171 +371,549 @@ function hasFiltersInPath(path) {
  * so we never sanitize them even if query-length/populate-count thresholds are crossed.
  */
 function isSafeLiteProductsTaxonomyRequest(path) {
-  const { pathname, search } = splitPathAndQuery(path);
-  if (pathname !== "/products") return false;
-  if (!search) return false;
+  const { pathname, search } =
+    splitPathAndQuery(path);
+
+  if (pathname !== "/products") {
+    return false;
+  }
+
+  if (!search) {
+    return false;
+  }
 
   // If filters exist, we still treat it as potentially heavy (filtersafe will be enforced)
-  if (hasFiltersInPath(path)) return false;
+  if (hasFiltersInPath(path)) {
+    return false;
+  }
 
-  const params = new URLSearchParams(search);
+  const params =
+    new URLSearchParams(search);
 
   // wildcard populate is NOT lite
-  const pop = String(params.get("populate") || "").trim();
-  if (pop === "*") return false;
+  const pop =
+    String(
+      params.get("populate") || ""
+    ).trim();
+
+  if (pop === "*") {
+    return false;
+  }
 
   // must be object populate only (populate[rel]...)
-  if (!hasObjectPopulate(params)) return false;
+  if (!hasObjectPopulate(params)) {
+    return false;
+  }
 
   // block deep populates
   const blockedPrefixes = [
+    "populate[product_variants",
     "populate[variants",
     "populate[images",
     "populate[thumbnail]",
   ];
+
   for (const k of params.keys()) {
     for (const bp of blockedPrefixes) {
-      if (k.startsWith(bp)) return false;
+      if (k.startsWith(bp)) {
+        return false;
+      }
     }
   }
 
   // allow only populate[REL][fields][i] (or populate[REL][fields]) style
   // (your request uses populate[rel][fields][0]=slug)
   for (const k of params.keys()) {
-    if (!k.startsWith("populate[")) continue;
+    if (!k.startsWith("populate[")) {
+      continue;
+    }
 
     // ✅ FIX (SlidingMenuBar): JS regex anchors must be ^ and $ (not \A and \z).
     // Allowed:
     //   populate[rel][fields]
     //   populate[rel][fields][0]
     //   populate[rel][fields][1] ...
-    const ok = /^populate\[[^\]]+\]\[fields\](?:\[\d+\])?$/.test(k);
-    if (!ok) return false;
+    const ok =
+      /^populate\[[^\]]+\]\[fields\](?:\[\d+\])?$/.test(k);
+
+    if (!ok) {
+      return false;
+    }
   }
 
   // keep it bounded
-  const popCount = countPopulateKeys(params);
-  if (popCount > Math.min(30, HEAVY_MAX_POPULATE_KEYS)) return false;
+  const popCount =
+    countPopulateKeys(params);
+
+  if (
+    popCount >
+    Math.min(
+      30,
+      HEAVY_MAX_POPULATE_KEYS
+    )
+  ) {
+    return false;
+  }
 
   return true;
 }
 
 function isHeavyPopulateRequest(path) {
   // ✅ Do not classify your lite taxonomy requests as heavy
-  if (isSafeLiteProductsTaxonomyRequest(path)) return false;
+  if (
+    isSafeLiteProductsTaxonomyRequest(path)
+  ) {
+    return false;
+  }
 
-  const { search } = splitPathAndQuery(path);
-  if (!search) return false;
+  const { search } =
+    splitPathAndQuery(path);
 
-  if (search.length > HEAVY_MAX_QUERY_CHARS) return true;
+  if (!search) {
+    return false;
+  }
 
-  const params = new URLSearchParams(search);
-  const popCount = countPopulateKeys(params);
-  if (popCount > HEAVY_MAX_POPULATE_KEYS) return true;
+  if (
+    search.length >
+    HEAVY_MAX_QUERY_CHARS
+  ) {
+    return true;
+  }
 
-  const pop = params.get("populate");
-  if (pop === "*" && popCount > Math.max(10, Math.floor(HEAVY_MAX_POPULATE_KEYS / 2))) return true;
+  const params =
+    new URLSearchParams(search);
+
+  const popCount =
+    countPopulateKeys(params);
+
+  if (
+    popCount >
+    HEAVY_MAX_POPULATE_KEYS
+  ) {
+    return true;
+  }
+
+  const pop =
+    params.get("populate");
+
+  if (
+    pop === "*" &&
+    popCount >
+      Math.max(
+        10,
+        Math.floor(
+          HEAVY_MAX_POPULATE_KEYS /
+            2
+        )
+      )
+  ) {
+    return true;
+  }
 
   return false;
 }
 
-const DEFAULT_PRODUCTS_PAGESIZE = (() => {
-  const n = Number(process.env.TDLS_STRAPI_PRODUCTS_PAGESIZE ?? 1000);
-  if (!Number.isFinite(n) || n <= 0) return 1000;
-  return Math.min(1500, Math.max(25, Math.round(n)));
-})();
+const DEFAULT_PRODUCTS_PAGESIZE =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_PRODUCTS_PAGESIZE ??
+          1000
+      );
 
-const BROAD_FALLBACK_PAGESIZE = (() => {
-  const n = Number(process.env.TDLS_STRAPI_BROAD_FALLBACK_PAGESIZE ?? 400);
-  if (!Number.isFinite(n) || n <= 0) return Math.min(400, DEFAULT_PRODUCTS_PAGESIZE);
-  return Math.min(DEFAULT_PRODUCTS_PAGESIZE, Math.max(50, Math.round(n)));
-})();
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 1000;
+    }
+
+    return Math.min(
+      1500,
+      Math.max(
+        25,
+        Math.round(n)
+      )
+    );
+  })();
+
+const BROAD_FALLBACK_PAGESIZE =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_BROAD_FALLBACK_PAGESIZE ??
+          400
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return Math.min(
+        400,
+        DEFAULT_PRODUCTS_PAGESIZE
+      );
+    }
+
+    return Math.min(
+      DEFAULT_PRODUCTS_PAGESIZE,
+      Math.max(
+        50,
+        Math.round(n)
+      )
+    );
+  })();
 
 /* ───────── products populate profiles ───────── */
 
 const TAXONOMY_RELS = [
-  ["audience_categories", ["slug", "name", "order"]],
-  ["categories", ["slug", "name", "order"]],
-  ["sub_categories", ["slug", "name", "order"]],
-  ["super_categories", ["slug", "name", "order"]],
-  ["age_groups", ["slug", "name", "order"]],
-  ["gender_groups", ["slug", "name", "order"]],
-  ["tiers", ["slug", "name", "order"]],
-  ["brand_tiers", ["slug", "name", "order"]],
-  ["collection_tiers", ["slug", "name", "order"]],
-  ["events_products_collections", ["slug", "name", "order"]],
-  ["product_collections", ["slug", "name", "order"]],
+  [
+    "audience_categories",
+    ["slug", "name", "order"],
+  ],
+  [
+    "categories",
+    ["slug", "name", "order"],
+  ],
+  [
+    "sub_categories",
+    ["slug", "name", "order"],
+  ],
+  [
+    "super_categories",
+    ["slug", "name", "order"],
+  ],
+  [
+    "age_groups",
+    ["slug", "name", "order"],
+  ],
+  [
+    "gender_groups",
+    ["slug", "name", "order"],
+  ],
+  [
+    "tiers",
+    ["slug", "name", "order"],
+  ],
+  [
+    "brand_tiers",
+    ["slug", "name", "order"],
+  ],
+  [
+    "collection_tiers",
+    ["slug", "name", "order"],
+  ],
+  [
+    "events_products_collections",
+    ["slug", "name", "order"],
+  ],
+  [
+    "product_collections",
+    ["slug", "name", "order"],
+  ],
 ];
 
-const TAXONOMY_REL_SET = new Set(TAXONOMY_RELS.map((x) => x[0]));
+const TAXONOMY_REL_SET =
+  new Set(
+    TAXONOMY_RELS.map(
+      (x) => x[0]
+    )
+  );
 
 /* ───────── meta profiles (PUBLIC optimization) ───────── */
 
-const FAST_META_DEFAULT_PAGE_SIZE = (() => {
-  const n = Number(process.env.TDLS_STRAPI_META_PAGESIZE ?? 1000);
-  if (!Number.isFinite(n) || n <= 0) return 1000;
-  return Math.min(2000, Math.max(50, Math.round(n)));
-})();
+const FAST_META_DEFAULT_PAGE_SIZE =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_META_PAGESIZE ??
+          1000
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 1000;
+    }
+
+    return Math.min(
+      2000,
+      Math.max(
+        50,
+        Math.round(n)
+      )
+    );
+  })();
 
 /**
  * ✅ IMPORTANT PRODUCTION FIX:
  * audience-categories must include tier relations for your filter UI.
  */
-const META_FILTERSAFE_POPULATES = new Map([
-  [
-    "/audience-categories",
+const META_FILTERSAFE_POPULATES =
+  new Map([
     [
-      ["tiers", ["slug"]],
-      ["brand_tiers", ["slug"]],
-      ["collection_tiers", ["slug"]],
+      "/audience-categories",
+      [
+        [
+          "tiers",
+          ["slug"],
+        ],
+        [
+          "brand_tiers",
+          ["slug"],
+        ],
+        [
+          "collection_tiers",
+          ["slug"],
+        ],
+      ],
     ],
-  ],
-]);
+  ]);
 
-const FAST_META_PROFILES = new Map([
-  ["/audience-categories", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/categories", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/sub-categories", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/super-categories", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/age-groups", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/gender-groups", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/tiers", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/brand-tiers", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/collection-tiers", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/events-products-collections", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-  ["/product-collections", { fields: ["slug", "name", "order"], sort: ["order:asc", "name:asc"] }],
-]);
+const FAST_META_PROFILES =
+  new Map([
+    [
+      "/audience-categories",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/categories",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/sub-categories",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/super-categories",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/age-groups",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/gender-groups",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/tiers",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/brand-tiers",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/collection-tiers",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/events-products-collections",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+    [
+      "/product-collections",
+      {
+        fields: [
+          "slug",
+          "name",
+          "order",
+        ],
+        sort: [
+          "order:asc",
+          "name:asc",
+        ],
+      },
+    ],
+  ]);
 
 function hasAnyFields(params) {
   for (const k of params.keys()) {
-    if (k === "fields" || k.startsWith("fields[")) return true;
+    if (
+      k === "fields" ||
+      k.startsWith("fields[")
+    ) {
+      return true;
+    }
   }
+
   return false;
 }
 
 function hasAnySort(params) {
   for (const k of params.keys()) {
-    if (k === "sort" || k.startsWith("sort[")) return true;
+    if (
+      k === "sort" ||
+      k.startsWith("sort[")
+    ) {
+      return true;
+    }
   }
+
   return false;
 }
 
-function hasPopulateForRel(params, rel) {
-  const prefix = `populate[${rel}]`;
+function hasPopulateForRel(
+  params,
+  rel
+) {
+  const prefix =
+    `populate[${rel}]`;
+
   for (const k of params.keys()) {
-    if (k === prefix || k.startsWith(`${prefix}[`)) return true;
+    if (
+      k === prefix ||
+      k.startsWith(
+        `${prefix}[`
+      )
+    ) {
+      return true;
+    }
   }
+
   return false;
 }
 
-function applyMetaFilterSafePopulate(pathname, params) {
-  const rels = META_FILTERSAFE_POPULATES.get(pathname);
-  if (!rels) return;
+function applyMetaFilterSafePopulate(
+  pathname,
+  params
+) {
+  const rels =
+    META_FILTERSAFE_POPULATES.get(
+      pathname
+    );
 
-  for (const [rel, fields] of rels) {
-    if (hasPopulateForRel(params, rel)) continue;
-    for (let i = 0; i < fields.length; i++) {
-      params.set(`populate[${rel}][fields][${i}]`, String(fields[i]));
+  if (!rels) {
+    return;
+  }
+
+  for (
+    const [rel, fields]
+    of rels
+  ) {
+    if (
+      hasPopulateForRel(
+        params,
+        rel
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      let i = 0;
+      i < fields.length;
+      i++
+    ) {
+      params.set(
+        `populate[${rel}][fields][${i}]`,
+        String(fields[i])
+      );
     }
   }
 }
@@ -471,63 +923,188 @@ function applyMetaFilterSafePopulate(pathname, params) {
  * - Removes populate=* (or no populate) and replaces with a deterministic minimal dataset
  * - BUT for audience-categories we still include tier relations (filtersafe meta)
  */
-function applyFastMetaProfile(pathname, params) {
-  const prof = FAST_META_PROFILES.get(pathname);
-  if (!prof) return;
+function applyFastMetaProfile(
+  pathname,
+  params
+) {
+  const prof =
+    FAST_META_PROFILES.get(
+      pathname
+    );
+
+  if (!prof) {
+    return;
+  }
 
   stripPopulateParams(params);
 
   if (!hasAnyFields(params)) {
-    for (let i = 0; i < prof.fields.length; i++) {
-      params.set(`fields[${i}]`, String(prof.fields[i]));
+    for (
+      let i = 0;
+      i < prof.fields.length;
+      i++
+    ) {
+      params.set(
+        `fields[${i}]`,
+        String(
+          prof.fields[i]
+        )
+      );
     }
   }
 
   if (!hasAnySort(params)) {
-    for (let i = 0; i < prof.sort.length; i++) {
-      params.set(`sort[${i}]`, String(prof.sort[i]));
+    for (
+      let i = 0;
+      i < prof.sort.length;
+      i++
+    ) {
+      params.set(
+        `sort[${i}]`,
+        String(
+          prof.sort[i]
+        )
+      );
     }
   }
 
-  applyMetaFilterSafePopulate(pathname, params);
+  applyMetaFilterSafePopulate(
+    pathname,
+    params
+  );
 
-  if (!params.get("pagination[pageSize]")) {
-    params.set("pagination[pageSize]", String(FAST_META_DEFAULT_PAGE_SIZE));
+  if (
+    !params.get(
+      "pagination[pageSize]"
+    )
+  ) {
+    params.set(
+      "pagination[pageSize]",
+      String(
+        FAST_META_DEFAULT_PAGE_SIZE
+      )
+    );
   }
-  if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
+
+  if (
+    !params.get(
+      "pagination[page]"
+    )
+  ) {
+    params.set(
+      "pagination[page]",
+      "1"
+    );
+  }
 }
 
-function normalizeMetaPath(p, { isPublic } = { isPublic: true }) {
-  const { pathname, search } = splitPathAndQuery(p);
-  if (!FAST_META_PROFILES.has(pathname)) return p;
+function normalizeMetaPath(
+  p,
+  {
+    isPublic,
+  } = {
+    isPublic: true,
+  }
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(p);
 
-  const params = new URLSearchParams(search || "");
-
-  if (params.has("populate") && hasObjectPopulate(params)) {
-    params.delete("populate");
+  if (
+    !FAST_META_PROFILES.has(
+      pathname
+    )
+  ) {
+    return p;
   }
 
-  const noOptimize = params.get("noOptimize") === "1";
-  if (noOptimize) params.delete("noOptimize");
+  const params =
+    new URLSearchParams(
+      search || ""
+    );
 
-  const pop = String(params.get("populate") || "").trim();
-  const wantsFast = isPublic && !noOptimize && (!pop || pop === "*" || !hasAnyPopulate(params));
+  if (
+    params.has("populate") &&
+    hasObjectPopulate(params)
+  ) {
+    params.delete(
+      "populate"
+    );
+  }
+
+  const noOptimize =
+    params.get(
+      "noOptimize"
+    ) === "1";
+
+  if (noOptimize) {
+    params.delete(
+      "noOptimize"
+    );
+  }
+
+  const pop =
+    String(
+      params.get(
+        "populate"
+      ) || ""
+    ).trim();
+
+  const wantsFast =
+    isPublic &&
+    !noOptimize &&
+    (
+      !pop ||
+      pop === "*" ||
+      !hasAnyPopulate(
+        params
+      )
+    );
 
   if (wantsFast) {
-    applyFastMetaProfile(pathname, params);
+    applyFastMetaProfile(
+      pathname,
+      params
+    );
   }
 
-  const qs = params.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  const qs =
+    params.toString();
+
+  return qs
+    ? `${pathname}?${qs}`
+    : pathname;
 }
 
 /* ───────── products populate (deterministic) ───────── */
 
-function applyProductsTaxonomyPopulate(params) {
-  for (const [rel, fields] of TAXONOMY_RELS) {
-    if (hasPopulateForRel(params, rel)) continue;
-    for (let i = 0; i < fields.length; i++) {
-      params.set(`populate[${rel}][fields][${i}]`, String(fields[i]));
+function applyProductsTaxonomyPopulate(
+  params
+) {
+  for (
+    const [rel, fields]
+    of TAXONOMY_RELS
+  ) {
+    if (
+      hasPopulateForRel(
+        params,
+        rel
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      let i = 0;
+      i < fields.length;
+      i++
+    ) {
+      params.set(
+        `populate[${rel}][fields][${i}]`,
+        String(fields[i])
+      );
     }
   }
 }
@@ -536,55 +1113,148 @@ function applyProductsTaxonomyPopulate(params) {
  * "cardlite" profile:
  * - taxonomy (fields only)
  * - thumbnail
- * - NO variants.sizes (keeps BFBar/HomePanel/SlidingMenu fast)
+ * - NO product_variants.sizes (keeps BFBar/HomePanel/SlidingMenu fast)
  */
-function applyProductsCardLitePopulate(params) {
-  applyProductsTaxonomyPopulate(params);
+function applyProductsCardLitePopulate(
+  params
+) {
+  applyProductsTaxonomyPopulate(
+    params
+  );
 
-  if (!hasPopulateForRel(params, "thumbnail")) {
-    params.set("populate[thumbnail]", "*");
+  if (
+    !hasPopulateForRel(
+      params,
+      "thumbnail"
+    )
+  ) {
+    params.set(
+      "populate[thumbnail]",
+      "*"
+    );
   }
 }
 
-function applyProductsFilterSafePopulate(params) {
-  applyProductsTaxonomyPopulate(params);
+function applyProductsFilterSafePopulate(
+  params
+) {
+  applyProductsTaxonomyPopulate(
+    params
+  );
 
-  if (!hasPopulateForRel(params, "variants")) {
-    params.set("populate[variants][populate][sizes]", "*");
+  if (
+    !hasPopulateForRel(
+      params,
+      "product_variants"
+    )
+  ) {
+    params.set(
+      "populate[product_variants][populate][sizes]",
+      "*"
+    );
   } else {
     let hasSizes = false;
-    for (const k of params.keys()) {
-      if (k.startsWith("populate[variants][populate][sizes]")) {
+
+    for (
+      const k of
+        params.keys()
+    ) {
+      if (
+        k.startsWith(
+          "populate[product_variants][populate][sizes]"
+        )
+      ) {
         hasSizes = true;
         break;
       }
     }
-    if (!hasSizes) params.set("populate[variants][populate][sizes]", "*");
+
+    if (!hasSizes) {
+      params.set(
+        "populate[product_variants][populate][sizes]",
+        "*"
+      );
+    }
   }
 
-  if (!hasPopulateForRel(params, "thumbnail")) {
-    params.set("populate[thumbnail]", "*");
+  if (
+    !hasPopulateForRel(
+      params,
+      "thumbnail"
+    )
+  ) {
+    params.set(
+      "populate[thumbnail]",
+      "*"
+    );
   }
 }
 
-function applyProductDetailPopulate(params) {
-  applyProductsTaxonomyPopulate(params);
+function applyProductDetailPopulate(
+  params
+) {
+  applyProductsTaxonomyPopulate(
+    params
+  );
 
-  if (!hasPopulateForRel(params, "variants")) {
-    params.set("populate[variants][populate][sizes]", "*");
+  if (
+    !hasPopulateForRel(
+      params,
+      "product_variants"
+    )
+  ) {
+    params.set(
+      "populate[product_variants][populate][sizes]",
+      "*"
+    );
   } else {
     let hasSizes = false;
-    for (const k of params.keys()) {
-      if (k.startsWith("populate[variants][populate][sizes]")) {
+
+    for (
+      const k of
+        params.keys()
+    ) {
+      if (
+        k.startsWith(
+          "populate[product_variants][populate][sizes]"
+        )
+      ) {
         hasSizes = true;
         break;
       }
     }
-    if (!hasSizes) params.set("populate[variants][populate][sizes]", "*");
+
+    if (!hasSizes) {
+      params.set(
+        "populate[product_variants][populate][sizes]",
+        "*"
+      );
+    }
   }
 
-  if (!hasPopulateForRel(params, "images")) params.set("populate[images]", "*");
-  if (!hasPopulateForRel(params, "thumbnail")) params.set("populate[thumbnail]", "*");
+  if (
+    !hasPopulateForRel(
+      params,
+      "images"
+    )
+  ) {
+    params.set(
+      "populate[images]",
+      "*"
+    );
+  }
+
+  if (
+    !hasPopulateForRel(
+      params,
+      "thumbnail"
+    )
+  ) {
+    params.set(
+      "populate[thumbnail]",
+      "*"
+    );
+  }
 }
 
 /**
@@ -595,85 +1265,195 @@ function applyProductDetailPopulate(params) {
  * - "products-list-filtersafe"
  * - "products-list-cardlite"
  */
-function normalizePopulateStringToObject(params, mode = "products-list-cardlite") {
-  const raw = String(params.get("populate") || "").trim();
-  if (!raw) return;
+function normalizePopulateStringToObject(
+  params,
+  mode =
+    "products-list-cardlite"
+) {
+  const raw =
+    String(
+      params.get(
+        "populate"
+      ) || ""
+    ).trim();
 
-  if (hasObjectPopulate(params)) {
-    params.delete("populate");
+  if (!raw) {
     return;
   }
 
-  params.delete("populate");
+  if (
+    hasObjectPopulate(
+      params
+    )
+  ) {
+    params.delete(
+      "populate"
+    );
+    return;
+  }
 
-  const parts = raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  params.delete(
+    "populate"
+  );
 
-  const hasStar = parts.includes("*") || raw === "*";
+  const parts =
+    raw
+      .split(",")
+      .map(
+        (s) =>
+          s.trim()
+      )
+      .filter(Boolean);
+
+  const hasStar =
+    parts.includes("*") ||
+    raw === "*";
 
   if (hasStar) {
-    if (mode === "products-detail") {
-      applyProductDetailPopulate(params);
-    } else if (mode === "products-list-filtersafe") {
-      applyProductsFilterSafePopulate(params);
+    if (
+      mode ===
+      "products-detail"
+    ) {
+      applyProductDetailPopulate(
+        params
+      );
+    } else if (
+      mode ===
+      "products-list-filtersafe"
+    ) {
+      applyProductsFilterSafePopulate(
+        params
+      );
     } else {
-      applyProductsCardLitePopulate(params);
+      applyProductsCardLitePopulate(
+        params
+      );
     }
+
     return;
   }
 
   for (const rel of parts) {
-    if (!rel) continue;
-    if (TAXONOMY_REL_SET.has(rel)) continue;
-
-    if (rel === "variants") {
-      params.set("populate[variants][populate][sizes]", "*");
+    if (!rel) {
       continue;
     }
 
-    if (!hasPopulateForRel(params, rel)) params.set(`populate[${rel}]`, "*");
+    if (
+      TAXONOMY_REL_SET.has(
+        rel
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      rel === "variants" ||
+      rel ===
+        "product_variants"
+    ) {
+      params.set(
+        "populate[product_variants][populate][sizes]",
+        "*"
+      );
+      continue;
+    }
+
+    if (
+      !hasPopulateForRel(
+        params,
+        rel
+      )
+    ) {
+      params.set(
+        `populate[${rel}]`,
+        "*"
+      );
+    }
   }
 }
 
 /**
  * Normalize /products requests:
- * - detail: always ensure variants.sizes + taxonomy + images + thumbnail
+ * - detail: always ensure product_variants.sizes + taxonomy + images + thumbnail
  * - list:
- *   - if filters exist => enforce FILTERSAFE (taxonomy + variants.sizes + thumbnail), ignoring client populate
+ *   - if filters exist => enforce FILTERSAFE (taxonomy + product_variants.sizes + thumbnail), ignoring client populate
  *   - else:
  *       - if populate="*" => convert to CARDLITE
  *       - if no populate at all => default CARDLITE
- *       - if client provided populate[...] (lite queries) => RESPECT it (do not force variants)
+ *       - if client provided populate[...] (lite queries) => RESPECT it (do not force product_variants)
  */
-function normalizeProductsPath(p) {
-  const { pathname, search } = splitPathAndQuery(p);
-  if (!pathname.startsWith("/products")) return p;
+function normalizeProductsPath(
+  p
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(p);
 
-  const params = new URLSearchParams(search || "");
+  if (
+    !pathname.startsWith(
+      "/products"
+    )
+  ) {
+    return p;
+  }
 
-  const isList = pathname === "/products";
-  const isDetail = !isList;
+  const params =
+    new URLSearchParams(
+      search || ""
+    );
 
-  const listHasFilters = isList ? hasFiltersInPath(p) : false;
+  const isList =
+    pathname === "/products";
+
+  const isDetail =
+    !isList;
+
+  const listHasFilters =
+    isList
+      ? hasFiltersInPath(p)
+      : false;
+
   const listProfile =
     listHasFilters
       ? "filtersafe"
-      : (DEFAULT_PRODUCTS_LIST_PROFILE === "filtersafe" ? "filtersafe" : "cardlite");
+      : (
+          DEFAULT_PRODUCTS_LIST_PROFILE ===
+          "filtersafe"
+            ? "filtersafe"
+            : "cardlite"
+        );
 
   // If caller mixed populate="*" with populate[rel]..., drop populate="*"
-  if (params.has("populate") && hasObjectPopulate(params)) {
-    params.delete("populate");
+  if (
+    params.has(
+      "populate"
+    ) &&
+    hasObjectPopulate(
+      params
+    )
+  ) {
+    params.delete(
+      "populate"
+    );
   }
 
   // If populate is a string, normalize it according to mode
-  if (params.has("populate") && !hasObjectPopulate(params)) {
+  if (
+    params.has(
+      "populate"
+    ) &&
+    !hasObjectPopulate(
+      params
+    )
+  ) {
     normalizePopulateStringToObject(
       params,
       isDetail
         ? "products-detail"
-        : listProfile === "filtersafe"
+        : listProfile ===
+            "filtersafe"
           ? "products-list-filtersafe"
           : "products-list-cardlite"
     );
@@ -681,29 +1461,140 @@ function normalizeProductsPath(p) {
 
   if (isDetail) {
     // Always enforce detail minimums (safe even if caller already populated)
-    applyProductDetailPopulate(params);
+    applyProductDetailPopulate(
+      params
+    );
   } else {
-    if (listProfile === "filtersafe") {
+    if (
+      listProfile ===
+      "filtersafe"
+    ) {
       // Filtersafe list MUST be deterministic: strip client populate and enforce
-      stripPopulateParams(params);
-      applyProductsFilterSafePopulate(params);
+      stripPopulateParams(
+        params
+      );
+
+      applyProductsFilterSafePopulate(
+        params
+      );
     } else {
       // Card-lite list:
       // - If no populate directives at all, enforce cardlite.
       // - If caller provided populate[...] (lite queries), keep it.
-      if (!hasAnyPopulate(params)) {
-        applyProductsCardLitePopulate(params);
+      if (
+        !hasAnyPopulate(
+          params
+        )
+      ) {
+        applyProductsCardLitePopulate(
+          params
+        );
       } else {
-        // If caller explicitly asked for variants, ensure sizes.
-        if (hasPopulateForRel(params, "variants")) {
-          let hasSizes = false;
-          for (const k of params.keys()) {
-            if (k.startsWith("populate[variants][populate][sizes]")) {
-              hasSizes = true;
+        // If caller explicitly asked for product_variants, ensure sizes.
+        if (
+          hasPopulateForRel(
+            params,
+            "product_variants"
+          )
+        ) {
+          let hasSizes =
+            false;
+
+          for (
+            const k of
+              params.keys()
+          ) {
+            if (
+              k.startsWith(
+                "populate[product_variants][populate][sizes]"
+              )
+            ) {
+              hasSizes =
+                true;
               break;
             }
           }
-          if (!hasSizes) params.set("populate[variants][populate][sizes]", "*");
+
+          if (!hasSizes) {
+            params.set(
+              "populate[product_variants][populate][sizes]",
+              "*"
+            );
+          }
+        }
+
+        /*
+         * Backward compatibility:
+         * older callers may still send populate[variants] even though the
+         * current Strapi product relation is product_variants.
+         */
+        if (
+          hasPopulateForRel(
+            params,
+            "variants"
+          ) &&
+          !hasPopulateForRel(
+            params,
+            "product_variants"
+          )
+        ) {
+          const legacyEntries =
+            Array.from(
+              params.entries()
+            ).filter(
+              ([k]) =>
+                k ===
+                  "populate[variants]" ||
+                k.startsWith(
+                  "populate[variants]["
+                )
+            );
+
+          for (
+            const [
+              k,
+              v,
+            ] of
+              legacyEntries
+          ) {
+            params.delete(k);
+
+            const nextKey =
+              k.replace(
+                /^populate\[variants\]/,
+                "populate[product_variants]"
+              );
+
+            params.append(
+              nextKey,
+              v
+            );
+          }
+
+          let hasSizes =
+            false;
+
+          for (
+            const k of
+              params.keys()
+          ) {
+            if (
+              k.startsWith(
+                "populate[product_variants][populate][sizes]"
+              )
+            ) {
+              hasSizes =
+                true;
+              break;
+            }
+          }
+
+          if (!hasSizes) {
+            params.set(
+              "populate[product_variants][populate][sizes]",
+              "*"
+            );
+          }
         }
       }
     }
@@ -711,21 +1602,56 @@ function normalizeProductsPath(p) {
 
   // pagination defaults for list
   if (isList) {
-    const pageSizeKey = "pagination[pageSize]";
-    const existing = params.get(pageSizeKey);
+    const pageSizeKey =
+      "pagination[pageSize]";
+
+    const existing =
+      params.get(
+        pageSizeKey
+      );
 
     if (!existing) {
-      params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
+      params.set(
+        pageSizeKey,
+        String(
+          DEFAULT_PRODUCTS_PAGESIZE
+        )
+      );
     } else {
-      const x = Number(existing);
-      if (!Number.isFinite(x) || x <= 0) params.set(pageSizeKey, String(DEFAULT_PRODUCTS_PAGESIZE));
+      const x =
+        Number(existing);
+
+      if (
+        !Number.isFinite(x) ||
+        x <= 0
+      ) {
+        params.set(
+          pageSizeKey,
+          String(
+            DEFAULT_PRODUCTS_PAGESIZE
+          )
+        );
+      }
     }
 
-    if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
+    if (
+      !params.get(
+        "pagination[page]"
+      )
+    ) {
+      params.set(
+        "pagination[page]",
+        "1"
+      );
+    }
   }
 
-  const qs = params.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  const qs =
+    params.toString();
+
+  return qs
+    ? `${pathname}?${qs}`
+    : pathname;
 }
 
 /**
@@ -736,23 +1662,64 @@ function normalizeProductsPath(p) {
  *
  * If caller provided explicit populate[...] (lite queries), and there are no filters, we do NOT override it.
  */
-function shouldForcePublicProductsList(path) {
-  const { pathname, search } = splitPathAndQuery(path);
-  if (pathname !== "/products") return false;
+function shouldForcePublicProductsList(
+  path
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(path);
 
-  if (hasFiltersInPath(path)) return true;
+  if (
+    pathname !==
+    "/products"
+  ) {
+    return false;
+  }
 
-  const params = new URLSearchParams(search || "");
-  const pop = String(params.get("populate") || "").trim();
+  if (
+    hasFiltersInPath(
+      path
+    )
+  ) {
+    return true;
+  }
 
-  const hasAnyPop = hasAnyPopulate(params);
-  const hasObjPop = hasObjectPopulate(params);
+  const params =
+    new URLSearchParams(
+      search || ""
+    );
 
-  if (!hasAnyPop) return true;
-  if (pop === "*") return true;
+  const pop =
+    String(
+      params.get(
+        "populate"
+      ) || ""
+    ).trim();
+
+  const hasAnyPop =
+    hasAnyPopulate(
+      params
+    );
+
+  const hasObjPop =
+    hasObjectPopulate(
+      params
+    );
+
+  if (!hasAnyPop) {
+    return true;
+  }
+
+  if (pop === "*") {
+    return true;
+  }
 
   // explicit populate[...] => do NOT force
-  if (hasObjPop) return false;
+  if (hasObjPop) {
+    return false;
+  }
 
   return false;
 }
@@ -762,64 +1729,168 @@ function shouldForcePublicProductsList(path) {
  * If filters exist => filtersafe
  * Else => cardlite
  */
-function forcePublicProductsListPath(p) {
-  const { pathname, search } = splitPathAndQuery(p);
-  if (pathname !== "/products") return p;
+function forcePublicProductsListPath(
+  p
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(p);
 
-  const params = new URLSearchParams(search || "");
+  if (
+    pathname !==
+    "/products"
+  ) {
+    return p;
+  }
 
-  if (params.get("noOptimize") === "1") params.delete("noOptimize");
+  const params =
+    new URLSearchParams(
+      search || ""
+    );
 
-  const hasFilters = hasFiltersInPath(p);
+  if (
+    params.get(
+      "noOptimize"
+    ) === "1"
+  ) {
+    params.delete(
+      "noOptimize"
+    );
+  }
+
+  const hasFilters =
+    hasFiltersInPath(p);
 
   // strip client populate directives then apply deterministic profile
-  stripPopulateParams(params);
+  stripPopulateParams(
+    params
+  );
 
   if (hasFilters) {
-    applyProductsFilterSafePopulate(params);
+    applyProductsFilterSafePopulate(
+      params
+    );
   } else {
-    applyProductsCardLitePopulate(params);
+    applyProductsCardLitePopulate(
+      params
+    );
   }
 
-  if (!params.get("pagination[pageSize]")) {
-    params.set("pagination[pageSize]", String(DEFAULT_PRODUCTS_PAGESIZE));
+  if (
+    !params.get(
+      "pagination[pageSize]"
+    )
+  ) {
+    params.set(
+      "pagination[pageSize]",
+      String(
+        DEFAULT_PRODUCTS_PAGESIZE
+      )
+    );
   }
-  if (!params.get("pagination[page]")) params.set("pagination[page]", "1");
 
-  const qs = params.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  if (
+    !params.get(
+      "pagination[page]"
+    )
+  ) {
+    params.set(
+      "pagination[page]",
+      "1"
+    );
+  }
+
+  const qs =
+    params.toString();
+
+  return qs
+    ? `${pathname}?${qs}`
+    : pathname;
 }
 
 /* ───────── PUBLIC heavy-guard sanitizers ───────── */
 
-function sanitizeMetaPathForPublic(p) {
-  const { pathname, search } = splitPathAndQuery(p);
-  const params = new URLSearchParams(search || "");
+function sanitizeMetaPathForPublic(
+  p
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(p);
 
-  stripPopulateParams(params);
-  applyFastMetaProfile(pathname, params);
+  const params =
+    new URLSearchParams(
+      search || ""
+    );
 
-  const qs = params.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  stripPopulateParams(
+    params
+  );
+
+  applyFastMetaProfile(
+    pathname,
+    params
+  );
+
+  const qs =
+    params.toString();
+
+  return qs
+    ? `${pathname}?${qs}`
+    : pathname;
 }
 
-function sanitizeProductsListPathForPublic(p) {
-  return forcePublicProductsListPath(p);
+function sanitizeProductsListPathForPublic(
+  p
+) {
+  return forcePublicProductsListPath(
+    p
+  );
 }
 
 /* ───────── build upstream URL ───────── */
 
-function buildTargetUrl(normalizedPath) {
-  const { pathname, search } = splitPathAndQuery(normalizedPath);
+function buildTargetUrl(
+  normalizedPath
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(
+      normalizedPath
+    );
 
-  const base = new URL(STRAPI_API_BASE);
-  const basePath = base.pathname.replace(/\/+$/, "");
-  base.pathname = `${basePath}${pathname}`;
+  const base =
+    new URL(
+      STRAPI_API_BASE
+    );
+
+  const basePath =
+    base.pathname.replace(
+      /\/+$/,
+      ""
+    );
+
+  base.pathname =
+    `${basePath}${pathname}`;
 
   if (search) {
-    const params = new URLSearchParams(search);
-    const qs = params.toString();
-    base.search = qs ? `?${qs}` : "";
+    const params =
+      new URLSearchParams(
+        search
+      );
+
+    const qs =
+      params.toString();
+
+    base.search =
+      qs
+        ? `?${qs}`
+        : "";
   } else {
     base.search = "";
   }
@@ -827,22 +1898,48 @@ function buildTargetUrl(normalizedPath) {
   return base.toString();
 }
 
-function fetchWithTimeout(url, init) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+function fetchWithTimeout(
+  url,
+  init
+) {
+  const controller =
+    new AbortController();
 
-  return fetch(url, {
-    ...init,
-    signal: controller.signal,
-    redirect: "follow",
-  }).finally(() => clearTimeout(t));
+  const t =
+    setTimeout(
+      () =>
+        controller.abort(),
+      UPSTREAM_TIMEOUT_MS
+    );
+
+  return fetch(
+    url,
+    {
+      ...init,
+      signal:
+        controller.signal,
+      redirect:
+        "follow",
+    }
+  ).finally(
+    () =>
+      clearTimeout(t)
+  );
 }
 
 function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise(
+    (r) =>
+      setTimeout(
+        r,
+        ms
+      )
+  );
 }
 
-function shouldRetryStatus(status) {
+function shouldRetryStatus(
+  status
+) {
   return (
     status === 408 ||
     status === 429 ||
@@ -856,319 +1953,1153 @@ function shouldRetryStatus(status) {
 
 /* ───────── retry profiles ───────── */
 
-const RETRY_DELAYS_PRODUCTS = [0, 140, 320];
-const RETRY_DELAYS_META = [0, 180, 420, 900];
+const RETRY_DELAYS_PRODUCTS =
+  [0, 140, 320];
+
+const RETRY_DELAYS_META =
+  [
+    0,
+    180,
+    420,
+    900,
+  ];
 
 /* ───────── Prisma lazy-load (stability + speed) ───────── */
 
-let _prismaPromise = null;
+let _prismaPromise =
+  null;
+
 async function getPrisma() {
-  if (_prismaPromise) return _prismaPromise;
-  _prismaPromise = import("@/lib/prisma").then((m) => m?.default ?? m);
+  if (_prismaPromise) {
+    return _prismaPromise;
+  }
+
+  _prismaPromise =
+    import(
+      "@/lib/prisma"
+    ).then(
+      (m) =>
+        m?.default ??
+        m
+    );
+
   return _prismaPromise;
 }
 
 /* ───────── micro-cache + in-flight dedupe (persist per runtime instance) ───────── */
 
-const G = globalThis;
+const G =
+  globalThis;
 
-const INFLIGHT = G.__TDLS_STRAPI_INFLIGHT__ ?? (G.__TDLS_STRAPI_INFLIGHT__ = new Map());
-const MEM_META = G.__TDLS_STRAPI_MEM_META__ ?? (G.__TDLS_STRAPI_MEM_META__ = new Map());
-const MEM_PROD = G.__TDLS_STRAPI_MEM_PROD__ ?? (G.__TDLS_STRAPI_MEM_PROD__ = new Map());
-const LAST_GOOD = G.__TDLS_STRAPI_LAST_GOOD__ ?? (G.__TDLS_STRAPI_LAST_GOOD__ = new Map());
-const STOCK_CACHE = G.__TDLS_STRAPI_STOCK__ ?? (G.__TDLS_STRAPI_STOCK__ = new Map());
+const INFLIGHT =
+  G.__TDLS_STRAPI_INFLIGHT__ ??
+  (
+    G.__TDLS_STRAPI_INFLIGHT__ =
+      new Map()
+  );
 
-const LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY = "pub|prod|__any__|cardlite";
-const LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY = "pub|prod|__any__|filtersafe";
+const MEM_META =
+  G.__TDLS_STRAPI_MEM_META__ ??
+  (
+    G.__TDLS_STRAPI_MEM_META__ =
+      new Map()
+  );
 
-function metaAnyKeyFromPathname(pathname) {
+const MEM_PROD =
+  G.__TDLS_STRAPI_MEM_PROD__ ??
+  (
+    G.__TDLS_STRAPI_MEM_PROD__ =
+      new Map()
+  );
+
+const LAST_GOOD =
+  G.__TDLS_STRAPI_LAST_GOOD__ ??
+  (
+    G.__TDLS_STRAPI_LAST_GOOD__ =
+      new Map()
+  );
+
+const STOCK_CACHE =
+  G.__TDLS_STRAPI_STOCK__ ??
+  (
+    G.__TDLS_STRAPI_STOCK__ =
+      new Map()
+  );
+
+const LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY =
+  "pub|prod|__any__|cardlite";
+
+const LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY =
+  "pub|prod|__any__|filtersafe";
+
+function metaAnyKeyFromPathname(
+  pathname
+) {
   return `pub|meta|__any__:${pathname}`;
 }
 
-const MEM_MAX_BYTES_META = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES_META || 1024 * 1024);
-  if (!Number.isFinite(n) || n <= 0) return 1024 * 1024;
-  return Math.min(2 * 1024 * 1024, Math.max(128 * 1024, Math.round(n)));
-})();
+const MEM_MAX_BYTES_META =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_MEMCACHE_MAX_BYTES_META ||
+          1024 * 1024
+      );
 
-const MEM_MAX_BYTES_PROD = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_MAX_BYTES_PROD || 8 * 1024 * 1024);
-  if (!Number.isFinite(n) || n <= 0) return 8 * 1024 * 1024;
-  return Math.min(16 * 1024 * 1024, Math.max(512 * 1024, Math.round(n)));
-})();
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return (
+        1024 *
+        1024
+      );
+    }
 
-const LAST_GOOD_MAX_BYTES = (() => {
-  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_MAX_BYTES || 24 * 1024 * 1024);
-  if (!Number.isFinite(n) || n <= 0) return 24 * 1024 * 1024;
-  return Math.min(40 * 1024 * 1024, Math.max(2 * 1024 * 1024, Math.round(n)));
-})();
+    return Math.min(
+      2 *
+        1024 *
+        1024,
+      Math.max(
+        128 *
+          1024,
+        Math.round(n)
+      )
+    );
+  })();
 
-const MEM_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_TTL_MS || 120000);
-  if (!Number.isFinite(n) || n <= 0) return 120000;
-  return Math.min(10 * 60 * 1000, Math.max(10 * 1000, Math.round(n)));
-})();
+const MEM_MAX_BYTES_PROD =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_MEMCACHE_MAX_BYTES_PROD ||
+          8 *
+            1024 *
+            1024
+      );
 
-const MEM_PROD_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS || 45000);
-  if (!Number.isFinite(n) || n <= 0) return 45000;
-  return Math.min(120 * 1000, Math.max(2000, Math.round(n)));
-})();
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return (
+        8 *
+        1024 *
+        1024
+      );
+    }
 
-const LAST_GOOD_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_TTL_MS || 180000);
-  if (!Number.isFinite(n) || n <= 0) return 180000;
-  return Math.min(15 * 60 * 1000, Math.max(30 * 1000, Math.round(n)));
-})();
+    return Math.min(
+      16 *
+        1024 *
+        1024,
+      Math.max(
+        512 *
+          1024,
+        Math.round(n)
+      )
+    );
+  })();
 
-const LAST_GOOD_ANY_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_LASTGOOD_ANY_TTL_MS || 600000);
-  if (!Number.isFinite(n) || n <= 0) return 600000;
-  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.round(n)));
-})();
+const LAST_GOOD_MAX_BYTES =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_LASTGOOD_MAX_BYTES ||
+          24 *
+            1024 *
+            1024
+      );
 
-const STOCK_CACHE_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STOCKCACHE_TTL_MS || 300000);
-  if (!Number.isFinite(n) || n <= 0) return 300000;
-  return Math.min(30 * 60 * 1000, Math.max(30 * 1000, Math.round(n)));
-})();
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return (
+        24 *
+        1024 *
+        1024
+      );
+    }
 
-function memGet(map, key) {
-  const v = map.get(key);
-  if (!v) return null;
-  if (v.exp <= Date.now()) {
+    return Math.min(
+      40 *
+        1024 *
+        1024,
+      Math.max(
+        2 *
+          1024 *
+          1024,
+        Math.round(n)
+      )
+    );
+  })();
+
+const MEM_TTL_MS =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_MEMCACHE_TTL_MS ||
+          120000
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 120000;
+    }
+
+    return Math.min(
+      10 *
+        60 *
+        1000,
+      Math.max(
+        10 *
+          1000,
+        Math.round(n)
+      )
+    );
+  })();
+
+const MEM_PROD_TTL_MS =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS ||
+          45000
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 45000;
+    }
+
+    return Math.min(
+      120 *
+        1000,
+      Math.max(
+        2000,
+        Math.round(n)
+      )
+    );
+  })();
+
+const LAST_GOOD_TTL_MS =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_LASTGOOD_TTL_MS ||
+          180000
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 180000;
+    }
+
+    return Math.min(
+      15 *
+        60 *
+        1000,
+      Math.max(
+        30 *
+          1000,
+        Math.round(n)
+      )
+    );
+  })();
+
+const LAST_GOOD_ANY_TTL_MS =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_LASTGOOD_ANY_TTL_MS ||
+          600000
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 600000;
+    }
+
+    return Math.min(
+      60 *
+        60 *
+        1000,
+      Math.max(
+        60 *
+          1000,
+        Math.round(n)
+      )
+    );
+  })();
+
+const STOCK_CACHE_TTL_MS =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STOCKCACHE_TTL_MS ||
+          300000
+      );
+
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return 300000;
+    }
+
+    return Math.min(
+      30 *
+        60 *
+        1000,
+      Math.max(
+        30 *
+          1000,
+        Math.round(n)
+      )
+    );
+  })();
+
+function memGet(
+  map,
+  key
+) {
+  const v =
+    map.get(key);
+
+  if (!v) {
+    return null;
+  }
+
+  if (
+    v.exp <=
+    Date.now()
+  ) {
     map.delete(key);
     return null;
   }
+
   return v;
 }
 
-function memSet(map, key, payloadStr, headers, ttlMs, maxBytes) {
-  if (typeof payloadStr !== "string") return;
-  const lim = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : MEM_MAX_BYTES_META;
-  if (payloadStr.length > lim) return;
+function memSet(
+  map,
+  key,
+  payloadStr,
+  headers,
+  ttlMs,
+  maxBytes
+) {
+  if (
+    typeof payloadStr !==
+    "string"
+  ) {
+    return;
+  }
 
-  const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : MEM_TTL_MS;
-  map.set(key, { exp: Date.now() + ttl, payloadStr, headers });
+  const lim =
+    Number.isFinite(
+      maxBytes
+    ) &&
+    maxBytes > 0
+      ? maxBytes
+      : MEM_MAX_BYTES_META;
+
+  if (
+    payloadStr.length >
+    lim
+  ) {
+    return;
+  }
+
+  const ttl =
+    Number.isFinite(
+      ttlMs
+    ) &&
+    ttlMs > 0
+      ? ttlMs
+      : MEM_TTL_MS;
+
+  map.set(
+    key,
+    {
+      exp:
+        Date.now() +
+        ttl,
+      payloadStr,
+      headers,
+    }
+  );
 }
 
-function lastGoodGet(key) {
-  const v = LAST_GOOD.get(key);
-  if (!v) return null;
-  if (v.exp <= Date.now()) {
-    LAST_GOOD.delete(key);
+function lastGoodGet(
+  key
+) {
+  const v =
+    LAST_GOOD.get(
+      key
+    );
+
+  if (!v) {
     return null;
   }
+
+  if (
+    v.exp <=
+    Date.now()
+  ) {
+    LAST_GOOD.delete(
+      key
+    );
+    return null;
+  }
+
   return v;
 }
 
-function lastGoodSet(key, payloadStr, ttlMs = LAST_GOOD_TTL_MS) {
-  if (typeof payloadStr !== "string") return;
-  if (payloadStr.length > LAST_GOOD_MAX_BYTES) return;
+function lastGoodSet(
+  key,
+  payloadStr,
+  ttlMs =
+    LAST_GOOD_TTL_MS
+) {
+  if (
+    typeof payloadStr !==
+    "string"
+  ) {
+    return;
+  }
 
-  const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LAST_GOOD_TTL_MS;
-  LAST_GOOD.set(key, { exp: Date.now() + ttl, payloadStr });
+  if (
+    payloadStr.length >
+    LAST_GOOD_MAX_BYTES
+  ) {
+    return;
+  }
+
+  const ttl =
+    Number.isFinite(
+      ttlMs
+    ) &&
+    ttlMs > 0
+      ? ttlMs
+      : LAST_GOOD_TTL_MS;
+
+  LAST_GOOD.set(
+    key,
+    {
+      exp:
+        Date.now() +
+        ttl,
+      payloadStr,
+    }
+  );
 }
 
-function stockCacheGet(sizeId) {
-  const v = STOCK_CACHE.get(sizeId);
-  if (!v) return null;
-  if (v.exp <= Date.now()) {
-    STOCK_CACHE.delete(sizeId);
+function stockCacheGet(
+  sizeId
+) {
+  const v =
+    STOCK_CACHE.get(
+      sizeId
+    );
+
+  if (!v) {
     return null;
   }
+
+  if (
+    v.exp <=
+    Date.now()
+  ) {
+    STOCK_CACHE.delete(
+      sizeId
+    );
+    return null;
+  }
+
   return v.stock;
 }
 
-function stockCacheSet(sizeId, stock) {
-  if (!Number.isFinite(sizeId) || sizeId <= 0) return;
-  const s = Number(stock);
-  if (!Number.isFinite(s) || s < 0) return;
-  STOCK_CACHE.set(sizeId, { exp: Date.now() + STOCK_CACHE_TTL_MS, stock: s });
+function stockCacheSet(
+  sizeId,
+  stock
+) {
+  if (
+    !Number.isFinite(
+      sizeId
+    ) ||
+    sizeId <= 0
+  ) {
+    return;
+  }
+
+  const s =
+    Number(stock);
+
+  if (
+    !Number.isFinite(s) ||
+    s < 0
+  ) {
+    return;
+  }
+
+  STOCK_CACHE.set(
+    sizeId,
+    {
+      exp:
+        Date.now() +
+        STOCK_CACHE_TTL_MS,
+      stock: s,
+    }
+  );
 }
 
-async function runDedupe(key, fn) {
-  const existing = INFLIGHT.get(key);
-  if (existing) return existing;
+async function runDedupe(
+  key,
+  fn
+) {
+  const existing =
+    INFLIGHT.get(key);
 
-  const p = (async () => {
-    try {
-      return await fn();
-    } finally {
-      INFLIGHT.delete(key);
-    }
-  })();
+  if (existing) {
+    return existing;
+  }
 
-  INFLIGHT.set(key, p);
+  const p =
+    (
+      async () => {
+        try {
+          return await fn();
+        } finally {
+          INFLIGHT.delete(
+            key
+          );
+        }
+      }
+    )();
+
+  INFLIGHT.set(
+    key,
+    p
+  );
+
   return p;
 }
 
 /* ───────── warm meta caches (soft preload) ───────── */
 
-const WARM_STATE = G.__TDLS_STRAPI_WARM_STATE__ ?? (G.__TDLS_STRAPI_WARM_STATE__ = { exp: 0 });
+const WARM_STATE =
+  G.__TDLS_STRAPI_WARM_STATE__ ??
+  (
+    G.__TDLS_STRAPI_WARM_STATE__ =
+      {
+        exp: 0,
+      }
+  );
 
-const WARM_TTL_MS = (() => {
-  const n = Number(process.env.TDLS_STRAPI_WARM_TTL_MS || 10 * 60 * 1000);
-  if (!Number.isFinite(n) || n <= 0) return 10 * 60 * 1000;
-  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.round(n)));
-})();
+const WARM_TTL_MS =
+  (() => {
+    const n =
+      Number(
+        process.env
+          .TDLS_STRAPI_WARM_TTL_MS ||
+          10 *
+            60 *
+            1000
+      );
 
-async function warmMetaCachesIfNeeded(baseHeaders) {
-  const now = Date.now();
-  if (WARM_STATE.exp > now) return;
+    if (
+      !Number.isFinite(n) ||
+      n <= 0
+    ) {
+      return (
+        10 *
+        60 *
+        1000
+      );
+    }
 
-  WARM_STATE.exp = now + WARM_TTL_MS;
+    return Math.min(
+      60 *
+        60 *
+        1000,
+      Math.max(
+        60 *
+          1000,
+        Math.round(n)
+      )
+    );
+  })();
 
-  const paths = Array.from(FAST_META_PROFILES.keys());
+async function warmMetaCachesIfNeeded(
+  baseHeaders
+) {
+  const now =
+    Date.now();
+
+  if (
+    WARM_STATE.exp >
+    now
+  ) {
+    return;
+  }
+
+  WARM_STATE.exp =
+    now +
+    WARM_TTL_MS;
+
+  const paths =
+    Array.from(
+      FAST_META_PROFILES.keys()
+    );
 
   await Promise.allSettled(
-    paths.map(async (pathname) => {
-      const eff = canonicalizePath(normalizeMetaPath(`${pathname}?populate=*`, { isPublic: true }));
-      const target = buildTargetUrl(eff);
+    paths.map(
+      async (
+        pathname
+      ) => {
+        const eff =
+          canonicalizePath(
+            normalizeMetaPath(
+              `${pathname}?populate=*`,
+              {
+                isPublic:
+                  true,
+              }
+            )
+          );
 
-      const cacheKey = `pub|meta|${eff}`;
-      const lastGoodKey = `pub|meta|${eff}`;
-      const anyKey = metaAnyKeyFromPathname(pathname);
+        const target =
+          buildTargetUrl(
+            eff
+          );
 
-      if (memGet(MEM_META, cacheKey)?.payloadStr) return;
+        const cacheKey =
+          `pub|meta|${eff}`;
 
-      /**
-       * ✅ NEW: Use the SAME inflight key shape as real meta requests
-       * so concurrent UI requests join the warm promise (no double fetch).
-       */
-      const dk = `meta|${eff}|pub|${STRAPI_TOKEN ? "tok" : "notok"}|nc0|g0`;
+        const lastGoodKey =
+          `pub|meta|${eff}`;
 
-      await runDedupe(dk, async () => {
-        const res = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_META });
-        if (!res.ok) return;
+        const anyKey =
+          metaAnyKeyFromPathname(
+            pathname
+          );
 
-        const text = await res.text().catch(() => "");
-        const parsed = safeJsonParse(text);
-        if (!parsed) return;
+        if (
+          memGet(
+            MEM_META,
+            cacheKey
+          )?.payloadStr
+        ) {
+          return;
+        }
 
-        const payloadStr = JSON.stringify({ ok: true, data: parsed, ms: 0, warmed: true });
+        /**
+         * ✅ NEW: Use the SAME inflight key shape as real meta requests
+         * so concurrent UI requests join the warm promise (no double fetch).
+         */
+        const dk =
+          `meta|${eff}|pub|${
+            STRAPI_TOKEN
+              ? "tok"
+              : "notok"
+          }|nc0|g0`;
 
-        memSet(
-          MEM_META,
-          cacheKey,
-          payloadStr,
-          { ...cacheHeaders(META_CACHE_CONTROL) },
-          MEM_TTL_MS,
-          MEM_MAX_BYTES_META
+        await runDedupe(
+          dk,
+          async () => {
+            const res =
+              await fetchUpstreamResilient(
+                target,
+                baseHeaders,
+                {
+                  delays:
+                    RETRY_DELAYS_META,
+                }
+              );
+
+            if (!res.ok) {
+              return;
+            }
+
+            const text =
+              await res
+                .text()
+                .catch(
+                  () => ""
+                );
+
+            const parsed =
+              safeJsonParse(
+                text
+              );
+
+            if (!parsed) {
+              return;
+            }
+
+            const payloadStr =
+              JSON.stringify(
+                {
+                  ok:
+                    true,
+                  data:
+                    parsed,
+                  ms: 0,
+                  warmed:
+                    true,
+                }
+              );
+
+            memSet(
+              MEM_META,
+              cacheKey,
+              payloadStr,
+              {
+                ...cacheHeaders(
+                  META_CACHE_CONTROL
+                ),
+              },
+              MEM_TTL_MS,
+              MEM_MAX_BYTES_META
+            );
+
+            lastGoodSet(
+              lastGoodKey,
+              payloadStr,
+              LAST_GOOD_TTL_MS
+            );
+
+            lastGoodSet(
+              anyKey,
+              payloadStr,
+              LAST_GOOD_ANY_TTL_MS
+            );
+          }
         );
-
-        lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
-        lastGoodSet(anyKey, payloadStr, LAST_GOOD_ANY_TTL_MS);
-      });
-    })
+      }
+    )
   );
 }
 
 /* ───────── stock patch helpers ───────── */
 
-function collectSizeIdsFromStrapiProducts(strapiData) {
-  const itemsRaw = strapiData?.data;
-  const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
-  const sizeIds = new Set();
+function collectSizeIdsFromStrapiProducts(
+  strapiData
+) {
+  const itemsRaw =
+    strapiData?.data;
 
-  for (const item of items) {
-    const row = item;
-    const attrs = row.attributes || null;
+  const items =
+    Array.isArray(
+      itemsRaw
+    )
+      ? itemsRaw
+      : itemsRaw
+        ? [itemsRaw]
+        : [];
 
-    let variants = row.variants || attrs?.variants || [];
-    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v.attributes || v);
-    if (!Array.isArray(variants)) continue;
+  const sizeIds =
+    new Set();
 
-    for (const v of variants) {
-      let sizes = v.sizes || v.attributes?.sizes || [];
-      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
-      if (!Array.isArray(sizes)) continue;
+  for (
+    const item of
+      items
+  ) {
+    const row =
+      item;
 
-      for (const s of sizes) {
-        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? s.attributes?.id;
-        const sid = Number(rawId);
-        if (Number.isFinite(sid) && sid > 0) sizeIds.add(sid);
+    const attrs =
+      row.attributes ||
+      null;
+
+    let variants =
+      row.product_variants ||
+      attrs?.product_variants ||
+      row.variants ||
+      attrs?.variants ||
+      [];
+
+    if (
+      variants &&
+      Array.isArray(
+        variants.data
+      )
+    ) {
+      variants =
+        variants.data.map(
+          (v) =>
+            v.attributes ||
+            v
+        );
+    }
+
+    if (
+      !Array.isArray(
+        variants
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      const v of
+        variants
+    ) {
+      let sizes =
+        v.sizes ||
+        v.attributes
+          ?.sizes ||
+        [];
+
+      if (
+        sizes &&
+        Array.isArray(
+          sizes.data
+        )
+      ) {
+        sizes =
+          sizes.data.map(
+            (s) => s
+          );
+      }
+
+      if (
+        !Array.isArray(
+          sizes
+        )
+      ) {
+        continue;
+      }
+
+      for (
+        const s of
+          sizes
+      ) {
+        const rawId =
+          s.id ??
+          s.size_id ??
+          s.strapiSizeId ??
+          s.attributes
+            ?.id;
+
+        const sid =
+          Number(
+            rawId
+          );
+
+        if (
+          Number.isFinite(
+            sid
+          ) &&
+          sid > 0
+        ) {
+          sizeIds.add(
+            sid
+          );
+        }
       }
     }
   }
 
-  return { items, sizeIds };
+  return {
+    items,
+    sizeIds,
+  };
 }
 
-async function getStockMapForSizeIds(sizeIds) {
-  const ids = Array.from(sizeIds || []);
-  if (ids.length === 0) return { bySizeId: new Map(), source: "none", error: null };
+async function getStockMapForSizeIds(
+  sizeIds
+) {
+  const ids =
+    Array.from(
+      sizeIds ||
+      []
+    );
+
+  if (
+    ids.length ===
+    0
+  ) {
+    return {
+      bySizeId:
+        new Map(),
+      source:
+        "none",
+      error:
+        null,
+    };
+  }
 
   try {
-    const prisma = await getPrisma();
-    const prismaVariants = await prisma.productVariant.findMany({
-      where: { strapiSizeId: { in: ids } },
-      select: { strapiSizeId: true, stockAvailable: true },
-    });
+    const prisma =
+      await getPrisma();
 
-    const bySizeId = new Map();
-    for (const v of prismaVariants) {
-      const sid = Number(v?.strapiSizeId);
-      const stock = Number(v?.stockAvailable ?? 0) || 0;
-      if (Number.isFinite(sid) && sid > 0) {
-        bySizeId.set(sid, stock);
-        stockCacheSet(sid, stock);
+    const prismaVariants =
+      await prisma
+        .productVariant
+        .findMany({
+          where: {
+            strapiSizeId: {
+              in:
+                ids,
+            },
+          },
+
+          select: {
+            strapiSizeId:
+              true,
+
+            stockAvailable:
+              true,
+          },
+        });
+
+    const bySizeId =
+      new Map();
+
+    for (
+      const v of
+        prismaVariants
+    ) {
+      const sid =
+        Number(
+          v?.strapiSizeId
+        );
+
+      const stock =
+        Number(
+          v?.stockAvailable ??
+          0
+        ) ||
+        0;
+
+      if (
+        Number.isFinite(
+          sid
+        ) &&
+        sid > 0
+      ) {
+        bySizeId.set(
+          sid,
+          stock
+        );
+
+        stockCacheSet(
+          sid,
+          stock
+        );
       }
     }
 
-    return { bySizeId, source: "prisma", error: null };
+    return {
+      bySizeId,
+      source:
+        "prisma",
+      error:
+        null,
+    };
   } catch (e) {
-    const bySizeId = new Map();
+    const bySizeId =
+      new Map();
+
     let hits = 0;
-    for (const sid of ids) {
-      const cached = stockCacheGet(sid);
-      if (cached != null) {
-        bySizeId.set(sid, cached);
+
+    for (
+      const sid of
+        ids
+    ) {
+      const cached =
+        stockCacheGet(
+          sid
+        );
+
+      if (
+        cached !=
+        null
+      ) {
+        bySizeId.set(
+          sid,
+          cached
+        );
+
         hits++;
       }
     }
-    return { bySizeId, source: hits ? "cache" : "none", error: e };
+
+    return {
+      bySizeId,
+      source:
+        hits
+          ? "cache"
+          : "none",
+      error:
+        e,
+    };
   }
 }
 
-function ensureAvailabilityDefaultsOnProducts(strapiData) {
-  const itemsRaw = strapiData?.data;
-  const items = Array.isArray(itemsRaw) ? itemsRaw : itemsRaw ? [itemsRaw] : [];
+function ensureAvailabilityDefaultsOnProducts(
+  strapiData
+) {
+  const itemsRaw =
+    strapiData?.data;
 
-  for (const item of items) {
-    const row = item;
-    const attrs = row.attributes || null;
+  const items =
+    Array.isArray(
+      itemsRaw
+    )
+      ? itemsRaw
+      : itemsRaw
+        ? [itemsRaw]
+        : [];
 
-    let variants = row.variants || attrs?.variants || [];
-    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v);
-    if (!Array.isArray(variants)) continue;
+  for (
+    const item of
+      items
+  ) {
+    const row =
+      item;
 
-    for (const v of variants) {
-      const vAttrs = v.attributes || null;
+    const attrs =
+      row.attributes ||
+      null;
 
-      let sizes = v.sizes || vAttrs?.sizes || [];
-      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
-      if (!Array.isArray(sizes)) continue;
+    let variants =
+      row.product_variants ||
+      attrs?.product_variants ||
+      row.variants ||
+      attrs?.variants ||
+      [];
 
-      for (const s of sizes) {
-        const sAttrs = s.attributes || null;
+    if (
+      variants &&
+      Array.isArray(
+        variants.data
+      )
+    ) {
+      variants =
+        variants.data.map(
+          (v) => v
+        );
+    }
+
+    if (
+      !Array.isArray(
+        variants
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      const v of
+        variants
+    ) {
+      const vAttrs =
+        v.attributes ||
+        null;
+
+      let sizes =
+        v.sizes ||
+        vAttrs?.sizes ||
+        [];
+
+      if (
+        sizes &&
+        Array.isArray(
+          sizes.data
+        )
+      ) {
+        sizes =
+          sizes.data.map(
+            (s) => s
+          );
+      }
+
+      if (
+        !Array.isArray(
+          sizes
+        )
+      ) {
+        continue;
+      }
+
+      for (
+        const s of
+          sizes
+      ) {
+        const sAttrs =
+          s.attributes ||
+          null;
 
         const hasBool =
-          typeof s.is_available === "boolean" ||
-          (sAttrs && typeof sAttrs.is_available === "boolean");
+          typeof s
+            .is_available ===
+            "boolean" ||
+          (
+            sAttrs &&
+            typeof sAttrs
+              .is_available ===
+              "boolean"
+          );
 
-        if (hasBool) continue;
+        if (hasBool) {
+          continue;
+        }
 
         const stockRaw =
           s.live_stock ??
           s.stock_quantity ??
-          (sAttrs ? (sAttrs.live_stock ?? sAttrs.stock_quantity) : undefined);
+          (
+            sAttrs
+              ? (
+                  sAttrs.live_stock ??
+                  sAttrs.stock_quantity
+                )
+              : undefined
+          );
 
-        const stockNum = Number(stockRaw);
-        const isAvailable = Number.isFinite(stockNum) ? stockNum > 0 : true;
+        const stockNum =
+          Number(
+            stockRaw
+          );
 
-        s.is_available = isAvailable;
-        if (sAttrs) s.attributes = { ...sAttrs, is_available: isAvailable };
+        const isAvailable =
+          Number.isFinite(
+            stockNum
+          )
+            ? stockNum >
+              0
+            : true;
+
+        s.is_available =
+          isAvailable;
+
+        if (sAttrs) {
+          s.attributes = {
+            ...sAttrs,
+            is_available:
+              isAvailable,
+          };
+        }
       }
     }
   }
@@ -1176,291 +3107,825 @@ function ensureAvailabilityDefaultsOnProducts(strapiData) {
   return strapiData;
 }
 
-async function patchProductsWithPrismaStock(strapiData) {
-  const { items, sizeIds } = collectSizeIdsFromStrapiProducts(strapiData);
-  if (sizeIds.size === 0) return ensureAvailabilityDefaultsOnProducts(strapiData);
+async function patchProductsWithPrismaStock(
+  strapiData
+) {
+  const {
+    items,
+    sizeIds,
+  } =
+    collectSizeIdsFromStrapiProducts(
+      strapiData
+    );
 
-  const { bySizeId, source, error } = await getStockMapForSizeIds(sizeIds);
-  if (source === "none" && error) return ensureAvailabilityDefaultsOnProducts(strapiData);
+  if (
+    sizeIds.size ===
+    0
+  ) {
+    return ensureAvailabilityDefaultsOnProducts(
+      strapiData
+    );
+  }
 
-  for (const item of items) {
-    const row = item;
-    const attrs = row.attributes || null;
+  const {
+    bySizeId,
+    source,
+    error,
+  } =
+    await getStockMapForSizeIds(
+      sizeIds
+    );
 
-    let variants = row.variants || attrs?.variants || [];
-    if (variants && Array.isArray(variants.data)) variants = variants.data.map((v) => v);
-    if (!Array.isArray(variants)) continue;
+  if (
+    source ===
+      "none" &&
+    error
+  ) {
+    return ensureAvailabilityDefaultsOnProducts(
+      strapiData
+    );
+  }
 
-    for (const v of variants) {
-      const vAttrs = v.attributes || null;
+  for (
+    const item of
+      items
+  ) {
+    const row =
+      item;
 
-      let sizes = v.sizes || vAttrs?.sizes || [];
-      if (sizes && Array.isArray(sizes.data)) sizes = sizes.data.map((s) => s);
-      if (!Array.isArray(sizes)) continue;
+    const attrs =
+      row.attributes ||
+      null;
 
-      for (const s of sizes) {
-        const sAttrs = s.attributes || null;
+    let variants =
+      row.product_variants ||
+      attrs?.product_variants ||
+      row.variants ||
+      attrs?.variants ||
+      [];
 
-        const rawId = s.id ?? s.size_id ?? s.strapiSizeId ?? sAttrs?.id;
-        const sid = Number(rawId);
-        if (!Number.isFinite(sid) || sid <= 0) continue;
+    if (
+      variants &&
+      Array.isArray(
+        variants.data
+      )
+    ) {
+      variants =
+        variants.data.map(
+          (v) => v
+        );
+    }
 
-        if (!bySizeId.has(sid)) {
-          if (
-            typeof s.is_available !== "boolean" &&
-            !(sAttrs && typeof sAttrs.is_available === "boolean")
-          ) {
-            s.is_available = true;
-            if (sAttrs) s.attributes = { ...sAttrs, is_available: true };
-          }
+    if (
+      !Array.isArray(
+        variants
+      )
+    ) {
+      continue;
+    }
+
+    for (
+      const v of
+        variants
+    ) {
+      const vAttrs =
+        v.attributes ||
+        null;
+
+      let sizes =
+        v.sizes ||
+        vAttrs?.sizes ||
+        [];
+
+      if (
+        sizes &&
+        Array.isArray(
+          sizes.data
+        )
+      ) {
+        sizes =
+          sizes.data.map(
+            (s) => s
+          );
+      }
+
+      if (
+        !Array.isArray(
+          sizes
+        )
+      ) {
+        continue;
+      }
+
+      for (
+        const s of
+          sizes
+      ) {
+        const sAttrs =
+          s.attributes ||
+          null;
+
+        const rawId =
+          s.id ??
+          s.size_id ??
+          s.strapiSizeId ??
+          sAttrs?.id;
+
+        const sid =
+          Number(
+            rawId
+          );
+
+        if (
+          !Number.isFinite(
+            sid
+          ) ||
+          sid <= 0
+        ) {
           continue;
         }
 
-        const liveStock = Number(bySizeId.get(sid)) || 0;
-        const isAvailable = liveStock > 0;
+        if (
+          !bySizeId.has(
+            sid
+          )
+        ) {
+          if (
+            typeof s
+              .is_available !==
+              "boolean" &&
+            !(
+              sAttrs &&
+              typeof sAttrs
+                .is_available ===
+                "boolean"
+            )
+          ) {
+            s.is_available =
+              true;
 
-        s.stock_quantity = liveStock;
-        s.live_stock = liveStock;
-        s.is_available = isAvailable;
+            if (sAttrs) {
+              s.attributes = {
+                ...sAttrs,
+                is_available:
+                  true,
+              };
+            }
+          }
+
+          continue;
+        }
+
+        const liveStock =
+          Number(
+            bySizeId.get(
+              sid
+            )
+          ) ||
+          0;
+
+        const isAvailable =
+          liveStock >
+          0;
+
+        s.stock_quantity =
+          liveStock;
+
+        s.live_stock =
+          liveStock;
+
+        s.is_available =
+          isAvailable;
 
         if (sAttrs) {
           s.attributes = {
             ...sAttrs,
-            stock_quantity: liveStock,
-            live_stock: liveStock,
-            is_available: isAvailable,
+            stock_quantity:
+              liveStock,
+            live_stock:
+              liveStock,
+            is_available:
+              isAvailable,
           };
         }
       }
     }
   }
 
-  return ensureAvailabilityDefaultsOnProducts(strapiData);
+  return ensureAvailabilityDefaultsOnProducts(
+    strapiData
+  );
 }
 
 /* ───────── upstream fetch (retry hardened) ───────── */
 
-async function fetchUpstreamResilient(target, baseHeaders, opts = {}) {
-  const delays = Array.isArray(opts.delays) ? opts.delays : RETRY_DELAYS_PRODUCTS;
+async function fetchUpstreamResilient(
+  target,
+  baseHeaders,
+  opts = {}
+) {
+  const delays =
+    Array.isArray(
+      opts.delays
+    )
+      ? opts.delays
+      : RETRY_DELAYS_PRODUCTS;
 
-  const attemptOnce = async () => {
-    let res;
+  const attemptOnce =
+    async () => {
+      let res;
 
-    if (STRAPI_TOKEN) {
-      res = await fetchWithTimeout(target, {
-        method: "GET",
-        headers: { ...baseHeaders, Authorization: `Bearer ${STRAPI_TOKEN}` },
-        cache: "no-store",
-      });
+      if (STRAPI_TOKEN) {
+        res =
+          await fetchWithTimeout(
+            target,
+            {
+              method:
+                "GET",
 
-      if (res.status === 401) {
-        res = await fetchWithTimeout(target, {
-          method: "GET",
-          headers: baseHeaders,
-          cache: "no-store",
-        });
+              headers: {
+                ...baseHeaders,
+
+                Authorization:
+                  `Bearer ${STRAPI_TOKEN}`,
+              },
+
+              cache:
+                "no-store",
+            }
+          );
+
+        if (
+          res.status ===
+          401
+        ) {
+          res =
+            await fetchWithTimeout(
+              target,
+              {
+                method:
+                  "GET",
+
+                headers:
+                  baseHeaders,
+
+                cache:
+                  "no-store",
+              }
+            );
+        }
+      } else {
+        res =
+          await fetchWithTimeout(
+            target,
+            {
+              method:
+                "GET",
+
+              headers:
+                baseHeaders,
+
+              cache:
+                "no-store",
+            }
+          );
       }
-    } else {
-      res = await fetchWithTimeout(target, {
-        method: "GET",
-        headers: baseHeaders,
-        cache: "no-store",
-      });
+
+      return res;
+    };
+
+  let lastErr =
+    null;
+
+  for (
+    let i = 0;
+    i < delays.length;
+    i++
+  ) {
+    if (
+      delays[i]
+    ) {
+      await sleep(
+        delays[i] +
+        Math.floor(
+          Math.random() *
+          60
+        )
+      );
     }
 
-    return res;
-  };
-
-  let lastErr = null;
-  for (let i = 0; i < delays.length; i++) {
-    if (delays[i]) await sleep(delays[i] + Math.floor(Math.random() * 60));
     try {
-      const res = await attemptOnce();
-      if (shouldRetryStatus(res.status) && i < delays.length - 1) continue;
+      const res =
+        await attemptOnce();
+
+      if (
+        shouldRetryStatus(
+          res.status
+        ) &&
+        i <
+          delays.length -
+            1
+      ) {
+        continue;
+      }
+
       return res;
     } catch (e) {
-      lastErr = e;
-      if (i === delays.length - 1) throw e;
+      lastErr =
+        e;
+
+      if (
+        i ===
+        delays.length -
+          1
+      ) {
+        throw e;
+      }
     }
   }
 
-  if (lastErr) throw lastErr;
+  if (lastErr) {
+    throw lastErr;
+  }
+
   return await attemptOnce();
 }
 
-function productCountFromStrapiPayload(data) {
-  const itemsRaw = data?.data;
-  if (Array.isArray(itemsRaw)) return itemsRaw.length;
-  if (itemsRaw) return 1;
+function productCountFromStrapiPayload(
+  data
+) {
+  const itemsRaw =
+    data?.data;
+
+  if (
+    Array.isArray(
+      itemsRaw
+    )
+  ) {
+    return itemsRaw.length;
+  }
+
+  if (itemsRaw) {
+    return 1;
+  }
+
   return 0;
 }
 
-function isSuspectEmptyProductsResponse(data) {
-  const items = data?.data;
-  if (!Array.isArray(items)) return false;
-  if (items.length !== 0) return false;
-  const total = Number(data?.meta?.pagination?.total ?? 0);
-  return Number.isFinite(total) && total > 0;
+function isSuspectEmptyProductsResponse(
+  data
+) {
+  const items =
+    data?.data;
+
+  if (
+    !Array.isArray(
+      items
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    items.length !==
+    0
+  ) {
+    return false;
+  }
+
+  const total =
+    Number(
+      data?.meta
+        ?.pagination
+        ?.total ??
+      0
+    );
+
+  return (
+    Number.isFinite(
+      total
+    ) &&
+    total > 0
+  );
 }
 
-function anyProductsListPayloadStr(profile /* "cardlite" | "filtersafe" */) {
+function anyProductsListPayloadStr(
+  profile
+) {
   const key =
-    profile === "filtersafe"
+    profile ===
+      "filtersafe"
       ? LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY
       : LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY;
 
-  const any = lastGoodGet(key);
-  if (!any?.payloadStr) return null;
+  const any =
+    lastGoodGet(
+      key
+    );
 
-  const parsed = safeJsonParse(any.payloadStr);
-  const strapi = parsed?.data;
+  if (
+    !any?.payloadStr
+  ) {
+    return null;
+  }
 
-  if (!Array.isArray(strapi?.data)) return null;
+  const parsed =
+    safeJsonParse(
+      any.payloadStr
+    );
 
-  const cnt = productCountFromStrapiPayload(strapi);
-  if (!Number.isFinite(cnt) || cnt <= 0) return null;
+  const strapi =
+    parsed?.data;
+
+  if (
+    !Array.isArray(
+      strapi?.data
+    )
+  ) {
+    return null;
+  }
+
+  const cnt =
+    productCountFromStrapiPayload(
+      strapi
+    );
+
+  if (
+    !Number.isFinite(
+      cnt
+    ) ||
+    cnt <= 0
+  ) {
+    return null;
+  }
 
   return any.payloadStr;
 }
 
-async function fetchBroaderProductsFallback(baseHeaders) {
+async function fetchBroaderProductsFallback(
+  baseHeaders
+) {
   // Fallback is intentionally unfiltered and safe (cardlite), for reliability.
-  const fallbackPath = canonicalizePath(
-    forcePublicProductsListPath(`/products?pagination[pageSize]=${BROAD_FALLBACK_PAGESIZE}`)
-  );
-  const target = buildTargetUrl(fallbackPath);
+  const fallbackPath =
+    canonicalizePath(
+      forcePublicProductsListPath(
+        `/products?pagination[pageSize]=${BROAD_FALLBACK_PAGESIZE}`
+      )
+    );
+
+  const target =
+    buildTargetUrl(
+      fallbackPath
+    );
 
   let res;
+
   try {
-    res = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_PRODUCTS });
+    res =
+      await fetchUpstreamResilient(
+        target,
+        baseHeaders,
+        {
+          delays:
+            RETRY_DELAYS_PRODUCTS,
+        }
+      );
   } catch {
     return null;
   }
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    return null;
+  }
 
   let data;
+
   try {
-    data = await res.json();
+    data =
+      await res.json();
   } catch {
     return null;
   }
 
-  data = await patchProductsWithPrismaStock(data);
+  data =
+    await patchProductsWithPrismaStock(
+      data
+    );
 
-  const payloadObj = { ok: true, data, degraded: true, reason: "BROAD_FALLBACK" };
-  const payloadStr = JSON.stringify(payloadObj);
+  const payloadObj = {
+    ok:
+      true,
 
-  const parsed = safeJsonParse(payloadStr);
-  const count = productCountFromStrapiPayload(parsed?.data);
-  if (count <= 0) return null;
+    data,
+
+    degraded:
+      true,
+
+    reason:
+      "BROAD_FALLBACK",
+  };
+
+  const payloadStr =
+    JSON.stringify(
+      payloadObj
+    );
+
+  const parsed =
+    safeJsonParse(
+      payloadStr
+    );
+
+  const count =
+    productCountFromStrapiPayload(
+      parsed?.data
+    );
+
+  if (
+    count <=
+    0
+  ) {
+    return null;
+  }
 
   return payloadStr;
 }
 
 /* ───────── main handler ───────── */
 
-export async function GET(req) {
-  const t0 = Date.now();
-  let guarded = false;
+export async function GET(
+  req
+) {
+  const t0 =
+    Date.now();
+
+  let guarded =
+    false;
 
   try {
-    if (STRAPI_BOOT_ERROR) {
+    if (
+      STRAPI_BOOT_ERROR
+    ) {
       return jsonResponse(
-        { ok: false, error: "SERVER_MISCONFIGURED", message: STRAPI_BOOT_ERROR },
+        {
+          ok:
+            false,
+
+          error:
+            "SERVER_MISCONFIGURED",
+
+          message:
+            STRAPI_BOOT_ERROR,
+        },
         500,
-        cacheHeaders("no-store")
+        cacheHeaders(
+          "no-store"
+        )
       );
     }
 
-    const url = new URL(req.url);
+    const url =
+      new URL(
+        req.url
+      );
 
     const clientSecretRaw =
-      url.searchParams.get("secret") ||
-      req.headers.get("x-strapi-sync-secret") ||
-      req.headers.get("x-strapi-proxy-secret");
+      url.searchParams.get(
+        "secret"
+      ) ||
+      req.headers.get(
+        "x-strapi-sync-secret"
+      ) ||
+      req.headers.get(
+        "x-strapi-proxy-secret"
+      );
 
     const hasClientSecret =
-      typeof clientSecretRaw === "string" && clientSecretRaw.trim().length > 0;
+      typeof clientSecretRaw ===
+        "string" &&
+      clientSecretRaw
+        .trim()
+        .length >
+        0;
 
     if (hasClientSecret) {
-      if (!STRAPI_SYNC_SECRET) {
+      if (
+        !STRAPI_SYNC_SECRET
+      ) {
         return jsonResponse(
           {
-            ok: false,
-            error: "SERVER_MISCONFIGURED",
-            message: "Strapi sync secret is not configured",
+            ok:
+              false,
+
+            error:
+              "SERVER_MISCONFIGURED",
+
+            message:
+              "Strapi sync secret is not configured",
           },
           500
         );
       }
 
-      const clientSecret = clientSecretRaw.trim();
-      if (clientSecret !== STRAPI_SYNC_SECRET) {
+      const clientSecret =
+        clientSecretRaw.trim();
+
+      if (
+        clientSecret !==
+        STRAPI_SYNC_SECRET
+      ) {
         return jsonResponse(
-          { ok: false, error: "UNAUTHORIZED", message: "Invalid proxy secret" },
+          {
+            ok:
+              false,
+
+            error:
+              "UNAUTHORIZED",
+
+            message:
+              "Invalid proxy secret",
+          },
           401
         );
       }
     }
 
-    const rawPath = url.searchParams.get("path") || "";
-    const normalizedPath0 = normalizeStrapiPath(rawPath);
+    const rawPath =
+      url.searchParams.get(
+        "path"
+      ) ||
+      "";
 
-    if (!normalizedPath0) {
+    const normalizedPath0 =
+      normalizeStrapiPath(
+        rawPath
+      );
+
+    if (
+      !normalizedPath0
+    ) {
       return jsonResponse(
         {
-          ok: false,
-          error: "BAD_REQUEST",
-          message: "Invalid or missing `path` query parameter (must be a relative Strapi API path).",
+          ok:
+            false,
+
+          error:
+            "BAD_REQUEST",
+
+          message:
+            "Invalid or missing `path` query parameter (must be a relative Strapi API path).",
         },
         400
       );
     }
 
-    const noCache = url.searchParams.get("noCache") === "1";
-    const allowHeavy = url.searchParams.get("allowHeavy") === "1";
+    const noCache =
+      url.searchParams.get(
+        "noCache"
+      ) ===
+      "1";
+
+    const allowHeavy =
+      url.searchParams.get(
+        "allowHeavy"
+      ) ===
+      "1";
 
     // Normalize products/meta behavior (respects lite populate[...] when no filters exist)
-    let effectivePath = canonicalizePath(
-      normalizeProductsPath(canonicalizePath(normalizedPath0))
-    );
+    let effectivePath =
+      canonicalizePath(
+        normalizeProductsPath(
+          canonicalizePath(
+            normalizedPath0
+          )
+        )
+      );
 
-    let { pathname: effPathname } = splitPathAndQuery(effectivePath);
-    let isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
-    let isProductsList = isProductEndpoint && effPathname === "/products";
+    let {
+      pathname:
+        effPathname,
+    } =
+      splitPathAndQuery(
+        effectivePath
+      );
 
-    const productsListHasFilters = isProductsList ? hasFiltersInPath(effectivePath) : false;
-    const productsListProfile = productsListHasFilters ? "filtersafe" : "cardlite";
+    let isProductEndpoint =
+      effPathname ===
+        "/products" ||
+      effPathname.startsWith(
+        "/products/"
+      );
+
+    let isProductsList =
+      isProductEndpoint &&
+      effPathname ===
+        "/products";
+
+    const productsListHasFilters =
+      isProductsList
+        ? hasFiltersInPath(
+            effectivePath
+          )
+        : false;
+
+    const productsListProfile =
+      productsListHasFilters
+        ? "filtersafe"
+        : "cardlite";
 
     // Heavy guard (PUBLIC only)
     if (
       HEAVY_GUARD_ENABLED &&
       !allowHeavy &&
       !hasClientSecret &&
-      isHeavyPopulateRequest(effectivePath)
+      isHeavyPopulateRequest(
+        effectivePath
+      )
     ) {
-      if (!isProductEndpoint) {
-        effectivePath = canonicalizePath(sanitizeMetaPathForPublic(effectivePath));
-        guarded = true;
-      } else if (isProductsList) {
-        effectivePath = canonicalizePath(sanitizeProductsListPathForPublic(effectivePath));
-        guarded = true;
+      if (
+        !isProductEndpoint
+      ) {
+        effectivePath =
+          canonicalizePath(
+            sanitizeMetaPathForPublic(
+              effectivePath
+            )
+          );
+
+        guarded =
+          true;
+      } else if (
+        isProductsList
+      ) {
+        effectivePath =
+          canonicalizePath(
+            sanitizeProductsListPathForPublic(
+              effectivePath
+            )
+          );
+
+        guarded =
+          true;
       }
 
-      ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
-      isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
-      isProductsList = isProductEndpoint && effPathname === "/products";
+      ({
+        pathname:
+          effPathname,
+      } =
+        splitPathAndQuery(
+          effectivePath
+        ));
+
+      isProductEndpoint =
+        effPathname ===
+          "/products" ||
+        effPathname.startsWith(
+          "/products/"
+        );
+
+      isProductsList =
+        isProductEndpoint &&
+        effPathname ===
+          "/products";
     }
 
     // Meta path optimization (PUBLIC only)
-    if (!hasClientSecret && !isProductEndpoint) {
-      const normalizedMeta = normalizeMetaPath(effectivePath, { isPublic: true });
-      effectivePath = canonicalizePath(normalizedMeta);
+    if (
+      !hasClientSecret &&
+      !isProductEndpoint
+    ) {
+      const normalizedMeta =
+        normalizeMetaPath(
+          effectivePath,
+          {
+            isPublic:
+              true,
+          }
+        );
 
-      ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
-      isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
-      isProductsList = isProductEndpoint && effPathname === "/products";
+      effectivePath =
+        canonicalizePath(
+          normalizedMeta
+        );
+
+      ({
+        pathname:
+          effPathname,
+      } =
+        splitPathAndQuery(
+          effectivePath
+        ));
+
+      isProductEndpoint =
+        effPathname ===
+          "/products" ||
+        effPathname.startsWith(
+          "/products/"
+        );
+
+      isProductsList =
+        isProductEndpoint &&
+        effPathname ===
+          "/products";
     }
 
     /**
@@ -1469,354 +3934,1224 @@ export async function GET(req) {
      * - populate="*" OR no populate => force cardlite (fast default)
      * - explicit populate[...] lite queries => do NOT override
      */
-    if (!hasClientSecret && isProductsList && shouldForcePublicProductsList(effectivePath)) {
-      effectivePath = canonicalizePath(forcePublicProductsListPath(effectivePath));
-      ({ pathname: effPathname } = splitPathAndQuery(effectivePath));
-      isProductEndpoint = effPathname === "/products" || effPathname.startsWith("/products/");
-      isProductsList = isProductEndpoint && effPathname === "/products";
+    if (
+      !hasClientSecret &&
+      isProductsList &&
+      shouldForcePublicProductsList(
+        effectivePath
+      )
+    ) {
+      effectivePath =
+        canonicalizePath(
+          forcePublicProductsListPath(
+            effectivePath
+          )
+        );
+
+      ({
+        pathname:
+          effPathname,
+      } =
+        splitPathAndQuery(
+          effectivePath
+        ));
+
+      isProductEndpoint =
+        effPathname ===
+          "/products" ||
+        effPathname.startsWith(
+          "/products/"
+        );
+
+      isProductsList =
+        isProductEndpoint &&
+        effPathname ===
+          "/products";
     }
 
-    const target = buildTargetUrl(effectivePath);
-    const baseHeaders = { Accept: "application/json" };
+    const target =
+      buildTargetUrl(
+        effectivePath
+      );
 
-    const CACHE_OK = !noCache && !hasClientSecret;
+    const baseHeaders = {
+      Accept:
+        "application/json",
+    };
 
-    const cacheControl = CACHE_OK
-      ? isProductEndpoint
-        ? PRODUCT_CACHE_CONTROL
-        : META_CACHE_CONTROL
-      : "no-store";
+    const CACHE_OK =
+      !noCache &&
+      !hasClientSecret;
 
-    const cacheKey = `${CACHE_OK ? "pub" : "noc"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
-    const lastGoodKey = `${hasClientSecret ? "sec" : "pub"}|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`;
+    const cacheControl =
+      CACHE_OK
+        ? isProductEndpoint
+          ? PRODUCT_CACHE_CONTROL
+          : META_CACHE_CONTROL
+        : "no-store";
 
-    if (!hasClientSecret && CACHE_OK && isProductsList) {
-      warmMetaCachesIfNeeded(baseHeaders).catch(() => {});
+    const cacheKey =
+      `${
+        CACHE_OK
+          ? "pub"
+          : "noc"
+      }|${
+        isProductEndpoint
+          ? "prod"
+          : "meta"
+      }|${effectivePath}`;
+
+    const lastGoodKey =
+      `${
+        hasClientSecret
+          ? "sec"
+          : "pub"
+      }|${
+        isProductEndpoint
+          ? "prod"
+          : "meta"
+      }|${effectivePath}`;
+
+    if (
+      !hasClientSecret &&
+      CACHE_OK &&
+      isProductsList
+    ) {
+      warmMetaCachesIfNeeded(
+        baseHeaders
+      ).catch(
+        () => {}
+      );
     }
 
     if (CACHE_OK) {
-      const map = isProductEndpoint ? MEM_PROD : MEM_META;
-      const hit = memGet(map, cacheKey);
-      if (hit?.payloadStr) {
-        const ms = Date.now() - t0;
-        const parsed = isProductEndpoint ? safeJsonParse(hit.payloadStr) : null;
-        const cnt = isProductEndpoint ? productCountFromStrapiPayload(parsed?.data) : null;
+      const map =
+        isProductEndpoint
+          ? MEM_PROD
+          : MEM_META;
 
-        return rawJsonResponse(hit.payloadStr, 200, {
-          ...hit.headers,
-          ...cacheHeaders(cacheControl),
-          "x-tdls-proxy-ms": String(ms),
-          "x-tdls-cache": "1",
-          "x-tdls-mem": "1",
-          "x-tdls-guard": guarded ? "1" : "0",
-          ...(isProductEndpoint ? { "x-tdls-products-count": String(cnt ?? 0) } : {}),
-          ...(isProductsList ? { "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite" } : {}),
-        });
+      const hit =
+        memGet(
+          map,
+          cacheKey
+        );
+
+      if (
+        hit?.payloadStr
+      ) {
+        const ms =
+          Date.now() -
+          t0;
+
+        const parsed =
+          isProductEndpoint
+            ? safeJsonParse(
+                hit.payloadStr
+              )
+            : null;
+
+        const cnt =
+          isProductEndpoint
+            ? productCountFromStrapiPayload(
+                parsed?.data
+              )
+            : null;
+
+        return rawJsonResponse(
+          hit.payloadStr,
+          200,
+          {
+            ...hit.headers,
+
+            ...cacheHeaders(
+              cacheControl
+            ),
+
+            "x-tdls-proxy-ms":
+              String(ms),
+
+            "x-tdls-cache":
+              "1",
+
+            "x-tdls-mem":
+              "1",
+
+            "x-tdls-guard":
+              guarded
+                ? "1"
+                : "0",
+
+            ...(
+              isProductEndpoint
+                ? {
+                    "x-tdls-products-count":
+                      String(
+                        cnt ??
+                        0
+                      ),
+                  }
+                : {}
+            ),
+
+            ...(
+              isProductsList
+                ? {
+                    "x-tdls-products-profile":
+                      productsListHasFilters
+                        ? "filtersafe"
+                        : "cardlite",
+                  }
+                : {}
+            ),
+          }
+        );
       }
     }
 
-    const dedupeKey = `${isProductEndpoint ? "prod" : "meta"}|${effectivePath}|${
-      hasClientSecret ? "sec" : "pub"
-    }|${STRAPI_TOKEN ? "tok" : "notok"}|${noCache ? "nc1" : "nc0"}|${guarded ? "g1" : "g0"}`;
+    const dedupeKey =
+      `${
+        isProductEndpoint
+          ? "prod"
+          : "meta"
+      }|${effectivePath}|${
+        hasClientSecret
+          ? "sec"
+          : "pub"
+      }|${
+        STRAPI_TOKEN
+          ? "tok"
+          : "notok"
+      }|${
+        noCache
+          ? "nc1"
+          : "nc0"
+      }|${
+        guarded
+          ? "g1"
+          : "g0"
+      }`;
 
-    const result = await runDedupe(dedupeKey, async () => {
-      try {
-        const delays = isProductEndpoint ? RETRY_DELAYS_PRODUCTS : RETRY_DELAYS_META;
-
-        const res = await fetchUpstreamResilient(target, baseHeaders, { delays });
-
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          return {
-            ok: false,
-            status: res.status,
-            statusText: res.statusText,
-            errorText: text || null,
-          };
-        }
-
-        let data;
-        try {
-          data = await res.json();
-        } catch {
-          return { ok: false, status: 502, statusText: "Bad Gateway", errorText: "Invalid JSON" };
-        }
-
-        if (isProductsList && isSuspectEmptyProductsResponse(data)) {
-          await sleep(120);
+    const result =
+      await runDedupe(
+        dedupeKey,
+        async () => {
           try {
-            const res2 = await fetchUpstreamResilient(target, baseHeaders, { delays: RETRY_DELAYS_PRODUCTS });
-            if (res2.ok) {
+            const delays =
+              isProductEndpoint
+                ? RETRY_DELAYS_PRODUCTS
+                : RETRY_DELAYS_META;
+
+            const res =
+              await fetchUpstreamResilient(
+                target,
+                baseHeaders,
+                {
+                  delays,
+                }
+              );
+
+            if (!res.ok) {
+              const text =
+                await res
+                  .text()
+                  .catch(
+                    () => ""
+                  );
+
+              return {
+                ok:
+                  false,
+
+                status:
+                  res.status,
+
+                statusText:
+                  res.statusText,
+
+                errorText:
+                  text ||
+                  null,
+              };
+            }
+
+            let data;
+
+            try {
+              data =
+                await res.json();
+            } catch {
+              return {
+                ok:
+                  false,
+
+                status:
+                  502,
+
+                statusText:
+                  "Bad Gateway",
+
+                errorText:
+                  "Invalid JSON",
+              };
+            }
+
+            if (
+              isProductsList &&
+              isSuspectEmptyProductsResponse(
+                data
+              )
+            ) {
+              await sleep(
+                120
+              );
+
               try {
-                const data2 = await res2.json();
-                if (!isSuspectEmptyProductsResponse(data2)) data = data2;
+                const res2 =
+                  await fetchUpstreamResilient(
+                    target,
+                    baseHeaders,
+                    {
+                      delays:
+                        RETRY_DELAYS_PRODUCTS,
+                    }
+                  );
+
+                if (
+                  res2.ok
+                ) {
+                  try {
+                    const data2 =
+                      await res2
+                        .json();
+
+                    if (
+                      !isSuspectEmptyProductsResponse(
+                        data2
+                      )
+                    ) {
+                      data =
+                        data2;
+                    }
+                  } catch {}
+                }
               } catch {}
             }
-          } catch {}
-        }
 
-        if (isProductEndpoint) {
-          data = await patchProductsWithPrismaStock(data);
-        }
-
-        // Products-list resiliency: prefer profile-matched "any" fallbacks
-        if (!hasClientSecret && isProductsList) {
-          const countNow = productCountFromStrapiPayload(data);
-          const hasFilters = hasFiltersInPath(effectivePath);
-          const wantAnyProfile = hasFilters ? "filtersafe" : "cardlite";
-
-          if (countNow === 0) {
-            const lgExact = lastGoodGet(lastGoodKey);
-            if (lgExact?.payloadStr) {
-              return {
-                ok: true,
-                status: 200,
-                payloadStr: lgExact.payloadStr,
-                degraded: true,
-                reason: hasFilters ? "EMPTY->EXACT_LAST_GOOD_FILTERED" : "EMPTY->EXACT_LAST_GOOD",
-              };
+            if (
+              isProductEndpoint
+            ) {
+              data =
+                await patchProductsWithPrismaStock(
+                  data
+                );
             }
 
-            const anyList = anyProductsListPayloadStr(wantAnyProfile);
-            if (anyList) {
-              return {
-                ok: true,
-                status: 200,
-                payloadStr: anyList,
-                degraded: true,
-                reason: hasFilters ? "EMPTY->ANY_PRODUCTS_PROFILE_FILTERED" : "EMPTY->ANY_PRODUCTS_PROFILE",
-              };
+            // Products-list resiliency: prefer profile-matched "any" fallbacks
+            if (
+              !hasClientSecret &&
+              isProductsList
+            ) {
+              const countNow =
+                productCountFromStrapiPayload(
+                  data
+                );
+
+              const hasFilters =
+                hasFiltersInPath(
+                  effectivePath
+                );
+
+              const wantAnyProfile =
+                hasFilters
+                  ? "filtersafe"
+                  : "cardlite";
+
+              if (
+                countNow ===
+                0
+              ) {
+                const lgExact =
+                  lastGoodGet(
+                    lastGoodKey
+                  );
+
+                if (
+                  lgExact
+                    ?.payloadStr
+                ) {
+                  return {
+                    ok:
+                      true,
+
+                    status:
+                      200,
+
+                    payloadStr:
+                      lgExact.payloadStr,
+
+                    degraded:
+                      true,
+
+                    reason:
+                      hasFilters
+                        ? "EMPTY->EXACT_LAST_GOOD_FILTERED"
+                        : "EMPTY->EXACT_LAST_GOOD",
+                  };
+                }
+
+                const anyList =
+                  anyProductsListPayloadStr(
+                    wantAnyProfile
+                  );
+
+                if (
+                  anyList
+                ) {
+                  return {
+                    ok:
+                      true,
+
+                    status:
+                      200,
+
+                    payloadStr:
+                      anyList,
+
+                    degraded:
+                      true,
+
+                    reason:
+                      hasFilters
+                        ? "EMPTY->ANY_PRODUCTS_PROFILE_FILTERED"
+                        : "EMPTY->ANY_PRODUCTS_PROFILE",
+                  };
+                }
+
+                const broad =
+                  await fetchBroaderProductsFallback(
+                    baseHeaders
+                  );
+
+                if (
+                  broad
+                ) {
+                  lastGoodSet(
+                    LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY,
+                    broad,
+                    LAST_GOOD_ANY_TTL_MS
+                  );
+
+                  return {
+                    ok:
+                      true,
+
+                    status:
+                      200,
+
+                    payloadStr:
+                      broad,
+
+                    degraded:
+                      true,
+
+                    reason:
+                      hasFilters
+                        ? "EMPTY->BROAD_FETCH_FILTERED"
+                        : "EMPTY->BROAD_FETCH",
+                  };
+                }
+              }
             }
 
-            const broad = await fetchBroaderProductsFallback(baseHeaders);
-            if (broad) {
-              lastGoodSet(LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY, broad, LAST_GOOD_ANY_TTL_MS);
-              return {
-                ok: true,
-                status: 200,
-                payloadStr: broad,
-                degraded: true,
-                reason: hasFilters ? "EMPTY->BROAD_FETCH_FILTERED" : "EMPTY->BROAD_FETCH",
-              };
-            }
+            const payloadObj = {
+              ok:
+                true,
+
+              data,
+
+              ms:
+                Date.now() -
+                t0,
+            };
+
+            const payloadStr =
+              JSON.stringify(
+                payloadObj
+              );
+
+            return {
+              ok:
+                true,
+
+              status:
+                200,
+
+              payloadStr,
+            };
+          } catch (e) {
+            const name =
+              String(
+                e?.name ||
+                ""
+              );
+
+            const isAbort =
+              name ===
+                "AbortError" ||
+              name
+                .toLowerCase()
+                .includes(
+                  "abort"
+                ) ||
+              String(
+                e?.message ||
+                ""
+              )
+                .toLowerCase()
+                .includes(
+                  "aborted"
+                );
+
+            return {
+              ok:
+                false,
+
+              status:
+                isAbort
+                  ? 504
+                  : 502,
+
+              statusText:
+                isAbort
+                  ? "Gateway Timeout"
+                  : "Bad Gateway",
+
+              errorText:
+                String(
+                  e?.message ||
+                  "fetch failed"
+                ),
+            };
           }
         }
+      );
 
-        const payloadObj = { ok: true, data, ms: Date.now() - t0 };
-        const payloadStr = JSON.stringify(payloadObj);
+    const ms =
+      Date.now() -
+      t0;
 
-        return { ok: true, status: 200, payloadStr };
-      } catch (e) {
-        const name = String(e?.name || "");
-        const isAbort =
-          name === "AbortError" ||
-          name.toLowerCase().includes("abort") ||
-          String(e?.message || "").toLowerCase().includes("aborted");
-
-        return {
-          ok: false,
-          status: isAbort ? 504 : 502,
-          statusText: isAbort ? "Gateway Timeout" : "Bad Gateway",
-          errorText: String(e?.message || "fetch failed"),
-        };
-      }
-    });
-
-    const ms = Date.now() - t0;
-
-    if (!result?.ok) {
-      if (hasClientSecret) {
+    if (
+      !result?.ok
+    ) {
+      if (
+        hasClientSecret
+      ) {
         return jsonResponse(
           {
-            ok: false,
-            error: "STRAPI_PROXY_ERROR",
-            status: result?.status || 502,
-            statusText: result?.statusText || "Bad Gateway",
-            message: "Strapi request failed",
-            details: result?.errorText || null,
+            ok:
+              false,
+
+            error:
+              "STRAPI_PROXY_ERROR",
+
+            status:
+              result?.status ||
+              502,
+
+            statusText:
+              result?.statusText ||
+              "Bad Gateway",
+
+            message:
+              "Strapi request failed",
+
+            details:
+              result?.errorText ||
+              null,
+
             ms,
-            target: IS_PROD ? undefined : target,
+
+            target:
+              IS_PROD
+                ? undefined
+                : target,
           },
           502,
           {
-            ...cacheHeaders("no-store"),
-            "x-tdls-upstream-status": String(result?.status || 0),
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-cache": "0",
-            "x-tdls-guard": guarded ? "1" : "0",
+            ...cacheHeaders(
+              "no-store"
+            ),
+
+            "x-tdls-upstream-status":
+              String(
+                result?.status ||
+                0
+              ),
+
+            "x-tdls-proxy-ms":
+              String(ms),
+
+            "x-tdls-cache":
+              "0",
+
+            "x-tdls-guard":
+              guarded
+                ? "1"
+                : "0",
           }
         );
       }
 
-      const lg = lastGoodGet(lastGoodKey);
-      if (lg?.payloadStr) {
-        const parsed = isProductEndpoint ? safeJsonParse(lg.payloadStr) : null;
-        const cnt = isProductEndpoint ? productCountFromStrapiPayload(parsed?.data) : null;
+      const lg =
+        lastGoodGet(
+          lastGoodKey
+        );
 
-        return rawJsonResponse(lg.payloadStr, 200, {
-          ...cacheHeaders(cacheControl),
-          "x-tdls-proxy-ms": String(ms),
-          "x-tdls-stale": "1",
-          "x-tdls-fallback": "last-good",
-          "x-tdls-upstream-status": String(result?.status || 0),
-          "x-tdls-guard": guarded ? "1" : "0",
-          ...(isProductEndpoint ? { "x-tdls-products-count": String(cnt ?? 0) } : {}),
-          ...(isProductsList ? { "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite" } : {}),
-        });
+      if (
+        lg?.payloadStr
+      ) {
+        const parsed =
+          isProductEndpoint
+            ? safeJsonParse(
+                lg.payloadStr
+              )
+            : null;
+
+        const cnt =
+          isProductEndpoint
+            ? productCountFromStrapiPayload(
+                parsed?.data
+              )
+            : null;
+
+        return rawJsonResponse(
+          lg.payloadStr,
+          200,
+          {
+            ...cacheHeaders(
+              cacheControl
+            ),
+
+            "x-tdls-proxy-ms":
+              String(ms),
+
+            "x-tdls-stale":
+              "1",
+
+            "x-tdls-fallback":
+              "last-good",
+
+            "x-tdls-upstream-status":
+              String(
+                result?.status ||
+                0
+              ),
+
+            "x-tdls-guard":
+              guarded
+                ? "1"
+                : "0",
+
+            ...(
+              isProductEndpoint
+                ? {
+                    "x-tdls-products-count":
+                      String(
+                        cnt ??
+                        0
+                      ),
+                  }
+                : {}
+            ),
+
+            ...(
+              isProductsList
+                ? {
+                    "x-tdls-products-profile":
+                      productsListHasFilters
+                        ? "filtersafe"
+                        : "cardlite",
+                  }
+                : {}
+            ),
+          }
+        );
       }
 
-      if (!isProductEndpoint) {
-        const anyMeta = lastGoodGet(metaAnyKeyFromPathname(effPathname));
-        if (anyMeta?.payloadStr) {
-          return rawJsonResponse(anyMeta.payloadStr, 200, {
-            ...cacheHeaders(cacheControl),
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-stale": "1",
-            "x-tdls-fallback": "any-meta",
-            "x-tdls-upstream-status": String(result?.status || 0),
-            "x-tdls-guard": guarded ? "1" : "0",
-          });
+      if (
+        !isProductEndpoint
+      ) {
+        const anyMeta =
+          lastGoodGet(
+            metaAnyKeyFromPathname(
+              effPathname
+            )
+          );
+
+        if (
+          anyMeta
+            ?.payloadStr
+        ) {
+          return rawJsonResponse(
+            anyMeta.payloadStr,
+            200,
+            {
+              ...cacheHeaders(
+                cacheControl
+              ),
+
+              "x-tdls-proxy-ms":
+                String(ms),
+
+              "x-tdls-stale":
+                "1",
+
+              "x-tdls-fallback":
+                "any-meta",
+
+              "x-tdls-upstream-status":
+                String(
+                  result?.status ||
+                  0
+                ),
+
+              "x-tdls-guard":
+                guarded
+                  ? "1"
+                  : "0",
+            }
+          );
         }
       }
 
-      if (isProductsList) {
-        const anyProfile = productsListHasFilters ? "filtersafe" : "cardlite";
-        const anyList = anyProductsListPayloadStr(anyProfile);
-        if (anyList) {
-          const parsed = safeJsonParse(anyList);
-          const cnt = productCountFromStrapiPayload(parsed?.data);
+      if (
+        isProductsList
+      ) {
+        const anyProfile =
+          productsListHasFilters
+            ? "filtersafe"
+            : "cardlite";
 
-          return rawJsonResponse(anyList, 200, {
-            ...cacheHeaders(cacheControl),
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-stale": "1",
-            "x-tdls-fallback": "any-products-profile",
-            "x-tdls-upstream-status": String(result?.status || 0),
-            "x-tdls-guard": guarded ? "1" : "0",
-            "x-tdls-products-count": String(cnt ?? 0),
-            "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite",
-          });
+        const anyList =
+          anyProductsListPayloadStr(
+            anyProfile
+          );
+
+        if (
+          anyList
+        ) {
+          const parsed =
+            safeJsonParse(
+              anyList
+            );
+
+          const cnt =
+            productCountFromStrapiPayload(
+              parsed?.data
+            );
+
+          return rawJsonResponse(
+            anyList,
+            200,
+            {
+              ...cacheHeaders(
+                cacheControl
+              ),
+
+              "x-tdls-proxy-ms":
+                String(ms),
+
+              "x-tdls-stale":
+                "1",
+
+              "x-tdls-fallback":
+                "any-products-profile",
+
+              "x-tdls-upstream-status":
+                String(
+                  result?.status ||
+                  0
+                ),
+
+              "x-tdls-guard":
+                guarded
+                  ? "1"
+                  : "0",
+
+              "x-tdls-products-count":
+                String(
+                  cnt ??
+                  0
+                ),
+
+              "x-tdls-products-profile":
+                productsListHasFilters
+                  ? "filtersafe"
+                  : "cardlite",
+            }
+          );
         }
 
-        const broad = await fetchBroaderProductsFallback(baseHeaders);
+        const broad =
+          await fetchBroaderProductsFallback(
+            baseHeaders
+          );
+
         if (broad) {
-          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY, broad, LAST_GOOD_ANY_TTL_MS);
+          lastGoodSet(
+            LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY,
+            broad,
+            LAST_GOOD_ANY_TTL_MS
+          );
 
-          const parsed = safeJsonParse(broad);
-          const cnt = productCountFromStrapiPayload(parsed?.data);
+          const parsed =
+            safeJsonParse(
+              broad
+            );
 
-          return rawJsonResponse(broad, 200, {
-            ...cacheHeaders(cacheControl),
-            "x-tdls-proxy-ms": String(ms),
-            "x-tdls-stale": "1",
-            "x-tdls-fallback": "broad-fetch",
-            "x-tdls-upstream-status": String(result?.status || 0),
-            "x-tdls-guard": guarded ? "1" : "0",
-            "x-tdls-products-count": String(cnt ?? 0),
-            "x-tdls-products-profile": "cardlite",
-          });
+          const cnt =
+            productCountFromStrapiPayload(
+              parsed?.data
+            );
+
+          return rawJsonResponse(
+            broad,
+            200,
+            {
+              ...cacheHeaders(
+                cacheControl
+              ),
+
+              "x-tdls-proxy-ms":
+                String(ms),
+
+              "x-tdls-stale":
+                "1",
+
+              "x-tdls-fallback":
+                "broad-fetch",
+
+              "x-tdls-upstream-status":
+                String(
+                  result?.status ||
+                  0
+                ),
+
+              "x-tdls-guard":
+                guarded
+                  ? "1"
+                  : "0",
+
+              "x-tdls-products-count":
+                String(
+                  cnt ??
+                  0
+                ),
+
+              "x-tdls-products-profile":
+                "cardlite",
+            }
+          );
         }
       }
 
-      const payloadStr = JSON.stringify({
-        ok: true,
-        data: { data: [], meta: { degraded: true } },
-        degraded: true,
-        reason: isProductEndpoint ? "PUBLIC_PRODUCTS_DEGRADED_EMPTY" : "PUBLIC_META_DEGRADED_EMPTY",
+      /*
+       * Product requests must never turn a real upstream failure into
+       * { ok: true, data: [] }. That made the storefront believe the catalog
+       * genuinely contained zero products and rendered "Showing 0 of 0 items".
+       *
+       * Keep the existing degraded-empty behavior for non-product metadata
+       * requests, but fail product requests truthfully so callers can retry or
+       * surface the actual upstream problem.
+       */
+      if (
+        isProductEndpoint
+      ) {
+        const publicStatus =
+          Number(
+            result?.status
+          ) ===
+          504
+            ? 504
+            : 502;
+
+        return jsonResponse(
+          {
+            ok:
+              false,
+
+            error:
+              publicStatus ===
+                504
+                ? "UPSTREAM_TIMEOUT"
+                : "STRAPI_PROXY_ERROR",
+
+            status:
+              result?.status ||
+              publicStatus,
+
+            statusText:
+              result?.statusText ||
+              (
+                publicStatus ===
+                504
+                  ? "Gateway Timeout"
+                  : "Bad Gateway"
+              ),
+
+            message:
+              "Strapi product request failed",
+
+            details:
+              result?.errorText ||
+              null,
+
+            ms,
+          },
+          publicStatus,
+          {
+            ...cacheHeaders(
+              "no-store"
+            ),
+
+            "x-tdls-proxy-ms":
+              String(ms),
+
+            "x-tdls-stale":
+              "1",
+
+            "x-tdls-fallback":
+              "none",
+
+            "x-tdls-upstream-status":
+              String(
+                result?.status ||
+                0
+              ),
+
+            "x-tdls-guard":
+              guarded
+                ? "1"
+                : "0",
+
+            "x-tdls-products-count":
+              "0",
+          }
+        );
+      }
+
+      const payloadStr =
+        JSON.stringify({
+          ok:
+            true,
+
+          data: {
+            data:
+              [],
+
+            meta: {
+              degraded:
+                true,
+            },
+          },
+
+          degraded:
+            true,
+
+          reason:
+            "PUBLIC_META_DEGRADED_EMPTY",
+
+          ms,
+        });
+
+      return rawJsonResponse(
+        payloadStr,
+        200,
+        {
+          ...cacheHeaders(
+            "no-store"
+          ),
+
+          "x-tdls-proxy-ms":
+            String(ms),
+
+          "x-tdls-stale":
+            "1",
+
+          "x-tdls-fallback":
+            "degraded-empty",
+
+          "x-tdls-upstream-status":
+            String(
+              result?.status ||
+              0
+            ),
+
+          "x-tdls-guard":
+            guarded
+              ? "1"
+              : "0",
+        }
+      );
+    }
+
+    const payloadStr =
+      result.payloadStr ||
+      JSON.stringify({
+        ok:
+          true,
+
+        data:
+          null,
+
         ms,
       });
 
-      return rawJsonResponse(payloadStr, 200, {
-        ...cacheHeaders("no-store"),
-        "x-tdls-proxy-ms": String(ms),
-        "x-tdls-stale": "1",
-        "x-tdls-fallback": "degraded-empty",
-        "x-tdls-upstream-status": String(result?.status || 0),
-        "x-tdls-guard": guarded ? "1" : "0",
-        ...(isProductEndpoint ? { "x-tdls-products-count": "0" } : {}),
-      });
+    let productCount =
+      null;
+
+    if (
+      isProductEndpoint
+    ) {
+      const parsed =
+        safeJsonParse(
+          payloadStr
+        );
+
+      productCount =
+        productCountFromStrapiPayload(
+          parsed?.data
+        );
     }
 
-    const payloadStr = result.payloadStr || JSON.stringify({ ok: true, data: null, ms });
-
-    let productCount = null;
-    if (isProductEndpoint) {
-      const parsed = safeJsonParse(payloadStr);
-      productCount = productCountFromStrapiPayload(parsed?.data);
-    }
     const isGoodProductPayload =
-      !isProductEndpoint || (Number.isFinite(productCount) && productCount > 0);
+      !isProductEndpoint ||
+      (
+        Number.isFinite(
+          productCount
+        ) &&
+        productCount >
+          0
+      );
 
     if (CACHE_OK) {
-      if (!isProductEndpoint || isGoodProductPayload) {
-        const map = isProductEndpoint ? MEM_PROD : MEM_META;
+      if (
+        !isProductEndpoint ||
+        isGoodProductPayload
+      ) {
+        const map =
+          isProductEndpoint
+            ? MEM_PROD
+            : MEM_META;
+
         memSet(
           map,
           cacheKey,
           payloadStr,
-          { ...cacheHeaders(cacheControl) },
-          isProductEndpoint ? MEM_PROD_TTL_MS : MEM_TTL_MS,
-          isProductEndpoint ? MEM_MAX_BYTES_PROD : MEM_MAX_BYTES_META
+          {
+            ...cacheHeaders(
+              cacheControl
+            ),
+          },
+          isProductEndpoint
+            ? MEM_PROD_TTL_MS
+            : MEM_TTL_MS,
+          isProductEndpoint
+            ? MEM_MAX_BYTES_PROD
+            : MEM_MAX_BYTES_META
         );
       }
     }
 
-    if (!hasClientSecret) {
-      if (!isProductEndpoint || isGoodProductPayload) {
-        lastGoodSet(lastGoodKey, payloadStr, LAST_GOOD_TTL_MS);
+    if (
+      !hasClientSecret
+    ) {
+      if (
+        !isProductEndpoint ||
+        isGoodProductPayload
+      ) {
+        lastGoodSet(
+          lastGoodKey,
+          payloadStr,
+          LAST_GOOD_TTL_MS
+        );
       }
 
-      if (isProductsList && isGoodProductPayload) {
-        if (productsListHasFilters) {
-          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
+      if (
+        isProductsList &&
+        isGoodProductPayload
+      ) {
+        if (
+          productsListHasFilters
+        ) {
+          lastGoodSet(
+            LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY,
+            payloadStr,
+            LAST_GOOD_ANY_TTL_MS
+          );
         } else {
-          lastGoodSet(LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY, payloadStr, LAST_GOOD_ANY_TTL_MS);
+          lastGoodSet(
+            LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY,
+            payloadStr,
+            LAST_GOOD_ANY_TTL_MS
+          );
         }
       }
 
-      if (!isProductEndpoint) {
-        lastGoodSet(metaAnyKeyFromPathname(effPathname), payloadStr, LAST_GOOD_ANY_TTL_MS);
+      if (
+        !isProductEndpoint
+      ) {
+        lastGoodSet(
+          metaAnyKeyFromPathname(
+            effPathname
+          ),
+          payloadStr,
+          LAST_GOOD_ANY_TTL_MS
+        );
       }
     }
 
-    return rawJsonResponse(payloadStr, 200, {
-      ...cacheHeaders(cacheControl),
-      "x-tdls-proxy-ms": String(ms),
-      "x-tdls-cache": CACHE_OK ? "1" : "0",
-      "x-tdls-mem": "0",
-      "x-tdls-stale": result?.reason ? "1" : "0",
-      "x-tdls-fallback": result?.reason ? String(result.reason) : "0",
-      "x-tdls-guard": guarded ? "1" : "0",
-      ...(isProductEndpoint ? { "x-tdls-products-count": String(productCount ?? 0) } : {}),
-      ...(isProductsList ? { "x-tdls-products-profile": productsListHasFilters ? "filtersafe" : "cardlite" } : {}),
-    });
-  } catch (err) {
-    const ms = Date.now() - t0;
+    return rawJsonResponse(
+      payloadStr,
+      200,
+      {
+        ...cacheHeaders(
+          cacheControl
+        ),
 
-    const name = String(err?.name || "");
+        "x-tdls-proxy-ms":
+          String(ms),
+
+        "x-tdls-cache":
+          CACHE_OK
+            ? "1"
+            : "0",
+
+        "x-tdls-mem":
+          "0",
+
+        "x-tdls-stale":
+          result?.reason
+            ? "1"
+            : "0",
+
+        "x-tdls-fallback":
+          result?.reason
+            ? String(
+                result.reason
+              )
+            : "0",
+
+        "x-tdls-guard":
+          guarded
+            ? "1"
+            : "0",
+
+        ...(
+          isProductEndpoint
+            ? {
+                "x-tdls-products-count":
+                  String(
+                    productCount ??
+                    0
+                  ),
+              }
+            : {}
+        ),
+
+        ...(
+          isProductsList
+            ? {
+                "x-tdls-products-profile":
+                  productsListHasFilters
+                    ? "filtersafe"
+                    : "cardlite",
+              }
+            : {}
+        ),
+      }
+    );
+  } catch (err) {
+    const ms =
+      Date.now() -
+      t0;
+
+    const name =
+      String(
+        err?.name ||
+        ""
+      );
+
     const isAbort =
-      name === "AbortError" ||
-      name.toLowerCase().includes("abort") ||
-      String(err?.message || "").toLowerCase().includes("aborted");
+      name ===
+        "AbortError" ||
+      name
+        .toLowerCase()
+        .includes(
+          "abort"
+        ) ||
+      String(
+        err?.message ||
+        ""
+      )
+        .toLowerCase()
+        .includes(
+          "aborted"
+        );
 
     if (isAbort) {
       return jsonResponse(
         {
-          ok: false,
-          error: "UPSTREAM_TIMEOUT",
-          message: `Strapi did not respond within ${UPSTREAM_TIMEOUT_MS}ms`,
+          ok:
+            false,
+
+          error:
+            "UPSTREAM_TIMEOUT",
+
+          message:
+            `Strapi did not respond within ${UPSTREAM_TIMEOUT_MS}ms`,
+
           ms,
         },
         504,
-        { ...cacheHeaders("no-store"), "x-tdls-proxy-ms": String(ms) }
+        {
+          ...cacheHeaders(
+            "no-store"
+          ),
+
+          "x-tdls-proxy-ms":
+            String(ms),
+        }
       );
     }
 
-    console.error("STRAPI PROXY FATAL ERROR:", err);
+    console.error(
+      "STRAPI PROXY FATAL ERROR:",
+      err
+    );
+
     return jsonResponse(
-      { ok: false, error: "STRAPI_PROXY_ERROR", message: "fetch failed", ms },
+      {
+        ok:
+          false,
+
+        error:
+          "STRAPI_PROXY_ERROR",
+
+        message:
+          "fetch failed",
+
+        ms,
+      },
       500,
-      { ...cacheHeaders("no-store"), "x-tdls-proxy-ms": String(ms) }
+      {
+        ...cacheHeaders(
+          "no-store"
+        ),
+
+        "x-tdls-proxy-ms":
+          String(ms),
+      }
     );
   }
 }
