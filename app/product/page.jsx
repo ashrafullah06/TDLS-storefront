@@ -126,46 +126,10 @@ function pickStrapiProductName(node) {
 
 /* ───────── Strapi fetch helper (via Next proxy) ───────── */
 
-/*
- * Must remain aligned with the storefront display step.
- *
- * AllProductsClient initially displays 24 products and reveals another
- * 24 as the customer scrolls.
- *
- * IMPORTANT:
- * We still fetch the COMPLETE catalog here because AllProductsClient performs
- * its filters/sorting/infinite reveal against the products array supplied by
- * this page. We simply avoid asking Strapi/Railway for the whole catalog in
- * one oversized request.
- */
 const PRODUCTS_PAGE_SIZE = 24;
-
-/*
- * Keep only a few Strapi requests in flight at once.
- *
- * This prevents the paginated fix from turning into a burst of simultaneous
- * Railway/Strapi requests on a larger catalog.
- */
 const PRODUCTS_FETCH_CONCURRENCY = 3;
-
-/*
- * Hard safety ceiling only. A real catalog should never approach this.
- * This protects against malformed pagination metadata causing an endless loop.
- */
 const MAX_PRODUCT_PAGES = 1000;
 
-/**
- * Build the exact Strapi request required by the All Products page.
- *
- * Do NOT use populate=* here.
- *
- * The explicit populate structure has two purposes:
- * 1. it prevents the proxy from replacing this request with the generic
- *    card-lite profile;
- * 2. it asks only for relations this page/ProductCard actually needs.
- *
- * Existing filtering/UI behavior remains intact.
- */
 function buildProductsStrapiPath(page) {
   const params = new URLSearchParams();
 
@@ -204,9 +168,6 @@ function buildProductsStrapiPath(page) {
 
   /*
    * Current TDLS Strapi product relation.
-   *
-   * Keep sizes/image/color populated because ProductCard and the filtering
-   * system derive price, stock, colors and sizes from product_variants.
    */
   params.set(
     "populate[product_variants][populate][sizes]",
@@ -224,9 +185,7 @@ function buildProductsStrapiPath(page) {
   );
 
   /*
-   * Taxonomy relations actually used by the All Products filter system.
-   * Limit each relation to slug/name so this remains substantially lighter
-   * than populate=*.
+   * Taxonomy relations used by the existing All Products filter system.
    */
   const taxonomyRelations = [
     "audience_categories",
@@ -323,117 +282,147 @@ function readPagination(payload) {
   };
 }
 
+/**
+ * One proxy request.
+ *
+ * IMPORTANT:
+ * A Strapi/proxy failure must NOT throw through the Next.js page render.
+ * Returning null allows the caller to retry and, if necessary, let the
+ * existing AllProductsClient browser fallback take over.
+ */
 async function fetchProductsPageFromStrapi(
   appBaseUrl,
-  page
+  page,
+  noCache = false
 ) {
-  const base =
-    (
-      appBaseUrl ||
-      SITE_URL
-    ).replace(
-      /\/+$/,
-      ""
+  try {
+    const base =
+      (
+        appBaseUrl ||
+        SITE_URL
+      ).replace(
+        /\/+$/,
+        ""
+      );
+
+    /*
+     * Public catalog reads must remain public so /api/strapi can use its
+     * existing CDN + memory cache.
+     */
+    const url =
+      new URL(
+        "/api/strapi",
+        base
+      );
+
+    url.searchParams.set(
+      "path",
+      buildProductsStrapiPath(
+        page
+      )
     );
 
-  /*
-   * Public catalog reads must remain public so /api/strapi can use its
-   * existing CDN + memory cache. Supplying STRAPI_SYNC_SECRET here would
-   * intentionally disable that cache inside the proxy.
-   */
-  const url =
-    new URL(
-      "/api/strapi",
-      base
-    );
+    /*
+     * Only the retry bypasses proxy memory/cache.
+     */
+    if (noCache) {
+      url.searchParams.set(
+        "noCache",
+        "1"
+      );
+    }
 
-  url.searchParams.set(
-    "path",
-    buildProductsStrapiPath(
-      page
-    )
-  );
+    const res =
+      await fetch(
+        url.toString(),
+        {
+          method: "GET",
 
-  const res =
-    await fetch(
-      url.toString(),
-      {
-        method: "GET",
+          headers: {
+            Accept:
+              "application/json",
+          },
 
-        headers: {
-          Accept:
-            "application/json",
-        },
+          next: {
+            revalidate,
 
-        next: {
-          revalidate,
-
-          tags: [
-            "tdls-products-index",
-          ],
-        },
-      }
-    );
-
-  if (!res.ok) {
-    const txt =
-      await res
-        .text()
-        .catch(
-          () => ""
-        );
-
-    throw new Error(
-      `Strapi proxy HTTP error ${res.status} ${res.statusText} – ${
-        txt ||
-        "no response body"
-      }`
-    );
-  }
-
-  const payload =
-    await res
-      .json()
-      .catch(
-        (e) => {
-          throw new Error(
-            "Failed to parse JSON from /api/strapi: " +
-              e.message
-          );
+            tags: [
+              "tdls-products-index",
+            ],
+          },
         }
       );
 
-  if (!payload?.ok) {
-    throw new Error(
-      `Strapi proxy payload error: ${
-        payload?.error ||
-        "UNKNOWN"
-      } – ${
-        payload?.message ||
-        ""
-      }`
+    if (!res.ok) {
+      return null;
+    }
+
+    const payload =
+      await res
+        .json()
+        .catch(
+          () => null
+        );
+
+    if (
+      !payload ||
+      payload?.ok !== true
+    ) {
+      return null;
+    }
+
+    const strapiPayload =
+      payload?.data ||
+      {};
+
+    const list =
+      Array.isArray(
+        strapiPayload?.data
+      )
+        ? strapiPayload.data
+        : [];
+
+    return {
+      products:
+        list,
+
+      pagination:
+        readPagination(
+          strapiPayload
+        ),
+    };
+  } catch {
+    /*
+     * Never convert temporary Strapi/proxy/network failure into a
+     * server-side Next.js exception.
+     */
+    return null;
+  }
+}
+
+/**
+ * One normal request + one no-cache retry.
+ */
+async function fetchProductsPageWithRetry(
+  appBaseUrl,
+  page
+) {
+  const first =
+    await fetchProductsPageFromStrapi(
+      appBaseUrl,
+      page,
+      false
     );
+
+  if (first) {
+    return first;
   }
 
-  const strapiPayload =
-    payload?.data ||
-    {};
-
-  const list =
-    Array.isArray(
-      strapiPayload?.data
-    )
-      ? strapiPayload.data
-      : [];
-
-  return {
-    products: list,
-
-    pagination:
-      readPagination(
-        strapiPayload
-      ),
-  };
+  return await fetchProductsPageFromStrapi(
+    appBaseUrl,
+    page,
+    true
+  );
 }
 
 function mergeUniqueProducts(
@@ -447,18 +436,19 @@ function mergeUniqueProducts(
 
   const seen =
     new Set(
-      out.map(
-        (product) =>
-          String(
-            product?.id ??
-              product?.attributes
-                ?.id ??
-              product?.slug ??
-              product?.attributes
-                ?.slug ??
-              ""
-          )
-      )
+      out
+        .map(
+          (product) =>
+            String(
+              product?.id ??
+                product?.documentId ??
+                product?.attributes?.id ??
+                product?.slug ??
+                product?.attributes?.slug ??
+                ""
+            )
+        )
+        .filter(Boolean)
     );
 
   for (
@@ -470,18 +460,13 @@ function mergeUniqueProducts(
     const key =
       String(
         product?.id ??
-          product?.attributes
-            ?.id ??
+          product?.documentId ??
+          product?.attributes?.id ??
           product?.slug ??
-          product?.attributes
-            ?.slug ??
+          product?.attributes?.slug ??
           ""
       );
 
-    /*
-     * Products should always have either id or slug, but preserve unknown
-     * objects rather than deleting data if Strapi ever returns an unusual row.
-     */
     if (!key) {
       out.push(
         product
@@ -510,14 +495,20 @@ async function fetchProductsFromStrapi(
   appBaseUrl
 ) {
   /*
-   * First request gives us both the first 24 products and Strapi's real
-   * pageCount/total.
+   * Page 1 gives both the first 24 products and Strapi pagination metadata.
+   *
+   * If both attempts fail, return [] instead of throwing.
+   * AllProductsClient already contains its browser recovery path.
    */
   const first =
-    await fetchProductsPageFromStrapi(
+    await fetchProductsPageWithRetry(
       appBaseUrl,
       1
     );
+
+  if (!first) {
+    return [];
+  }
 
   const allProducts =
     mergeUniqueProducts(
@@ -546,10 +537,11 @@ async function fetchProductsFromStrapi(
   }
 
   /*
-   * Retrieve the remaining pages in small batches.
+   * Retrieve remaining pages in small batches.
    *
-   * This preserves the original "all products" behavior without sending one
-   * huge request to Railway/Strapi.
+   * If one required page completely fails, return [] rather than handing
+   * the client an incomplete catalog. The browser fallback can then retry
+   * the complete catalog itself.
    */
   for (
     let startPage = 2;
@@ -586,12 +578,24 @@ async function fetchProductsFromStrapi(
       await Promise.all(
         pages.map(
           (page) =>
-            fetchProductsPageFromStrapi(
+            fetchProductsPageWithRetry(
               appBaseUrl,
               page
             )
         )
       );
+
+    /*
+     * Do not render a partial catalog as if it were complete.
+     */
+    if (
+      results.some(
+        (result) =>
+          !result
+      )
+    ) {
+      return [];
+    }
 
     for (
       const result of
@@ -610,32 +614,82 @@ async function fetchProductsFromStrapi(
 /* ───────── Page component ───────── */
 
 export default async function ProductIndexPage() {
-  const requestBaseUrl = await resolveRequestBaseUrl();
+  const requestBaseUrl =
+    await resolveRequestBaseUrl();
 
-  const products = await fetchProductsFromStrapi(requestBaseUrl);
+  /*
+   * This function is intentionally non-throwing.
+   *
+   * If Strapi/proxy is temporarily unavailable it returns [] and the
+   * existing AllProductsClient client-side recovery path takes over.
+   */
+  const products =
+    await fetchProductsFromStrapi(
+      requestBaseUrl
+    );
 
-  const safeList = Array.isArray(products) ? products : [];
+  const safeList =
+    Array.isArray(
+      products
+    )
+      ? products
+      : [];
 
   const itemListJsonLd = {
-    "@context": "https://schema.org",
-    "@type": "ItemList",
+    "@context":
+      "https://schema.org",
 
-    name: `${BRAND} Products`,
+    "@type":
+      "ItemList",
 
-    itemListElement: safeList.slice(0, 24).map((p, idx) => {
-      const slug = pickStrapiProductSlug(p);
+    name:
+      `${BRAND} Products`,
 
-      const url = slug
-        ? `${SITE_URL.replace(/\/+$/, "")}/product/${encodeURIComponent(slug)}`
-        : `${SITE_URL.replace(/\/+$/, "")}/product`;
+    itemListElement:
+      safeList
+        .slice(
+          0,
+          24
+        )
+        .map(
+          (
+            p,
+            idx
+          ) => {
+            const slug =
+              pickStrapiProductSlug(
+                p
+              );
 
-      return {
-        "@type": "ListItem",
-        position: idx + 1,
-        url,
-        name: pickStrapiProductName(p),
-      };
-    }),
+            const url =
+              slug
+                ? `${SITE_URL.replace(
+                    /\/+$/,
+                    ""
+                  )}/product/${encodeURIComponent(
+                    slug
+                  )}`
+                : `${SITE_URL.replace(
+                    /\/+$/,
+                    ""
+                  )}/product`;
+
+            return {
+              "@type":
+                "ListItem",
+
+              position:
+                idx + 1,
+
+              url,
+
+              name:
+                pickStrapiProductName(
+                  p
+                ),
+            };
+          }
+        ),
   };
 
   return (
@@ -644,15 +698,22 @@ export default async function ProductIndexPage() {
         id="tdls-product-index-itemlist"
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: safeJsonLd(itemListJsonLd),
+          __html:
+            safeJsonLd(
+              itemListJsonLd
+            ),
         }}
       />
 
       <Navbar />
 
       <AllProductsClient
-        products={safeList}
-        siteBaseUrl={requestBaseUrl}
+        products={
+          safeList
+        }
+        siteBaseUrl={
+          requestBaseUrl
+        }
       />
     </>
   );
