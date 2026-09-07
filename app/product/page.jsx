@@ -1,6 +1,7 @@
 // FILE: app/product/page.jsx
 export const revalidate = 60;
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import AllProductsClient from "./all-products-client";
 import Navbar from "@/components/common/navbar";
