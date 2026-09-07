@@ -1,8 +1,14 @@
 // FILE: app/product/[slug]/page.js
+
 import prisma from "@/lib/prisma";
-import { fetchproductbyslug } from "@/lib/fetchproductbyslug";
-import { trackProductView } from "@/lib/trackview";
+
+import {
+  fetchproductbyslug,
+} from "@/lib/fetchproductbyslug";
+
 import ClientUX from "@/components/product/clientux";
+
+import ProductViewTracker from "@/components/product/product-view-tracker";
 
 /**
  * IMPORTANT (Mobile correctness):
@@ -10,86 +16,134 @@ import ClientUX from "@/components/product/clientux";
  * - This does NOT change desktop layout; it only prevents mobile scaling quirks.
  */
 export const viewport = {
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 5,
-  viewportFit: "cover",
+  width:
+    "device-width",
+
+  initialScale:
+    1,
+
+  maximumScale:
+    5,
+
+  viewportFit:
+    "cover",
 };
 
-/* ---------------- SEO/social constants (no UI/UX impact) ---------------- */
+/* ---------------- SEO/social constants ---------------- */
 
 const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
+  process.env.NEXT_PUBLIC_SITE_URL?.replace(
+    /\/+$/,
+    ""
+  ) ||
   "https://www.thednalabstore.com";
 
-const BRAND = "TDLS";
+const BRAND =
+  "TDLS";
 
 const FALLBACK_DESC =
   "TDLS is where refined design meets effortless confidence. Timeless in character, effortless in comfort—created to be felt, lived in, and remembered.";
 
+const REVIEW_FETCH_TIMEOUT_MS =
+  1500;
+
+const STOCK_WAIT_TIMEOUT_MS =
+  4000;
+
 /* ========= SHAPE NORMALISER ========= */
 
-/**
- * Normalises Strapi product shapes into:
- *   { id, ...flatFields, attributes: { ...flatFields } }
- */
 function normalizeProduct(raw) {
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
 
-  // Case 1: Strapi response { data: [...] }
-  const node = Array.isArray(raw?.data)
-    ? raw.data[0]
-    : raw;
+  const node =
+    Array.isArray(
+      raw?.data
+    )
+      ? raw.data[0]
+      : raw;
 
-  if (!node) return null;
+  if (!node) {
+    return null;
+  }
 
-  // Case 2: { id, attributes: { ... } }
   if (
     node.attributes &&
-    typeof node.attributes === "object"
+    typeof node.attributes ===
+      "object"
   ) {
-    const attrs = node.attributes;
+    const attrs =
+      node.attributes;
 
     return {
-      id: node.id ?? attrs.id ?? null,
+      id:
+        node.id ??
+        attrs.id ??
+        null,
+
       ...attrs,
-      attributes: attrs,
+
+      attributes:
+        attrs,
     };
   }
 
-  // Case 3: already flat, no attributes but we still add .attributes for ClientUX
-  const attrs = node.attributes || node;
+  const attrs =
+    node.attributes ||
+    node;
 
   return {
-    id: node.id ?? attrs.id ?? null,
+    id:
+      node.id ??
+      attrs.id ??
+      null,
+
     ...attrs,
-    attributes: attrs,
+
+    attributes:
+      attrs,
   };
 }
 
 /* ========= HELPERS ========= */
 
 function extractText(val) {
-  if (!val) return "";
+  if (!val) {
+    return "";
+  }
 
-  if (typeof val === "string") {
+  if (
+    typeof val ===
+    "string"
+  ) {
     return val;
   }
 
-  if (Array.isArray(val)) {
-    return val.map(extractText).join(" ");
+  if (
+    Array.isArray(val)
+  ) {
+    return val
+      .map(
+        extractText
+      )
+      .join(" ");
   }
 
   if (
-    typeof val === "object" &&
+    typeof val ===
+      "object" &&
     val.type &&
     val.children
   ) {
-    return extractText(val.children);
+    return extractText(
+      val.children
+    );
   }
 
   if (
-    typeof val === "object" &&
+    typeof val ===
+      "object" &&
     val.text
   ) {
     return val.text;
@@ -99,45 +153,83 @@ function extractText(val) {
 }
 
 function toAbsoluteUrl(u) {
-  if (!u) return u;
+  if (!u) {
+    return u;
+  }
 
-  const s = String(u);
+  const s =
+    String(u);
 
-  if (/^https?:\/\//i.test(s)) {
+  if (
+    /^https?:\/\//i.test(
+      s
+    )
+  ) {
     return s;
   }
 
-  return `${SITE_URL.replace(/\/+$/, "")}${
-    s.startsWith("/") ? "" : "/"
+  return `${SITE_URL.replace(
+    /\/+$/,
+    ""
+  )}${
+    s.startsWith("/")
+      ? ""
+      : "/"
   }${s}`;
 }
 
 function firstMediaUrl(field) {
-  if (!field) return null;
+  if (!field) {
+    return null;
+  }
 
-  if (Array.isArray(field)) {
-    for (const item of field) {
+  if (
+    Array.isArray(field)
+  ) {
+    for (
+      const item of
+        field
+    ) {
       const url =
         item?.url ||
-        item?.attributes?.url ||
-        (item?.data && item.data.url) ||
+        item?.attributes
+          ?.url ||
+        (
+          item?.data &&
+          item.data.url
+        ) ||
         null;
 
-      if (url) return url;
+      if (url) {
+        return url;
+      }
     }
 
     return null;
   }
 
-  if (Array.isArray(field.data)) {
-    for (const item of field.data) {
+  if (
+    Array.isArray(
+      field.data
+    )
+  ) {
+    for (
+      const item of
+        field.data
+    ) {
       const url =
         item?.url ||
-        item?.attributes?.url ||
-        (item?.data && item.data.url) ||
+        item?.attributes
+          ?.url ||
+        (
+          item?.data &&
+          item.data.url
+        ) ||
         null;
 
-      if (url) return url;
+      if (url) {
+        return url;
+      }
     }
 
     return null;
@@ -145,7 +237,8 @@ function firstMediaUrl(field) {
 
   return (
     field.url ||
-    field?.attributes?.url ||
+    field?.attributes
+      ?.url ||
     null
   );
 }
@@ -155,67 +248,106 @@ function pickOgImage(product) {
     return "/tdls-social-preview";
   }
 
-  if (product.cover_image) {
+  if (
+    product.cover_image
+  ) {
     return product.cover_image;
   }
 
-  if (typeof product.image === "string") {
+  if (
+    typeof product.image ===
+    "string"
+  ) {
     return product.image;
   }
 
-  if (product.image?.url) {
+  if (
+    product.image?.url
+  ) {
     return product.image.url;
   }
 
-  const fromImages = firstMediaUrl(product.images);
+  const fromImages =
+    firstMediaUrl(
+      product.images
+    );
 
   if (fromImages) {
     return fromImages;
   }
 
-  const fromGallery = firstMediaUrl(product.gallery);
+  const fromGallery =
+    firstMediaUrl(
+      product.gallery
+    );
 
   if (fromGallery) {
     return fromGallery;
   }
 
-  // ✅ Better social fallback than a generic product placeholder
   return "/tdls-social-preview";
 }
 
-// Build a product-scoped options map from variants (e.g., color/size/material)
+/* ========= PRODUCT OPTIONS ========= */
+
 function buildScopedOptions(product) {
   const map = {};
 
   const raw =
     product?.product_variants ||
-    product?.attributes?.product_variants;
+    product?.attributes
+      ?.product_variants;
 
-  const variants = Array.isArray(raw)
-    ? raw
-    : Array.isArray(raw?.data)
-    ? raw.data.map((v) => v.attributes || v)
-    : [];
+  const variants =
+    Array.isArray(raw)
+      ? raw
+      : Array.isArray(
+          raw?.data
+        )
+      ? raw.data.map(
+          (v) =>
+            v.attributes ||
+            v
+        )
+      : [];
 
-  for (const v of variants) {
-    const attrs = v.attributes || v.options || v;
+  for (
+    const v of
+      variants
+  ) {
+    const attrs =
+      v.attributes ||
+      v.options ||
+      v;
 
     if (
       !attrs ||
-      typeof attrs !== "object"
+      typeof attrs !==
+        "object"
     ) {
       continue;
     }
 
-    for (const [key, value] of Object.entries(attrs)) {
+    for (
+      const [
+        key,
+        value,
+      ] of Object.entries(
+        attrs
+      )
+    ) {
       if (
         value == null ||
-        typeof value === "object"
+        typeof value ===
+          "object"
       ) {
         continue;
       }
 
-      const k = String(key).toLowerCase();
+      const k =
+        String(
+          key
+        ).toLowerCase();
 
       if (
         ![
@@ -231,168 +363,284 @@ function buildScopedOptions(product) {
       }
 
       if (!map[k]) {
-        map[k] = new Set();
+        map[k] =
+          new Set();
       }
 
-      map[k].add(String(value));
+      map[k].add(
+        String(value)
+      );
     }
   }
 
   const out = {};
 
-  for (const [k, set] of Object.entries(map)) {
-    out[k] = Array.from(set).sort((a, b) =>
-      a.localeCompare(
-        b,
-        undefined,
-        {
-          numeric: true,
-        }
-      )
-    );
+  for (
+    const [
+      k,
+      set,
+    ] of Object.entries(
+      map
+    )
+  ) {
+    out[k] =
+      Array.from(
+        set
+      ).sort(
+        (
+          a,
+          b
+        ) =>
+          a.localeCompare(
+            b,
+            undefined,
+            {
+              numeric:
+                true,
+            }
+          )
+      );
   }
 
   return out;
 }
 
+/* ========= REVIEWS ========= */
+
+function getStrapiBase() {
+  const raw =
+    process.env.NEXT_PUBLIC_STRAPI_API_URL ||
+    process.env.NEXT_PUBLIC_STRAPI_ORIGIN ||
+    process.env.STRAPI_API_URL ||
+    "http://localhost:1337";
+
+  return raw
+    .replace(
+      /\/+$/,
+      ""
+    )
+    .replace(
+      /\/api$/,
+      ""
+    );
+}
+
 async function fetchReviews(productId) {
+  if (
+    productId == null
+  ) {
+    return [];
+  }
+
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {}
+    }, REVIEW_FETCH_TIMEOUT_MS);
+
   try {
     const API_BASE =
-      process.env.NEXT_PUBLIC_STRAPI_API_URL ||
-      "http://localhost:1337";
+      getStrapiBase();
 
-    const res = await fetch(
-      `${API_BASE}/api/reviews?product=${productId}`,
-      {
-        cache: "no-store",
-      }
-    );
+    const res =
+      await fetch(
+        `${API_BASE}/api/reviews?product=${encodeURIComponent(
+          String(
+            productId
+          )
+        )}`,
+        {
+          method:
+            "GET",
 
-    const json = await res.json().catch(() => ({}));
+          headers: {
+            Accept:
+              "application/json",
+          },
 
-    let arr = json?.data || json;
+          /*
+           * Keep reviews dynamic, as they were before.
+           * The important correction is the hard timeout.
+           */
+          cache:
+            "no-store",
 
-    if (!Array.isArray(arr)) {
+          signal:
+            controller.signal,
+        }
+      );
+
+    if (!res.ok) {
+      return [];
+    }
+
+    const json =
+      await res
+        .json()
+        .catch(
+          () => ({})
+        );
+
+    let arr =
+      json?.data ||
+      json;
+
+    if (
+      !Array.isArray(
+        arr
+      )
+    ) {
       arr = [];
     }
 
     return arr;
   } catch {
     return [];
+  } finally {
+    clearTimeout(
+      timer
+    );
   }
 }
 
-/**
- * Soft visibility guard
- */
-function isSoftDisabled(product) {
-  if (!product) return true;
+/* ========= VISIBILITY ========= */
 
-  if (product.disable_frontend === true) {
+function isSoftDisabled(product) {
+  if (!product) {
     return true;
   }
 
-  if (product.is_archived === true) {
+  if (
+    product.disable_frontend ===
+    true
+  ) {
+    return true;
+  }
+
+  if (
+    product.is_archived ===
+    true
+  ) {
     return true;
   }
 
   return false;
 }
 
-/* ========= PRISMA STOCK SNAPSHOT (DB IS SOURCE OF TRUTH) ========= */
+/* ========= PRISMA STOCK ========= */
 
 function toInt(val) {
-  if (val == null) return null;
+  if (
+    val == null
+  ) {
+    return null;
+  }
 
   const n =
-    typeof val === "string"
-      ? parseInt(val, 10)
+    typeof val ===
+      "string"
+      ? parseInt(
+          val,
+          10
+        )
       : Number(val);
 
-  return Number.isInteger(n)
+  return Number.isInteger(
+    n
+  )
     ? n
     : null;
 }
 
-/**
- * Compute available stock for a variant.
- *
- * IMPORTANT:
- * - We treat variant.stockAvailable as a **floor / override**.
- *   If stockAvailable <= 0, we force available = 0 even if InventoryItem says 5.
- *   This matches what you see in Prisma when you look at that column.
- * - Otherwise, we use InventoryItem sum: Σ(onHand - safetyStock - reserved).
- * - If there are no inventoryItems, we fall back to stockAvailable (if any).
- */
-function computeAvailableForVariant(variant) {
-  const items = Array.isArray(variant.inventoryItems)
-    ? variant.inventoryItems
-    : [];
+function computeAvailableForVariant(
+  variant
+) {
+  const items =
+    Array.isArray(
+      variant.inventoryItems
+    )
+      ? variant.inventoryItems
+      : [];
 
-  const stockAvailableRaw = Number(
-    variant.stockAvailable ?? 0
-  );
-
-  const stockAvailable = Number.isFinite(
-    stockAvailableRaw
-  )
-    ? stockAvailableRaw
-    : 0;
-
-  // 🔒 Hard floor: if stockAvailable is 0 or negative, this variant is OUT OF STOCK.
-  if (stockAvailable <= 0) {
-    return 0;
-  }
-
-  // If we have inventoryItems, respect them – but never go below 0.
-  if (items.length > 0) {
-    const total = items.reduce(
-      (sum, inv) => {
-        const onHand = Number(
-          inv.onHand ?? 0
-        );
-
-        const safety = Number(
-          inv.safetyStock ?? 0
-        );
-
-        const reserved = Number(
-          inv.reserved ?? 0
-        );
-
-        return (
-          sum +
-          (onHand - safety - reserved)
-        );
-      },
+  const stockAvailableRaw =
+    Number(
+      variant.stockAvailable ??
       0
     );
 
-    // Clamp at 0 – and also don't exceed stockAvailable (safety belt).
+  const stockAvailable =
+    Number.isFinite(
+      stockAvailableRaw
+    )
+      ? stockAvailableRaw
+      : 0;
+
+  if (
+    stockAvailable <=
+    0
+  ) {
+    return 0;
+  }
+
+  if (
+    items.length >
+    0
+  ) {
+    const total =
+      items.reduce(
+        (
+          sum,
+          inv
+        ) => {
+          const onHand =
+            Number(
+              inv.onHand ??
+              0
+            );
+
+          const safety =
+            Number(
+              inv.safetyStock ??
+              0
+            );
+
+          const reserved =
+            Number(
+              inv.reserved ??
+              0
+            );
+
+          return (
+            sum +
+            (
+              onHand -
+              safety -
+              reserved
+            )
+          );
+        },
+        0
+      );
+
     return Math.max(
       0,
-      Math.min(total, stockAvailable)
+      Math.min(
+        total,
+        stockAvailable
+      )
     );
   }
 
-  // No inventory rows → fall back to stockAvailable.
   return Math.max(
     0,
     stockAvailable
   );
 }
 
-/**
- * Uses Prisma (Product + variants + InventoryItem) to compute live stock:
- *  - Locate Product via strapiId / slug / strapiSlug
- *  - For each variant: computeAvailableForVariant(...)
- *
- * Returns:
- *   {
- *     stockQty: number,                           // total available across variants
- *     stockByVariantKey: { [key: string]: number } // key = strapiSizeId || variant.id
- *   }
- */
 async function loadStockFromPrisma({
   product,
   slug,
@@ -400,14 +648,19 @@ async function loadStockFromPrisma({
   try {
     const or = [];
 
-    const strapiId = toInt(
-      product.id ??
+    const strapiId =
+      toInt(
+        product.id ??
         product.strapiId ??
-        product.attributes?.strapiId ??
-        product.attributes?.id
-    );
+        product.attributes
+          ?.strapiId ??
+        product.attributes
+          ?.id
+      );
 
-    if (strapiId != null) {
+    if (
+      strapiId != null
+    ) {
       or.push({
         strapiId,
       });
@@ -419,113 +672,207 @@ async function loadStockFromPrisma({
       });
 
       or.push({
-        strapiSlug: slug,
+        strapiSlug:
+          slug,
       });
     }
 
     if (
       product.slug &&
-      typeof product.slug === "string"
+      typeof product.slug ===
+        "string"
     ) {
       or.push({
-        slug: product.slug,
+        slug:
+          product.slug,
       });
 
       or.push({
-        strapiSlug: product.slug,
+        strapiSlug:
+          product.slug,
       });
     }
 
     if (
-      product.attributes?.slug &&
-      typeof product.attributes.slug === "string"
+      product.attributes
+        ?.slug &&
+      typeof product
+        .attributes
+        .slug ===
+        "string"
     ) {
       or.push({
-        slug: product.attributes.slug,
+        slug:
+          product
+            .attributes
+            .slug,
       });
 
       or.push({
-        strapiSlug: product.attributes.slug,
+        strapiSlug:
+          product
+            .attributes
+            .slug,
       });
     }
 
-    if (!or.length) {
+    if (
+      !or.length
+    ) {
       return {
-        stockQty: null,
-        stockByVariantKey: {},
+        stockQty:
+          null,
+
+        stockByVariantKey:
+          {},
       };
     }
 
     const dbProduct =
-      await prisma.product.findFirst({
-        where: {
-          OR: or,
-        },
+      await prisma
+        .product
+        .findFirst({
+          where: {
+            OR:
+              or,
+          },
 
-        include: {
-          variants: {
-            include: {
-              inventoryItems: true,
+          include: {
+            variants: {
+              include: {
+                inventoryItems:
+                  true,
+              },
             },
           },
-        },
-      });
+        });
 
     if (!dbProduct) {
       return {
-        stockQty: null,
-        stockByVariantKey: {},
+        stockQty:
+          null,
+
+        stockByVariantKey:
+          {},
       };
     }
 
     let total = 0;
 
-    const stockByVariantKey = {};
+    const stockByVariantKey =
+      {};
 
-    for (const variant of dbProduct.variants) {
+    for (
+      const variant of
+        dbProduct.variants
+    ) {
       const available =
-        computeAvailableForVariant(variant);
+        computeAvailableForVariant(
+          variant
+        );
 
       const key =
-        variant.strapiSizeId != null
-          ? String(variant.strapiSizeId)
+        variant.strapiSizeId !=
+        null
+          ? String(
+              variant.strapiSizeId
+            )
           : variant.id;
 
-      stockByVariantKey[key] =
+      stockByVariantKey[
+        key
+      ] =
         available;
 
-      total += available;
+      total +=
+        available;
     }
 
     return {
-      stockQty: total,
+      stockQty:
+        total,
+
       stockByVariantKey,
     };
   } catch (err) {
-    console.error(
-      "[loadStockFromPrisma] failed:",
-      err
-    );
+    if (
+      process.env.NODE_ENV !==
+      "production"
+    ) {
+      console.error(
+        "[loadStockFromPrisma] failed:",
+        err
+      );
+    }
 
     return {
-      stockQty: null,
-      stockByVariantKey: {},
+      stockQty:
+        null,
+
+      stockByVariantKey:
+        {},
     };
   }
 }
 
 /**
- * Strapi-side stock fallback if DB has no info.
+ * Do not let a cold/unavailable Neon/Prisma connection keep the whole product
+ * route in loading state indefinitely.
  */
+async function loadStockWithTimeout({
+  product,
+  slug,
+}) {
+  let timer = null;
+
+  const fallback = {
+    stockQty:
+      null,
+
+    stockByVariantKey:
+      {},
+  };
+
+  try {
+    return await Promise.race([
+      loadStockFromPrisma({
+        product,
+        slug,
+      }),
+
+      new Promise(
+        (resolve) => {
+          timer =
+            setTimeout(
+              () =>
+                resolve(
+                  fallback
+                ),
+              STOCK_WAIT_TIMEOUT_MS
+            );
+        }
+      ),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(
+        timer
+      );
+    }
+  }
+}
+
 function fallbackStockFromStrapi(product) {
   if (
-    typeof product.stock_quantity === "number"
+    typeof product.stock_quantity ===
+    "number"
   ) {
     return product.stock_quantity;
   }
 
   if (
-    typeof product.inventory === "number"
+    typeof product.inventory ===
+    "number"
   ) {
     return product.inventory;
   }
@@ -533,14 +880,12 @@ function fallbackStockFromStrapi(product) {
   return 0;
 }
 
-/* ========= JSON-LD SAFE STRINGIFY ========= */
+/* ========= JSON-LD ========= */
 
-/**
- * Prevents "<" sequences from breaking out of the script tag.
- * Keeps the exact same schema content you already emit.
- */
 function safeJsonLd(obj) {
-  return JSON.stringify(obj).replace(
+  return JSON.stringify(
+    obj
+  ).replace(
     /</g,
     "\\u003c"
   );
@@ -548,138 +893,202 @@ function safeJsonLd(obj) {
 
 /* ========= DYNAMIC SEO METADATA ========= */
 
-export async function generateMetadata(ctx) {
-  const { params } = ctx;
+export async function generateMetadata(
+  ctx
+) {
+  const {
+    params,
+  } = ctx;
 
-  const { slug } =
-    (await params) || {};
+  const {
+    slug,
+  } =
+    (
+      await params
+    ) ||
+    {};
 
   const raw =
-    await fetchproductbyslug(slug);
+    await fetchproductbyslug(
+      slug
+    );
 
   const product =
-    normalizeProduct(raw);
+    normalizeProduct(
+      raw
+    );
 
   if (
     !product ||
-    isSoftDisabled(product)
+    isSoftDisabled(
+      product
+    )
   ) {
     return {
       title: {
-        absolute: `Product Not Found | ${BRAND}`,
+        absolute:
+          `Product Not Found | ${BRAND}`,
       },
 
       description:
         "Sorry, this product does not exist or is unavailable.",
 
       robots: {
-        index: false,
-        follow: false,
+        index:
+          false,
+
+        follow:
+          false,
       },
     };
   }
 
   const name =
-    extractText(product.name) ||
     extractText(
-      product.attributes?.name
+      product.name
+    ) ||
+    extractText(
+      product.attributes
+        ?.name
     ) ||
     "Product";
 
-  /*
-   * Prefer product-specific copy.
-   * Supports both simple strings and Strapi rich-text structures.
-   */
   const descRaw =
     extractText(
       product.short_description
     ) ||
     extractText(
-      product.attributes?.short_description
+      product.attributes
+        ?.short_description
     ) ||
     extractText(
       product.description
     ) ||
     extractText(
-      product.attributes?.description
+      product.attributes
+        ?.description
     ) ||
     FALLBACK_DESC;
 
-  const desc = String(
-    descRaw || FALLBACK_DESC
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
+  const desc =
+    String(
+      descRaw ||
+      FALLBACK_DESC
+    )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim()
+      .slice(
+        0,
+        160
+      );
 
   const ogImage =
     toAbsoluteUrl(
-      pickOgImage(product)
+      pickOgImage(
+        product
+      )
     );
 
   const canonical =
-    `${SITE_URL.replace(/\/+$/, "")}` +
-    `/product/${encodeURIComponent(
-      slug || product.slug || ""
+    `${SITE_URL.replace(
+      /\/+$/,
+      ""
+    )}/product/${encodeURIComponent(
+      slug ||
+      product.slug ||
+      ""
     )}`;
 
   return {
-    /*
-     * ✅ absolute avoids the root template producing:
-     * Product Name | TDLS | TDLS
-     */
     title: {
-      absolute: `${name} | ${BRAND}`,
+      absolute:
+        `${name} | ${BRAND}`,
     },
 
-    description: desc,
+    description:
+      desc,
 
     alternates: {
       canonical,
     },
 
     openGraph: {
-      title: `${name} | ${BRAND}`,
-      description: desc,
+      title:
+        `${name} | ${BRAND}`,
 
-      /*
-       * Product images may have different intrinsic dimensions,
-       * so do not falsely declare all of them as 1200×630.
-       */
+      description:
+        desc,
+
       images: [
         {
-          url: ogImage,
-          alt: name,
+          url:
+            ogImage,
+
+          alt:
+            name,
         },
       ],
 
-      type: "website",
-      siteName: BRAND,
-      url: canonical,
+      type:
+        "website",
+
+      siteName:
+        BRAND,
+
+      url:
+        canonical,
     },
 
     twitter: {
-      card: "summary_large_image",
-      title: `${name} | ${BRAND}`,
-      description: desc,
-      images: [ogImage],
+      card:
+        "summary_large_image",
+
+      title:
+        `${name} | ${BRAND}`,
+
+      description:
+        desc,
+
+      images: [
+        ogImage,
+      ],
     },
   };
 }
 
-/* ========= MAIN PAGE COMPONENT ========= */
+/* ========= MAIN PAGE ========= */
 
-export default async function ProductPage(ctx) {
-  const { params } = ctx;
+export default async function ProductPage(
+  ctx
+) {
+  const {
+    params,
+  } = ctx;
 
-  const { slug } =
-    (await params) || {};
+  const {
+    slug,
+  } =
+    (
+      await params
+    ) ||
+    {};
 
+  /*
+   * Critical request:
+   * only product data itself must finish before we can render the page.
+   */
   const raw =
-    await fetchproductbyslug(slug);
+    await fetchproductbyslug(
+      slug
+    );
 
   const product =
-    normalizeProduct(raw);
+    normalizeProduct(
+      raw
+    );
 
   if (!product) {
     return (
@@ -690,13 +1099,20 @@ export default async function ProductPage(ctx) {
 
         <p className="text-slate-600 text-sm">
           We couldn&apos;t find a product with slug:{" "}
-          <code>{slug}</code>.
+          <code>
+            {slug}
+          </code>
+          .
         </p>
       </main>
     );
   }
 
-  if (isSoftDisabled(product)) {
+  if (
+    isSoftDisabled(
+      product
+    )
+  ) {
     return (
       <main className="max-w-4xl mx-auto w-full pt-16 pb-24 px-4 overflow-x-hidden">
         <h1 className="text-2xl font-semibold mb-2">
@@ -710,32 +1126,54 @@ export default async function ProductPage(ctx) {
     );
   }
 
-  try {
-    await trackProductView(product);
-  } catch (e) {
-    console.error(
-      "[trackProductView] failed:",
-      e
-    );
-  }
+  /*
+   * Reviews and stock are independent. Run them in PARALLEL.
+   *
+   * Reviews: hard network timeout.
+   * Stock: bounded wait, then existing Strapi fallback.
+   */
+  const [
+    reviews,
+    prismaStock,
+  ] =
+    await Promise.all([
+      fetchReviews(
+        product.id
+      ),
 
-  const reviews =
-    await fetchReviews(product.id);
+      loadStockWithTimeout({
+        product,
+        slug,
+      }),
+    ]);
 
   const aggregateRating =
     reviews.length
       ? {
-          "@type": "AggregateRating",
+          "@type":
+            "AggregateRating",
 
-          ratingValue: (
-            reviews.reduce(
-              (sum, r) =>
-                sum + (r.rating || 5),
-              0
-            ) / reviews.length
-          ).toFixed(1),
+          ratingValue:
+            (
+              reviews.reduce(
+                (
+                  sum,
+                  r
+                ) =>
+                  sum +
+                  (
+                    r.rating ||
+                    5
+                  ),
+                0
+              ) /
+              reviews.length
+            ).toFixed(
+              1
+            ),
 
-          reviewCount: reviews.length,
+          reviewCount:
+            reviews.length,
         }
       : undefined;
 
@@ -744,51 +1182,57 @@ export default async function ProductPage(ctx) {
       product.short_description
     ) ||
     extractText(
-      product.attributes?.short_description
+      product.attributes
+        ?.short_description
     ) ||
     extractText(
       product.description
     ) ||
     extractText(
-      product.attributes?.description
+      product.attributes
+        ?.description
     ) ||
     FALLBACK_DESC;
 
   const ogImage =
     toAbsoluteUrl(
-      pickOgImage(product)
+      pickOgImage(
+        product
+      )
     );
 
   const price =
-    typeof product.price === "number"
+    typeof product.price ===
+    "number"
       ? product.price
-      : typeof product.discount_price === "number"
+      : typeof product.discount_price ===
+        "number"
       ? product.discount_price
-      : typeof product.base_price === "number"
+      : typeof product.base_price ===
+        "number"
       ? product.base_price
-      : typeof product.price_mrp === "number"
+      : typeof product.price_mrp ===
+        "number"
       ? product.price_mrp
       : 0;
 
   const priceCurrency =
     product.currency ||
-    product.attributes?.currency ||
+    product.attributes
+      ?.currency ||
     "BDT";
 
-  // 🔹 STOCK: DB (Prisma) is canonical, Strapi is only fallback
-  const prismaStock =
-    await loadStockFromPrisma({
-      product,
-      slug,
-    });
-
   const stockQty =
-    typeof prismaStock.stockQty === "number" &&
+    typeof prismaStock
+      .stockQty ===
+      "number" &&
     Number.isFinite(
       prismaStock.stockQty
     )
       ? prismaStock.stockQty
-      : fallbackStockFromStrapi(product);
+      : fallbackStockFromStrapi(
+          product
+        );
 
   const sku =
     product.sku ||
@@ -797,18 +1241,23 @@ export default async function ProductPage(ctx) {
     undefined;
 
   const scopedOptions =
-    buildScopedOptions(product);
+    buildScopedOptions(
+      product
+    );
 
   const isInStock =
     stockQty > 0;
 
   const productUrlAbs =
-    `${SITE_URL.replace(/\/+$/, "")}` +
-    `/product/${encodeURIComponent(
-      product.slug || slug || ""
+    `${SITE_URL.replace(
+      /\/+$/,
+      ""
+    )}/product/${encodeURIComponent(
+      product.slug ||
+      slug ||
+      ""
     )}`;
 
-  // Keep the exact same schema payload structure; only brand/site naming + absolute url hardened.
   const productSchema = {
     "@context":
       "https://schema.org/",
@@ -817,7 +1266,9 @@ export default async function ProductPage(ctx) {
       "Product",
 
     name:
-      extractText(product.name),
+      extractText(
+        product.name
+      ),
 
     image: [
       ogImage,
@@ -826,8 +1277,7 @@ export default async function ProductPage(ctx) {
     description:
       desc,
 
-    sku:
-      sku,
+    sku,
 
     brand: {
       "@type":
@@ -841,11 +1291,9 @@ export default async function ProductPage(ctx) {
       "@type":
         "Offer",
 
-      price:
-        price,
+      price,
 
-      priceCurrency:
-        priceCurrency,
+      priceCurrency,
 
       availability:
         isInStock
@@ -856,63 +1304,65 @@ export default async function ProductPage(ctx) {
         productUrlAbs,
     },
 
-    ...(aggregateRating && {
-      aggregateRating,
-    }),
+    ...(aggregateRating
+      ? {
+          aggregateRating,
+        }
+      : {}),
 
-    ...(reviews.length && {
-      review: reviews.map((r) => ({
-        "@type":
-          "Review",
+    ...(reviews.length
+      ? {
+          review:
+            reviews.map(
+              (r) => ({
+                "@type":
+                  "Review",
 
-        reviewRating: {
-          "@type":
-            "Rating",
+                reviewRating: {
+                  "@type":
+                    "Rating",
 
-          ratingValue:
-            r.rating || 5,
-        },
+                  ratingValue:
+                    r.rating ||
+                    5,
+                },
 
-        author: {
-          "@type":
-            "Person",
+                author: {
+                  "@type":
+                    "Person",
 
-          name:
-            r.user?.name ||
-            "Customer",
-        },
+                  name:
+                    r.user
+                      ?.name ||
+                    "Customer",
+                },
 
-        reviewBody:
-          r.text ||
-          r.body ||
-          "",
+                reviewBody:
+                  r.text ||
+                  r.body ||
+                  "",
 
-        datePublished:
-          r.createdAt ||
-          "",
-      })),
-    }),
+                datePublished:
+                  r.createdAt ||
+                  "",
+              })
+            ),
+        }
+      : {}),
   };
 
   return (
     <main
       className={[
-        // Desktop kept intact (your existing max width & breakpoints remain).
         "max-w-6xl mx-auto w-full pt-12 pb-20 px-2 sm:px-6 lg:px-8",
 
-        // Mobile hardening: never allow horizontal overflow on small screens.
         "overflow-x-hidden",
 
-        /**
-         * Mobile typography + control sizing:
-         * - On mobile we slightly reduce inherited font size so CTAs/text inside ClientUX
-         *   don’t render “too large” by default.
-         * - Desktop remains unchanged at sm+.
-         */
         "text-[13px] leading-[1.2] sm:text-[16px] sm:leading-normal",
-      ].join(" ")}
+      ].join(
+        " "
+      )}
       style={{
-        // iOS safe-area support (notch/home-indicator) without affecting desktop.
         paddingLeft:
           "max(0.5rem, env(safe-area-inset-left))",
 
@@ -923,28 +1373,49 @@ export default async function ProductPage(ctx) {
           "max(5rem, env(safe-area-inset-bottom))",
       }}
     >
-      {/* JSON-LD (same content), but avoids importing next/script (prevents Turbopack HMR crash path) */}
       <script
         id="product-schema"
         type="application/ld+json"
         dangerouslySetInnerHTML={{
           __html:
-            safeJsonLd(productSchema),
+            safeJsonLd(
+              productSchema
+            ),
         }}
       />
 
-      <ClientUX
-        product={product}
-        stockQty={stockQty}
-        options={scopedOptions}
+      {/*
+       * Analytics now happens AFTER the product renders.
+       * Analytics downtime can no longer block this page.
+       */}
+      <ProductViewTracker
+        productId={
+          product.id ??
+          null
+        }
+        slug={
+          product.slug ||
+          slug ||
+          ""
+        }
+      />
 
-        // Per-variant available stock keyed by strapiSizeId (if present) or variant.id
+      <ClientUX
+        product={
+          product
+        }
+        stockQty={
+          stockQty
+        }
+        options={
+          scopedOptions
+        }
         stockByVariantKey={
           prismaStock.stockByVariantKey
         }
-
-        // OPTIONAL: if ClientUX supports this, you can pass it too:
-        isOutOfStock={!isInStock}
+        isOutOfStock={
+          !isInStock
+        }
       />
     </main>
   );
