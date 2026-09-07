@@ -14,6 +14,23 @@ const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
   "https://www.thednalabstore.com";
 
+const RAW_STRAPI_ORIGIN =
+  process.env.STRAPI_API_ORIGIN ||
+  process.env.STRAPI_URL ||
+  process.env.NEXT_PUBLIC_STRAPI_URL ||
+  process.env.NEXT_PUBLIC_STRAPI_ORIGIN ||
+  process.env.NEXT_PUBLIC_STRAPI_API_URL ||
+  process.env.NEXT_PUBLIC_STRAPI_API_ORIGIN ||
+  process.env.STRAPI_API_URL ||
+  "http://127.0.0.1:1337";
+
+const STRAPI_ORIGIN = String(RAW_STRAPI_ORIGIN || "")
+  .trim()
+  .replace(/\/+$/, "")
+  .replace(/\/api$/, "");
+
+const PRODUCT_INDEX_FETCH_TIMEOUT_MS = 10000;
+
 /* ───────── SEO (no UI/UX or business logic impact) ───────── */
 
 const BRAND = "TDLS";
@@ -125,91 +142,29 @@ function pickStrapiProductName(node) {
   );
 }
 
-/* ───────── Strapi fetch helper (via Next proxy) ───────── */
+/* ───────── Strapi fetch helper (direct server read) ───────── */
 
 const PRODUCTS_PAGE_SIZE = 24;
 const PRODUCTS_FETCH_CONCURRENCY = 3;
 const MAX_PRODUCT_PAGES = 1000;
 
-function buildProductsStrapiPath(page) {
+function buildProductsStrapiPath(page, populate = true) {
   const params = new URLSearchParams();
 
-  params.set(
-    "pagination[page]",
-    String(page)
-  );
-
-  params.set(
-    "pagination[pageSize]",
-    String(PRODUCTS_PAGE_SIZE)
-  );
-
-  params.set(
-    "pagination[withCount]",
-    "true"
-  );
+  params.set("pagination[page]", String(page));
+  params.set("pagination[pageSize]", String(PRODUCTS_PAGE_SIZE));
+  params.set("pagination[withCount]", "true");
 
   /*
-   * Product media used by ProductCard / QuickView.
+   * Use Strapi's schema-aware first-level populate instead of hard-coding
+   * relation names here. This prevents one renamed/missing relation from
+   * invalidating the entire catalog request.
    */
-  params.set(
-    "populate[image]",
-    "*"
-  );
-
-  params.set(
-    "populate[images]",
-    "*"
-  );
-
-  params.set(
-    "populate[gallery]",
-    "*"
-  );
-
-  /*
-   * Current TDLS Strapi product relation.
-   */
-  params.set(
-    "populate[product_variants][populate][sizes]",
-    "*"
-  );
-
-  params.set(
-    "populate[product_variants][populate][image]",
-    "*"
-  );
-
-  params.set(
-    "populate[product_variants][populate][color]",
-    "*"
-  );
-
-  /*
-   * Taxonomy relations used by the existing All Products filter system.
-   */
-  const taxonomyRelations = [
-    "audience_categories",
-    "categories",
-    "sub_categories",
-    "events_products_collections",
-    "gender_groups",
-    "age_groups",
-  ];
-
-  for (const relation of taxonomyRelations) {
-    params.set(
-      `populate[${relation}][fields][0]`,
-      "slug"
-    );
-
-    params.set(
-      `populate[${relation}][fields][1]`,
-      "name"
-    );
+  if (populate) {
+    params.set("populate", "*");
   }
 
-  return `/products?${params.toString()}`;
+  return `/api/products?${params.toString()}`;
 }
 
 function readPagination(payload) {
@@ -284,10 +239,10 @@ function readPagination(payload) {
 }
 
 /**
- * One proxy request.
+ * One Strapi page request.
  *
  * IMPORTANT:
- * A Strapi/proxy failure must NOT throw through the Next.js page render.
+ * A Strapi failure must NOT throw through the Next.js page render.
  * Returning null allows the caller to retry and, if necessary, let the
  * existing AllProductsClient browser fallback take over.
  */
@@ -296,109 +251,99 @@ async function fetchProductsPageFromStrapi(
   page,
   noCache = false
 ) {
-  try {
-    const base =
-      (
-        appBaseUrl ||
-        SITE_URL
-      ).replace(
-        /\/+$/,
-        ""
-      );
+  const fetchAttempt = async (populate) => {
+    const controller = new AbortController();
 
-    /*
-     * Public catalog reads must remain public so /api/strapi can use its
-     * existing CDN + memory cache.
-     */
-    const url =
-      new URL(
-        "/api/strapi",
-        base
-      );
+    const timer = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {}
+    }, PRODUCT_INDEX_FETCH_TIMEOUT_MS);
 
-    url.searchParams.set(
-      "path",
-      buildProductsStrapiPath(
-        page
-      )
-    );
+    try {
+      const url =
+        `${STRAPI_ORIGIN}${buildProductsStrapiPath(
+          page,
+          populate
+        )}`;
 
-    /*
-     * Only the retry bypasses proxy memory/cache.
-     */
-    if (noCache) {
-      url.searchParams.set(
-        "noCache",
-        "1"
-      );
-    }
+      const res = await fetch(url, {
+        method: "GET",
 
-    const res =
-      await fetch(
-        url.toString(),
-        {
-          method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
 
-          headers: {
-            Accept:
-              "application/json",
-          },
+        signal: controller.signal,
 
-          next: {
-            revalidate,
+        ...(noCache
+          ? {
+              cache: "no-store",
+            }
+          : {
+              next: {
+                revalidate,
 
-            tags: [
-              "tdls-products-index",
-            ],
-          },
-        }
-      );
+                tags: [
+                  "tdls-products-index",
+                ],
+              },
+            }),
+      });
 
-    if (!res.ok) {
+      if (!res.ok) {
+        return null;
+      }
+
+      const strapiPayload =
+        await res
+          .json()
+          .catch(
+            () => null
+          );
+
+      if (!strapiPayload) {
+        return null;
+      }
+
+      const list =
+        Array.isArray(
+          strapiPayload?.data
+        )
+          ? strapiPayload.data
+          : [];
+
+      return {
+        products:
+          list,
+
+        pagination:
+          readPagination(
+            strapiPayload
+          ),
+      };
+    } catch {
       return null;
+    } finally {
+      clearTimeout(
+        timer
+      );
     }
+  };
 
-    const payload =
-      await res
-        .json()
-        .catch(
-          () => null
-        );
-
-    if (
-      !payload ||
-      payload?.ok !== true
-    ) {
-      return null;
-    }
-
-    const strapiPayload =
-      payload?.data ||
-      {};
-
-    const list =
-      Array.isArray(
-        strapiPayload?.data
-      )
-        ? strapiPayload.data
-        : [];
-
-    return {
-      products:
-        list,
-
-      pagination:
-        readPagination(
-          strapiPayload
-        ),
-    };
-  } catch {
-    /*
-     * Never convert temporary Strapi/proxy/network failure into a
-     * server-side Next.js exception.
-     */
-    return null;
-  }
+  /*
+   * Normal path: populate=* is schema-aware and gives ProductCard its media
+   * and first-level relations. If Strapi rejects population for any reason,
+   * retry the SAME page without populate so the catalog never becomes blank.
+   */
+  return (
+    (await fetchAttempt(
+      true
+    )) ||
+    (await fetchAttempt(
+      false
+    ))
+  );
 }
 
 /**
@@ -539,10 +484,6 @@ async function fetchProductsFromStrapi(
 
   /*
    * Retrieve remaining pages in small batches.
-   *
-   * If one required page completely fails, return [] rather than handing
-   * the client an incomplete catalog. The browser fallback can then retry
-   * the complete catalog itself.
    */
   for (
     let startPage = 2;
@@ -587,7 +528,7 @@ async function fetchProductsFromStrapi(
       );
 
     /*
-     * Do not render a partial catalog as if it were complete.
+     * A later page failure must NOT erase products already retrieved.
      */
     if (
       results.some(
@@ -595,7 +536,7 @@ async function fetchProductsFromStrapi(
           !result
       )
     ) {
-      return [];
+      return allProducts;
     }
 
     for (
@@ -621,7 +562,7 @@ export default async function ProductIndexPage() {
   /*
    * This function is intentionally non-throwing.
    *
-   * If Strapi/proxy is temporarily unavailable it returns [] and the
+   * If Strapi is temporarily unavailable it returns [] and the
    * existing AllProductsClient client-side recovery path takes over.
    */
   const products =
