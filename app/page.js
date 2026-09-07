@@ -1,5 +1,7 @@
 // FILE: app/page.js
 export const revalidate = 60;
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import ClientHomepage from "@/components/homepage/homepage-client";
 import BottomFloatingBarShell from "@/components/common/bottomfloatingbar.shell.server";
