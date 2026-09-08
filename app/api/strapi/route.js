@@ -48,11 +48,12 @@ const UPSTREAM_TIMEOUT_MS = (() => {
 
 /**
  * ✅ Default /products list profile when there are NO filters:
- * - "cardlite" (recommended): taxonomy + thumbnail (fast for BFBar/HomePanel/SlidingMenu)
- * - "filtersafe": taxonomy + product_variants.sizes + thumbnail (heavier; only needed when filters exist)
+ * - "cardlite" (recommended): taxonomy + images
+ * - "filtersafe": taxonomy + product_variants.sizes + images
  *
  * IMPORTANT:
- * Regardless of this default, when a /products LIST request contains filters[...] we ALWAYS enforce "filtersafe".
+ * Regardless of this default, when a /products LIST request contains filters[...]
+ * we ALWAYS enforce "filtersafe".
  */
 const DEFAULT_PRODUCTS_LIST_PROFILE = String(
   process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE || "cardlite"
@@ -86,8 +87,8 @@ const META_CACHE_CONTROL =
   "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, stale-if-error=86400";
 
 const PRODUCT_CACHE_CONTROL = (() => {
-  const maxAge = Number(process.env.TDLS_STRAPI_PRODUCT_MAXAGE_SEC ?? 15); // browser
-  const sMaxAge = Number(process.env.TDLS_STRAPI_PRODUCT_SMAXAGE_SEC ?? 180); // CDN
+  const maxAge = Number(process.env.TDLS_STRAPI_PRODUCT_MAXAGE_SEC ?? 15);
+  const sMaxAge = Number(process.env.TDLS_STRAPI_PRODUCT_SMAXAGE_SEC ?? 180);
   const swr = Number(process.env.TDLS_STRAPI_PRODUCT_SWR_SEC ?? 3600);
   const sie = Number(process.env.TDLS_STRAPI_PRODUCT_SIE_SEC ?? 86400);
 
@@ -109,6 +110,7 @@ const PRODUCT_CACHE_CONTROL = (() => {
 
 function cacheHeaders(cc) {
   const v = String(cc || "no-store");
+
   return {
     "cache-control": v,
     "CDN-Cache-Control": v,
@@ -119,14 +121,17 @@ function cacheHeaders(cc) {
 }
 
 function jsonResponse(bodyObj, status = 200, extraHeaders = {}) {
-  return new NextResponse(bodyObj === undefined ? "null" : JSON.stringify(bodyObj), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...cacheHeaders("no-store"),
-      ...extraHeaders,
-    },
-  });
+  return new NextResponse(
+    bodyObj === undefined ? "null" : JSON.stringify(bodyObj),
+    {
+      status,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        ...cacheHeaders("no-store"),
+        ...extraHeaders,
+      },
+    }
+  );
 }
 
 function rawJsonResponse(bodyString, status = 200, extraHeaders = {}) {
@@ -157,8 +162,14 @@ function normalizeOrigin(raw) {
     o = `${IS_PROD ? "https" : "http"}://${o}`;
   }
 
-  o = o.replace(/^http:\/\/localhost(?=[/:]|$)/i, "http://127.0.0.1");
-  o = o.replace(/\/+$/, "").replace(/\/api$/, "");
+  o = o.replace(
+    /^http:\/\/localhost(?=[/:]|$)/i,
+    "http://127.0.0.1"
+  );
+
+  o = o
+    .replace(/\/+$/, "")
+    .replace(/\/api$/, "");
 
   return o;
 }
@@ -167,8 +178,12 @@ function assertNotLocalhostInProd(origin) {
   if (!IS_PROD || !IS_VERCEL) return;
 
   const h = new URL(origin).hostname;
+
   const isLocal =
-    h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".local");
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h === "::1" ||
+    h.endsWith(".local");
 
   if (isLocal) {
     throw new Error(
@@ -188,19 +203,22 @@ try {
   STRAPI_API_BASE = STRAPI_ORIGIN + "/api";
 } catch (e) {
   STRAPI_BOOT_ERROR =
-    e instanceof Error ? e.message : String(e || "BOOT_ERROR");
+    e instanceof Error
+      ? e.message
+      : String(e || "BOOT_ERROR");
 }
 
 /**
- * Hardening: ensure `path` is a relative API path (not a full URL),
- * and does not contain CRLF or protocol tricks.
+ * Hardening: ensure `path` is a relative API path.
  *
- * ✅ Production stability: also accept full Strapi URLs ONLY if same-origin.
+ * Production stability:
+ * Also accept a full Strapi URL only when it belongs to the same configured
+ * Strapi origin.
  */
 function normalizeStrapiPath(input) {
   const p0 = String(input || "").trim();
-  if (!p0) return "";
 
+  if (!p0) return "";
   if (p0.startsWith("//")) return "";
   if (/[\r\n]/.test(p0)) return "";
 
@@ -209,31 +227,39 @@ function normalizeStrapiPath(input) {
       const u = new URL(p0);
       const origin = u.origin;
 
-      if (!STRAPI_ORIGIN || !STRAPI_API_BASE) return "";
+      if (!STRAPI_ORIGIN || !STRAPI_API_BASE) {
+        return "";
+      }
 
       const ok =
         origin === STRAPI_ORIGIN ||
         origin === new URL(STRAPI_API_BASE).origin;
 
-      if (!ok) return "";
+      if (!ok) {
+        return "";
+      }
 
       const idx = u.pathname.indexOf("/api/");
-      if (idx === -1) return "";
 
-      const rel = u.pathname.slice(idx + 4) + (u.search || "");
-      const relTrim = rel.startsWith("/") ? rel : `/${rel}`;
+      if (idx === -1) {
+        return "";
+      }
 
-      return relTrim;
+      const rel =
+        u.pathname.slice(idx + 4) +
+        (u.search || "");
+
+      return rel.startsWith("/")
+        ? rel
+        : `/${rel}`;
     } catch {
       return "";
     }
   }
 
-  const p = p0;
-
-  if (!p) return "";
-
-  return p.startsWith("/") ? p : `/${p}`;
+  return p0.startsWith("/")
+    ? p0
+    : `/${p0}`;
 }
 
 function splitPathAndQuery(p) {
@@ -254,7 +280,7 @@ function splitPathAndQuery(p) {
 }
 
 /**
- * ✅ Canonicalize query params (stable cache keys in production)
+ * Canonical query order gives stable proxy/cache keys.
  */
 function canonicalizePath(p) {
   const { pathname, search } =
@@ -283,8 +309,7 @@ function canonicalizePath(p) {
     out.append(k, v);
   }
 
-  const qs =
-    out.toString();
+  const qs = out.toString();
 
   return qs
     ? `${pathname}?${qs}`
@@ -366,9 +391,7 @@ function hasFiltersInPath(path) {
 }
 
 /**
- * ✅ NEW: Safe-bypass for your “lite taxonomy” /products requests
- * These are NOT heavy (no deep populate, no wildcard, no variants/images),
- * so we never sanitize them even if query-length/populate-count thresholds are crossed.
+ * Safe bypass for lite taxonomy /products requests.
  */
 function isSafeLiteProductsTaxonomyRequest(path) {
   const { pathname, search } =
@@ -382,7 +405,6 @@ function isSafeLiteProductsTaxonomyRequest(path) {
     return false;
   }
 
-  // If filters exist, we still treat it as potentially heavy (filtersafe will be enforced)
   if (hasFiltersInPath(path)) {
     return false;
   }
@@ -390,7 +412,6 @@ function isSafeLiteProductsTaxonomyRequest(path) {
   const params =
     new URLSearchParams(search);
 
-  // wildcard populate is NOT lite
   const pop =
     String(
       params.get("populate") || ""
@@ -400,12 +421,10 @@ function isSafeLiteProductsTaxonomyRequest(path) {
     return false;
   }
 
-  // must be object populate only (populate[rel]...)
   if (!hasObjectPopulate(params)) {
     return false;
   }
 
-  // block deep populates
   const blockedPrefixes = [
     "populate[product_variants",
     "populate[variants",
@@ -421,18 +440,11 @@ function isSafeLiteProductsTaxonomyRequest(path) {
     }
   }
 
-  // allow only populate[REL][fields][i] (or populate[REL][fields]) style
-  // (your request uses populate[rel][fields][0]=slug)
   for (const k of params.keys()) {
     if (!k.startsWith("populate[")) {
       continue;
     }
 
-    // ✅ FIX (SlidingMenuBar): JS regex anchors must be ^ and $ (not \A and \z).
-    // Allowed:
-    //   populate[rel][fields]
-    //   populate[rel][fields][0]
-    //   populate[rel][fields][1] ...
     const ok =
       /^populate\[[^\]]+\]\[fields\](?:\[\d+\])?$/.test(k);
 
@@ -441,7 +453,6 @@ function isSafeLiteProductsTaxonomyRequest(path) {
     }
   }
 
-  // keep it bounded
   const popCount =
     countPopulateKeys(params);
 
@@ -459,7 +470,6 @@ function isSafeLiteProductsTaxonomyRequest(path) {
 }
 
 function isHeavyPopulateRequest(path) {
-  // ✅ Do not classify your lite taxonomy requests as heavy
   if (
     isSafeLiteProductsTaxonomyRequest(path)
   ) {
@@ -502,8 +512,7 @@ function isHeavyPopulateRequest(path) {
       Math.max(
         10,
         Math.floor(
-          HEAVY_MAX_POPULATE_KEYS /
-            2
+          HEAVY_MAX_POPULATE_KEYS / 2
         )
       )
   ) {
@@ -513,105 +522,95 @@ function isHeavyPopulateRequest(path) {
   return false;
 }
 
-const DEFAULT_PRODUCTS_PAGESIZE =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_PRODUCTS_PAGESIZE ??
-          1000
-      );
+/**
+ * Keep the proxy default bounded.
+ *
+ * Individual storefront requests can still explicitly ask for their own
+ * pageSize (for example 24). This value is only the fallback default.
+ */
+const DEFAULT_PRODUCTS_PAGESIZE = (() => {
+  const n = Number(
+    process.env.TDLS_STRAPI_PRODUCTS_PAGESIZE ??
+      100
+  );
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 1000;
-    }
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 100;
+  }
 
+  return Math.min(
+    500,
+    Math.max(
+      25,
+      Math.round(n)
+    )
+  );
+})();
+
+const BROAD_FALLBACK_PAGESIZE = (() => {
+  const n = Number(
+    process.env.TDLS_STRAPI_BROAD_FALLBACK_PAGESIZE ??
+      400
+  );
+
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
     return Math.min(
-      1500,
-      Math.max(
-        25,
-        Math.round(n)
-      )
+      400,
+      DEFAULT_PRODUCTS_PAGESIZE
     );
-  })();
+  }
 
-const BROAD_FALLBACK_PAGESIZE =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_BROAD_FALLBACK_PAGESIZE ??
-          400
-      );
-
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return Math.min(
-        400,
-        DEFAULT_PRODUCTS_PAGESIZE
-      );
-    }
-
-    return Math.min(
-      DEFAULT_PRODUCTS_PAGESIZE,
-      Math.max(
-        50,
-        Math.round(n)
-      )
-    );
-  })();
+  return Math.min(
+    DEFAULT_PRODUCTS_PAGESIZE,
+    Math.max(
+      50,
+      Math.round(n)
+    )
+  );
+})();
 
 /* ───────── products populate profiles ───────── */
 
+/**
+ * Product taxonomy relations known to be used by the current storefront.
+ *
+ * IMPORTANT:
+ * Do NOT blindly add historical/possible aliases here.
+ *
+ * Strapi validates populate relation names. One relation that does not exist
+ * on Product can reject the complete query with HTTP 400 and make the
+ * storefront appear to contain zero products.
+ */
 const TAXONOMY_RELS = [
   [
     "audience_categories",
-    ["slug", "name", "order"],
+    ["slug", "name"],
   ],
   [
     "categories",
-    ["slug", "name", "order"],
+    ["slug", "name"],
   ],
   [
     "sub_categories",
-    ["slug", "name", "order"],
-  ],
-  [
-    "super_categories",
-    ["slug", "name", "order"],
+    ["slug", "name"],
   ],
   [
     "age_groups",
-    ["slug", "name", "order"],
+    ["slug", "name"],
   ],
   [
     "gender_groups",
-    ["slug", "name", "order"],
-  ],
-  [
-    "tiers",
-    ["slug", "name", "order"],
-  ],
-  [
-    "brand_tiers",
-    ["slug", "name", "order"],
-  ],
-  [
-    "collection_tiers",
-    ["slug", "name", "order"],
+    ["slug", "name"],
   ],
   [
     "events_products_collections",
-    ["slug", "name", "order"],
-  ],
-  [
-    "product_collections",
-    ["slug", "name", "order"],
+    ["slug", "name"],
   ],
 ];
 
@@ -622,36 +621,32 @@ const TAXONOMY_REL_SET =
     )
   );
 
-/* ───────── meta profiles (PUBLIC optimization) ───────── */
+/* ───────── meta profiles ───────── */
 
-const FAST_META_DEFAULT_PAGE_SIZE =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_META_PAGESIZE ??
-          1000
-      );
+const FAST_META_DEFAULT_PAGE_SIZE = (() => {
+  const n = Number(
+    process.env.TDLS_STRAPI_META_PAGESIZE ??
+      1000
+  );
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 1000;
-    }
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 1000;
+  }
 
-    return Math.min(
-      2000,
-      Math.max(
-        50,
-        Math.round(n)
-      )
-    );
-  })();
+  return Math.min(
+    2000,
+    Math.max(
+      50,
+      Math.round(n)
+    )
+  );
+})();
 
 /**
- * ✅ IMPORTANT PRODUCTION FIX:
- * audience-categories must include tier relations for your filter UI.
+ * audience-categories needs tier relations for the filter UI.
  */
 const META_FILTERSAFE_POPULATES =
   new Map([
@@ -868,9 +863,7 @@ function hasPopulateForRel(
   for (const k of params.keys()) {
     if (
       k === prefix ||
-      k.startsWith(
-        `${prefix}[`
-      )
+      k.startsWith(`${prefix}[`)
     ) {
       return true;
     }
@@ -918,11 +911,6 @@ function applyMetaFilterSafePopulate(
   }
 }
 
-/**
- * Fast meta profile:
- * - Removes populate=* (or no populate) and replaces with a deterministic minimal dataset
- * - BUT for audience-categories we still include tier relations (filtersafe meta)
- */
 function applyFastMetaProfile(
   pathname,
   params
@@ -946,9 +934,7 @@ function applyFastMetaProfile(
     ) {
       params.set(
         `fields[${i}]`,
-        String(
-          prof.fields[i]
-        )
+        String(prof.fields[i])
       );
     }
   }
@@ -961,9 +947,7 @@ function applyFastMetaProfile(
     ) {
       params.set(
         `sort[${i}]`,
-        String(
-          prof.sort[i]
-        )
+        String(prof.sort[i])
       );
     }
   }
@@ -1029,27 +1013,19 @@ function normalizeMetaPath(
     params.has("populate") &&
     hasObjectPopulate(params)
   ) {
-    params.delete(
-      "populate"
-    );
+    params.delete("populate");
   }
 
   const noOptimize =
-    params.get(
-      "noOptimize"
-    ) === "1";
+    params.get("noOptimize") === "1";
 
   if (noOptimize) {
-    params.delete(
-      "noOptimize"
-    );
+    params.delete("noOptimize");
   }
 
   const pop =
     String(
-      params.get(
-        "populate"
-      ) || ""
+      params.get("populate") || ""
     ).trim();
 
   const wantsFast =
@@ -1058,9 +1034,7 @@ function normalizeMetaPath(
     (
       !pop ||
       pop === "*" ||
-      !hasAnyPopulate(
-        params
-      )
+      !hasAnyPopulate(params)
     );
 
   if (wantsFast) {
@@ -1078,7 +1052,7 @@ function normalizeMetaPath(
     : pathname;
 }
 
-/* ───────── products populate (deterministic) ───────── */
+/* ───────── products populate ───────── */
 
 function applyProductsTaxonomyPopulate(
   params
@@ -1110,10 +1084,10 @@ function applyProductsTaxonomyPopulate(
 }
 
 /**
- * "cardlite" profile:
- * - taxonomy (fields only)
- * - thumbnail
- * - NO product_variants.sizes (keeps BFBar/HomePanel/SlidingMenu fast)
+ * Card-lite:
+ * - product taxonomy
+ * - images
+ * - no deep variants/sizes unless explicitly requested
  */
 function applyProductsCardLitePopulate(
   params
@@ -1121,116 +1095,6 @@ function applyProductsCardLitePopulate(
   applyProductsTaxonomyPopulate(
     params
   );
-
-  if (
-    !hasPopulateForRel(
-      params,
-      "thumbnail"
-    )
-  ) {
-    params.set(
-      "populate[thumbnail]",
-      "*"
-    );
-  }
-}
-
-function applyProductsFilterSafePopulate(
-  params
-) {
-  applyProductsTaxonomyPopulate(
-    params
-  );
-
-  if (
-    !hasPopulateForRel(
-      params,
-      "product_variants"
-    )
-  ) {
-    params.set(
-      "populate[product_variants][populate][sizes]",
-      "*"
-    );
-  } else {
-    let hasSizes = false;
-
-    for (
-      const k of
-        params.keys()
-    ) {
-      if (
-        k.startsWith(
-          "populate[product_variants][populate][sizes]"
-        )
-      ) {
-        hasSizes = true;
-        break;
-      }
-    }
-
-    if (!hasSizes) {
-      params.set(
-        "populate[product_variants][populate][sizes]",
-        "*"
-      );
-    }
-  }
-
-  if (
-    !hasPopulateForRel(
-      params,
-      "thumbnail"
-    )
-  ) {
-    params.set(
-      "populate[thumbnail]",
-      "*"
-    );
-  }
-}
-
-function applyProductDetailPopulate(
-  params
-) {
-  applyProductsTaxonomyPopulate(
-    params
-  );
-
-  if (
-    !hasPopulateForRel(
-      params,
-      "product_variants"
-    )
-  ) {
-    params.set(
-      "populate[product_variants][populate][sizes]",
-      "*"
-    );
-  } else {
-    let hasSizes = false;
-
-    for (
-      const k of
-        params.keys()
-    ) {
-      if (
-        k.startsWith(
-          "populate[product_variants][populate][sizes]"
-        )
-      ) {
-        hasSizes = true;
-        break;
-      }
-    }
-
-    if (!hasSizes) {
-      params.set(
-        "populate[product_variants][populate][sizes]",
-        "*"
-      );
-    }
-  }
 
   if (
     !hasPopulateForRel(
@@ -1243,66 +1107,122 @@ function applyProductDetailPopulate(
       "*"
     );
   }
+}
+
+function ensureProductVariantSizesPopulate(
+  params
+) {
+  if (
+    !hasPopulateForRel(
+      params,
+      "product_variants"
+    )
+  ) {
+    params.set(
+      "populate[product_variants][populate][sizes]",
+      "*"
+    );
+
+    return;
+  }
+
+  let hasSizes = false;
+
+  for (const k of params.keys()) {
+    if (
+      k.startsWith(
+        "populate[product_variants][populate][sizes]"
+      )
+    ) {
+      hasSizes = true;
+      break;
+    }
+  }
+
+  if (!hasSizes) {
+    params.set(
+      "populate[product_variants][populate][sizes]",
+      "*"
+    );
+  }
+}
+
+function applyProductsFilterSafePopulate(
+  params
+) {
+  applyProductsTaxonomyPopulate(
+    params
+  );
+
+  ensureProductVariantSizesPopulate(
+    params
+  );
 
   if (
     !hasPopulateForRel(
       params,
-      "thumbnail"
+      "images"
     )
   ) {
     params.set(
-      "populate[thumbnail]",
+      "populate[images]",
+      "*"
+    );
+  }
+}
+
+function applyProductDetailPopulate(
+  params
+) {
+  applyProductsTaxonomyPopulate(
+    params
+  );
+
+  ensureProductVariantSizesPopulate(
+    params
+  );
+
+  if (
+    !hasPopulateForRel(
+      params,
+      "images"
+    )
+  ) {
+    params.set(
+      "populate[images]",
       "*"
     );
   }
 }
 
 /**
- * Convert populate="*" or populate="a,b,c" to deterministic populate object.
- *
- * mode:
- * - "products-detail"
- * - "products-list-filtersafe"
- * - "products-list-cardlite"
+ * Convert populate="*" or a comma separated populate value into the
+ * deterministic Product population profile.
  */
 function normalizePopulateStringToObject(
   params,
-  mode =
-    "products-list-cardlite"
+  mode = "products-list-cardlite"
 ) {
   const raw =
     String(
-      params.get(
-        "populate"
-      ) || ""
+      params.get("populate") || ""
     ).trim();
 
   if (!raw) {
     return;
   }
 
-  if (
-    hasObjectPopulate(
-      params
-    )
-  ) {
-    params.delete(
-      "populate"
-    );
+  if (hasObjectPopulate(params)) {
+    params.delete("populate");
     return;
   }
 
-  params.delete(
-    "populate"
-  );
+  params.delete("populate");
 
   const parts =
     raw
       .split(",")
-      .map(
-        (s) =>
-          s.trim()
-      )
+      .map((s) => s.trim())
       .filter(Boolean);
 
   const hasStar =
@@ -1339,22 +1259,20 @@ function normalizePopulateStringToObject(
     }
 
     if (
-      TAXONOMY_REL_SET.has(
-        rel
-      )
+      TAXONOMY_REL_SET.has(rel)
     ) {
       continue;
     }
 
     if (
       rel === "variants" ||
-      rel ===
-        "product_variants"
+      rel === "product_variants"
     ) {
       params.set(
         "populate[product_variants][populate][sizes]",
         "*"
       );
+
       continue;
     }
 
@@ -1373,18 +1291,22 @@ function normalizePopulateStringToObject(
 }
 
 /**
- * Normalize /products requests:
- * - detail: always ensure product_variants.sizes + taxonomy + images + thumbnail
- * - list:
- *   - if filters exist => enforce FILTERSAFE (taxonomy + product_variants.sizes + thumbnail), ignoring client populate
- *   - else:
- *       - if populate="*" => convert to CARDLITE
- *       - if no populate at all => default CARDLITE
- *       - if client provided populate[...] (lite queries) => RESPECT it (do not force product_variants)
+ * Normalize /products requests.
+ *
+ * Detail:
+ * - taxonomy
+ * - product_variants.sizes
+ * - images
+ *
+ * Filtered list:
+ * - taxonomy
+ * - product_variants.sizes
+ * - images
+ *
+ * Unfiltered list:
+ * - card-lite unless explicit populate object supplied
  */
-function normalizeProductsPath(
-  p
-) {
+function normalizeProductsPath(p) {
   const {
     pathname,
     search,
@@ -1425,42 +1347,28 @@ function normalizeProductsPath(
             : "cardlite"
         );
 
-  // If caller mixed populate="*" with populate[rel]..., drop populate="*"
   if (
-    params.has(
-      "populate"
-    ) &&
-    hasObjectPopulate(
-      params
-    )
+    params.has("populate") &&
+    hasObjectPopulate(params)
   ) {
-    params.delete(
-      "populate"
-    );
+    params.delete("populate");
   }
 
-  // If populate is a string, normalize it according to mode
   if (
-    params.has(
-      "populate"
-    ) &&
-    !hasObjectPopulate(
-      params
-    )
+    params.has("populate") &&
+    !hasObjectPopulate(params)
   ) {
     normalizePopulateStringToObject(
       params,
       isDetail
         ? "products-detail"
-        : listProfile ===
-            "filtersafe"
+        : listProfile === "filtersafe"
           ? "products-list-filtersafe"
           : "products-list-cardlite"
     );
   }
 
   if (isDetail) {
-    // Always enforce detail minimums (safe even if caller already populated)
     applyProductDetailPopulate(
       params
     );
@@ -1469,64 +1377,34 @@ function normalizeProductsPath(
       listProfile ===
       "filtersafe"
     ) {
-      // Filtersafe list MUST be deterministic: strip client populate and enforce
-      stripPopulateParams(
-        params
-      );
+      /*
+       * Filtered product requests need a predictable payload, so replace
+       * arbitrary populate directives with the filter-safe profile.
+       */
+      stripPopulateParams(params);
 
       applyProductsFilterSafePopulate(
         params
       );
     } else {
-      // Card-lite list:
-      // - If no populate directives at all, enforce cardlite.
-      // - If caller provided populate[...] (lite queries), keep it.
-      if (
-        !hasAnyPopulate(
-          params
-        )
-      ) {
+      if (!hasAnyPopulate(params)) {
         applyProductsCardLitePopulate(
           params
         );
       } else {
-        // If caller explicitly asked for product_variants, ensure sizes.
         if (
           hasPopulateForRel(
             params,
             "product_variants"
           )
         ) {
-          let hasSizes =
-            false;
-
-          for (
-            const k of
-              params.keys()
-          ) {
-            if (
-              k.startsWith(
-                "populate[product_variants][populate][sizes]"
-              )
-            ) {
-              hasSizes =
-                true;
-              break;
-            }
-          }
-
-          if (!hasSizes) {
-            params.set(
-              "populate[product_variants][populate][sizes]",
-              "*"
-            );
-          }
+          ensureProductVariantSizesPopulate(
+            params
+          );
         }
 
         /*
-         * Backward compatibility:
-         * older callers may still send populate[variants] even though the
-         * current Strapi product relation is product_variants.
+         * Backward compatibility for old caller relation name "variants".
          */
         if (
           hasPopulateForRel(
@@ -1551,11 +1429,8 @@ function normalizeProductsPath(
             );
 
           for (
-            const [
-              k,
-              v,
-            ] of
-              legacyEntries
+            const [k, v]
+            of legacyEntries
           ) {
             params.delete(k);
 
@@ -1571,44 +1446,20 @@ function normalizeProductsPath(
             );
           }
 
-          let hasSizes =
-            false;
-
-          for (
-            const k of
-              params.keys()
-          ) {
-            if (
-              k.startsWith(
-                "populate[product_variants][populate][sizes]"
-              )
-            ) {
-              hasSizes =
-                true;
-              break;
-            }
-          }
-
-          if (!hasSizes) {
-            params.set(
-              "populate[product_variants][populate][sizes]",
-              "*"
-            );
-          }
+          ensureProductVariantSizesPopulate(
+            params
+          );
         }
       }
     }
   }
 
-  // pagination defaults for list
   if (isList) {
     const pageSizeKey =
       "pagination[pageSize]";
 
     const existing =
-      params.get(
-        pageSizeKey
-      );
+      params.get(pageSizeKey);
 
     if (!existing) {
       params.set(
@@ -1655,12 +1506,8 @@ function normalizeProductsPath(
 }
 
 /**
- * ✅ PUBLIC products list enforcement:
- * We ONLY enforce deterministically when:
- * - filters are present (must be filtersafe)
- * - populate="*" or no populate is present (we rewrite to cardlite by default to keep BFBar/HomePanel fast)
- *
- * If caller provided explicit populate[...] (lite queries), and there are no filters, we do NOT override it.
+ * Decide whether a public /products list needs deterministic proxy
+ * normalization.
  */
 function shouldForcePublicProductsList(
   path
@@ -1678,11 +1525,7 @@ function shouldForcePublicProductsList(
     return false;
   }
 
-  if (
-    hasFiltersInPath(
-      path
-    )
-  ) {
+  if (hasFiltersInPath(path)) {
     return true;
   }
 
@@ -1693,20 +1536,14 @@ function shouldForcePublicProductsList(
 
   const pop =
     String(
-      params.get(
-        "populate"
-      ) || ""
+      params.get("populate") || ""
     ).trim();
 
   const hasAnyPop =
-    hasAnyPopulate(
-      params
-    );
+    hasAnyPopulate(params);
 
   const hasObjPop =
-    hasObjectPopulate(
-      params
-    );
+    hasObjectPopulate(params);
 
   if (!hasAnyPop) {
     return true;
@@ -1716,7 +1553,6 @@ function shouldForcePublicProductsList(
     return true;
   }
 
-  // explicit populate[...] => do NOT force
   if (hasObjPop) {
     return false;
   }
@@ -1725,13 +1561,9 @@ function shouldForcePublicProductsList(
 }
 
 /**
- * Force to a safe public list profile (used by heavy-guard sanitizer).
- * If filters exist => filtersafe
- * Else => cardlite
+ * Force a safe public Product-list profile.
  */
-function forcePublicProductsListPath(
-  p
-) {
+function forcePublicProductsListPath(p) {
   const {
     pathname,
     search,
@@ -1751,22 +1583,15 @@ function forcePublicProductsListPath(
     );
 
   if (
-    params.get(
-      "noOptimize"
-    ) === "1"
+    params.get("noOptimize") === "1"
   ) {
-    params.delete(
-      "noOptimize"
-    );
+    params.delete("noOptimize");
   }
 
   const hasFilters =
     hasFiltersInPath(p);
 
-  // strip client populate directives then apply deterministic profile
-  stripPopulateParams(
-    params
-  );
+  stripPopulateParams(params);
 
   if (hasFilters) {
     applyProductsFilterSafePopulate(
@@ -1810,11 +1635,9 @@ function forcePublicProductsListPath(
     : pathname;
 }
 
-/* ───────── PUBLIC heavy-guard sanitizers ───────── */
+/* ───────── public heavy guard sanitizers ───────── */
 
-function sanitizeMetaPathForPublic(
-  p
-) {
+function sanitizeMetaPathForPublic(p) {
   const {
     pathname,
     search,
@@ -1826,9 +1649,7 @@ function sanitizeMetaPathForPublic(
       search || ""
     );
 
-  stripPopulateParams(
-    params
-  );
+  stripPopulateParams(params);
 
   applyFastMetaProfile(
     pathname,
@@ -1848,6 +1669,86 @@ function sanitizeProductsListPathForPublic(
 ) {
   return forcePublicProductsListPath(
     p
+  );
+}
+
+/* ───────── product schema compatibility fallback ───────── */
+
+/**
+ * Build a schema-safe retry after Strapi rejects an optimized product populate
+ * tree with HTTP 400.
+ *
+ * populate=* asks Strapi for first-level relations that actually exist in its
+ * installed Product schema.
+ *
+ * All filters, sorting and pagination are retained.
+ */
+function buildProductsCompatibilityPath(
+  p
+) {
+  const {
+    pathname,
+    search,
+  } =
+    splitPathAndQuery(p);
+
+  const isProductEndpoint =
+    pathname === "/products" ||
+    pathname.startsWith(
+      "/products/"
+    );
+
+  if (!isProductEndpoint) {
+    return p;
+  }
+
+  const params =
+    new URLSearchParams(
+      search || ""
+    );
+
+  stripPopulateParams(params);
+
+  params.set(
+    "populate",
+    "*"
+  );
+
+  if (
+    pathname === "/products"
+  ) {
+    if (
+      !params.get(
+        "pagination[pageSize]"
+      )
+    ) {
+      params.set(
+        "pagination[pageSize]",
+        String(
+          DEFAULT_PRODUCTS_PAGESIZE
+        )
+      );
+    }
+
+    if (
+      !params.get(
+        "pagination[page]"
+      )
+    ) {
+      params.set(
+        "pagination[page]",
+        "1"
+      );
+    }
+  }
+
+  const qs =
+    params.toString();
+
+  return canonicalizePath(
+    qs
+      ? `${pathname}?${qs}`
+      : pathname
   );
 }
 
@@ -1880,9 +1781,7 @@ function buildTargetUrl(
 
   if (search) {
     const params =
-      new URLSearchParams(
-        search
-      );
+      new URLSearchParams(search);
 
     const qs =
       params.toString();
@@ -1929,9 +1828,9 @@ function fetchWithTimeout(
 
 function sleep(ms) {
   return new Promise(
-    (r) =>
+    (resolve) =>
       setTimeout(
-        r,
+        resolve,
         ms
       )
   );
@@ -1957,17 +1856,11 @@ const RETRY_DELAYS_PRODUCTS =
   [0, 140, 320];
 
 const RETRY_DELAYS_META =
-  [
-    0,
-    180,
-    420,
-    900,
-  ];
+  [0, 180, 420, 900];
 
-/* ───────── Prisma lazy-load (stability + speed) ───────── */
+/* ───────── Prisma lazy-load ───────── */
 
-let _prismaPromise =
-  null;
+let _prismaPromise = null;
 
 async function getPrisma() {
   if (_prismaPromise) {
@@ -1975,21 +1868,19 @@ async function getPrisma() {
   }
 
   _prismaPromise =
-    import(
-      "@/lib/prisma"
-    ).then(
-      (m) =>
-        m?.default ??
-        m
-    );
+    import("@/lib/prisma")
+      .then(
+        (m) =>
+          m?.default ??
+          m
+      );
 
   return _prismaPromise;
 }
 
-/* ───────── micro-cache + in-flight dedupe (persist per runtime instance) ───────── */
+/* ───────── caches + in-flight dedupe ───────── */
 
-const G =
-  globalThis;
+const G = globalThis;
 
 const INFLIGHT =
   G.__TDLS_STRAPI_INFLIGHT__ ??
@@ -2038,243 +1929,197 @@ function metaAnyKeyFromPathname(
   return `pub|meta|__any__:${pathname}`;
 }
 
-const MEM_MAX_BYTES_META =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_MEMCACHE_MAX_BYTES_META ||
-          1024 * 1024
-      );
-
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return (
-        1024 *
-        1024
-      );
-    }
-
-    return Math.min(
-      2 *
-        1024 *
-        1024,
-      Math.max(
-        128 *
-          1024,
-        Math.round(n)
-      )
+const MEM_MAX_BYTES_META = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_MEMCACHE_MAX_BYTES_META ||
+        1024 * 1024
     );
-  })();
 
-const MEM_MAX_BYTES_PROD =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_MEMCACHE_MAX_BYTES_PROD ||
-          8 *
-            1024 *
-            1024
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 1024 * 1024;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return (
-        8 *
-        1024 *
-        1024
-      );
-    }
+  return Math.min(
+    2 * 1024 * 1024,
+    Math.max(
+      128 * 1024,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      16 *
-        1024 *
-        1024,
-      Math.max(
-        512 *
-          1024,
-        Math.round(n)
-      )
+const MEM_MAX_BYTES_PROD = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_MEMCACHE_MAX_BYTES_PROD ||
+        8 * 1024 * 1024
     );
-  })();
 
-const LAST_GOOD_MAX_BYTES =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_LASTGOOD_MAX_BYTES ||
-          24 *
-            1024 *
-            1024
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 8 * 1024 * 1024;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return (
-        24 *
-        1024 *
-        1024
-      );
-    }
+  return Math.min(
+    16 * 1024 * 1024,
+    Math.max(
+      512 * 1024,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      40 *
-        1024 *
-        1024,
-      Math.max(
-        2 *
-          1024 *
-          1024,
-        Math.round(n)
-      )
+const LAST_GOOD_MAX_BYTES = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_LASTGOOD_MAX_BYTES ||
+        24 * 1024 * 1024
     );
-  })();
 
-const MEM_TTL_MS =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_MEMCACHE_TTL_MS ||
-          120000
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 24 * 1024 * 1024;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 120000;
-    }
+  return Math.min(
+    40 * 1024 * 1024,
+    Math.max(
+      2 * 1024 * 1024,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      10 *
-        60 *
-        1000,
-      Math.max(
-        10 *
-          1000,
-        Math.round(n)
-      )
+const MEM_TTL_MS = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_MEMCACHE_TTL_MS ||
+        120000
     );
-  })();
 
-const MEM_PROD_TTL_MS =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS ||
-          45000
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 120000;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 45000;
-    }
+  return Math.min(
+    10 * 60 * 1000,
+    Math.max(
+      10 * 1000,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      120 *
-        1000,
-      Math.max(
-        2000,
-        Math.round(n)
-      )
+const MEM_PROD_TTL_MS = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_MEMCACHE_PRODUCTS_TTL_MS ||
+        45000
     );
-  })();
 
-const LAST_GOOD_TTL_MS =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_LASTGOOD_TTL_MS ||
-          180000
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 45000;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 180000;
-    }
+  return Math.min(
+    120 * 1000,
+    Math.max(
+      2000,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      15 *
-        60 *
-        1000,
-      Math.max(
-        30 *
-          1000,
-        Math.round(n)
-      )
+const LAST_GOOD_TTL_MS = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_LASTGOOD_TTL_MS ||
+        180000
     );
-  })();
 
-const LAST_GOOD_ANY_TTL_MS =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_LASTGOOD_ANY_TTL_MS ||
-          600000
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 180000;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 600000;
-    }
+  return Math.min(
+    15 * 60 * 1000,
+    Math.max(
+      30 * 1000,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      60 *
-        60 *
-        1000,
-      Math.max(
-        60 *
-          1000,
-        Math.round(n)
-      )
+const LAST_GOOD_ANY_TTL_MS = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_LASTGOOD_ANY_TTL_MS ||
+        600000
     );
-  })();
 
-const STOCK_CACHE_TTL_MS =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STOCKCACHE_TTL_MS ||
-          300000
-      );
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 600000;
+  }
 
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return 300000;
-    }
+  return Math.min(
+    60 * 60 * 1000,
+    Math.max(
+      60 * 1000,
+      Math.round(n)
+    )
+  );
+})();
 
-    return Math.min(
-      30 *
-        60 *
-        1000,
-      Math.max(
-        30 *
-          1000,
-        Math.round(n)
-      )
+const STOCK_CACHE_TTL_MS = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STOCKCACHE_TTL_MS ||
+        300000
     );
-  })();
+
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 300000;
+  }
+
+  return Math.min(
+    30 * 60 * 1000,
+    Math.max(
+      30 * 1000,
+      Math.round(n)
+    )
+  );
+})();
 
 function memGet(
   map,
@@ -2288,8 +2133,7 @@ function memGet(
   }
 
   if (
-    v.exp <=
-    Date.now()
+    v.exp <= Date.now()
   ) {
     map.delete(key);
     return null;
@@ -2314,9 +2158,7 @@ function memSet(
   }
 
   const lim =
-    Number.isFinite(
-      maxBytes
-    ) &&
+    Number.isFinite(maxBytes) &&
     maxBytes > 0
       ? maxBytes
       : MEM_MAX_BYTES_META;
@@ -2329,9 +2171,7 @@ function memSet(
   }
 
   const ttl =
-    Number.isFinite(
-      ttlMs
-    ) &&
+    Number.isFinite(ttlMs) &&
     ttlMs > 0
       ? ttlMs
       : MEM_TTL_MS;
@@ -2348,25 +2188,18 @@ function memSet(
   );
 }
 
-function lastGoodGet(
-  key
-) {
+function lastGoodGet(key) {
   const v =
-    LAST_GOOD.get(
-      key
-    );
+    LAST_GOOD.get(key);
 
   if (!v) {
     return null;
   }
 
   if (
-    v.exp <=
-    Date.now()
+    v.exp <= Date.now()
   ) {
-    LAST_GOOD.delete(
-      key
-    );
+    LAST_GOOD.delete(key);
     return null;
   }
 
@@ -2394,9 +2227,7 @@ function lastGoodSet(
   }
 
   const ttl =
-    Number.isFinite(
-      ttlMs
-    ) &&
+    Number.isFinite(ttlMs) &&
     ttlMs > 0
       ? ttlMs
       : LAST_GOOD_TTL_MS;
@@ -2412,25 +2243,18 @@ function lastGoodSet(
   );
 }
 
-function stockCacheGet(
-  sizeId
-) {
+function stockCacheGet(sizeId) {
   const v =
-    STOCK_CACHE.get(
-      sizeId
-    );
+    STOCK_CACHE.get(sizeId);
 
   if (!v) {
     return null;
   }
 
   if (
-    v.exp <=
-    Date.now()
+    v.exp <= Date.now()
   ) {
-    STOCK_CACHE.delete(
-      sizeId
-    );
+    STOCK_CACHE.delete(sizeId);
     return null;
   }
 
@@ -2442,9 +2266,7 @@ function stockCacheSet(
   stock
 ) {
   if (
-    !Number.isFinite(
-      sizeId
-    ) ||
+    !Number.isFinite(sizeId) ||
     sizeId <= 0
   ) {
     return;
@@ -2483,27 +2305,20 @@ async function runDedupe(
   }
 
   const p =
-    (
-      async () => {
-        try {
-          return await fn();
-        } finally {
-          INFLIGHT.delete(
-            key
-          );
-        }
+    (async () => {
+      try {
+        return await fn();
+      } finally {
+        INFLIGHT.delete(key);
       }
-    )();
+    })();
 
-  INFLIGHT.set(
-    key,
-    p
-  );
+  INFLIGHT.set(key, p);
 
   return p;
 }
 
-/* ───────── warm meta caches (soft preload) ───────── */
+/* ───────── warm meta caches ───────── */
 
 const WARM_STATE =
   G.__TDLS_STRAPI_WARM_STATE__ ??
@@ -2514,39 +2329,29 @@ const WARM_STATE =
       }
   );
 
-const WARM_TTL_MS =
-  (() => {
-    const n =
-      Number(
-        process.env
-          .TDLS_STRAPI_WARM_TTL_MS ||
-          10 *
-            60 *
-            1000
-      );
-
-    if (
-      !Number.isFinite(n) ||
-      n <= 0
-    ) {
-      return (
-        10 *
-        60 *
-        1000
-      );
-    }
-
-    return Math.min(
-      60 *
-        60 *
-        1000,
-      Math.max(
-        60 *
-          1000,
-        Math.round(n)
-      )
+const WARM_TTL_MS = (() => {
+  const n =
+    Number(
+      process.env
+        .TDLS_STRAPI_WARM_TTL_MS ||
+        10 * 60 * 1000
     );
-  })();
+
+  if (
+    !Number.isFinite(n) ||
+    n <= 0
+  ) {
+    return 10 * 60 * 1000;
+  }
+
+  return Math.min(
+    60 * 60 * 1000,
+    Math.max(
+      60 * 1000,
+      Math.round(n)
+    )
+  );
+})();
 
 async function warmMetaCachesIfNeeded(
   baseHeaders
@@ -2572,24 +2377,19 @@ async function warmMetaCachesIfNeeded(
 
   await Promise.allSettled(
     paths.map(
-      async (
-        pathname
-      ) => {
+      async (pathname) => {
         const eff =
           canonicalizePath(
             normalizeMetaPath(
               `${pathname}?populate=*`,
               {
-                isPublic:
-                  true,
+                isPublic: true,
               }
             )
           );
 
         const target =
-          buildTargetUrl(
-            eff
-          );
+          buildTargetUrl(eff);
 
         const cacheKey =
           `pub|meta|${eff}`;
@@ -2611,10 +2411,6 @@ async function warmMetaCachesIfNeeded(
           return;
         }
 
-        /**
-         * ✅ NEW: Use the SAME inflight key shape as real meta requests
-         * so concurrent UI requests join the warm promise (no double fetch).
-         */
         const dk =
           `meta|${eff}|pub|${
             STRAPI_TOKEN
@@ -2647,9 +2443,7 @@ async function warmMetaCachesIfNeeded(
                 );
 
             const parsed =
-              safeJsonParse(
-                text
-              );
+              safeJsonParse(text);
 
             if (!parsed) {
               return;
@@ -2658,13 +2452,10 @@ async function warmMetaCachesIfNeeded(
             const payloadStr =
               JSON.stringify(
                 {
-                  ok:
-                    true,
-                  data:
-                    parsed,
+                  ok: true,
+                  data: parsed,
                   ms: 0,
-                  warmed:
-                    true,
+                  warmed: true,
                 }
               );
 
@@ -2708,9 +2499,7 @@ function collectSizeIdsFromStrapiProducts(
     strapiData?.data;
 
   const items =
-    Array.isArray(
-      itemsRaw
-    )
+    Array.isArray(itemsRaw)
       ? itemsRaw
       : itemsRaw
         ? [itemsRaw]
@@ -2719,12 +2508,8 @@ function collectSizeIdsFromStrapiProducts(
   const sizeIds =
     new Set();
 
-  for (
-    const item of
-      items
-  ) {
-    const row =
-      item;
+  for (const item of items) {
+    const row = item;
 
     const attrs =
       row.attributes ||
@@ -2752,21 +2537,15 @@ function collectSizeIdsFromStrapiProducts(
     }
 
     if (
-      !Array.isArray(
-        variants
-      )
+      !Array.isArray(variants)
     ) {
       continue;
     }
 
-    for (
-      const v of
-        variants
-    ) {
+    for (const v of variants) {
       let sizes =
         v.sizes ||
-        v.attributes
-          ?.sizes ||
+        v.attributes?.sizes ||
         [];
 
       if (
@@ -2781,39 +2560,25 @@ function collectSizeIdsFromStrapiProducts(
           );
       }
 
-      if (
-        !Array.isArray(
-          sizes
-        )
-      ) {
+      if (!Array.isArray(sizes)) {
         continue;
       }
 
-      for (
-        const s of
-          sizes
-      ) {
+      for (const s of sizes) {
         const rawId =
           s.id ??
           s.size_id ??
           s.strapiSizeId ??
-          s.attributes
-            ?.id;
+          s.attributes?.id;
 
         const sid =
-          Number(
-            rawId
-          );
+          Number(rawId);
 
         if (
-          Number.isFinite(
-            sid
-          ) &&
+          Number.isFinite(sid) &&
           sid > 0
         ) {
-          sizeIds.add(
-            sid
-          );
+          sizeIds.add(sid);
         }
       }
     }
@@ -2830,21 +2595,16 @@ async function getStockMapForSizeIds(
 ) {
   const ids =
     Array.from(
-      sizeIds ||
-      []
+      sizeIds || []
     );
 
   if (
-    ids.length ===
-    0
+    ids.length === 0
   ) {
     return {
-      bySizeId:
-        new Map(),
-      source:
-        "none",
-      error:
-        null,
+      bySizeId: new Map(),
+      source: "none",
+      error: null,
     };
   }
 
@@ -2858,17 +2618,13 @@ async function getStockMapForSizeIds(
         .findMany({
           where: {
             strapiSizeId: {
-              in:
-                ids,
+              in: ids,
             },
           },
 
           select: {
-            strapiSizeId:
-              true,
-
-            stockAvailable:
-              true,
+            strapiSizeId: true,
+            stockAvailable: true,
           },
         });
 
@@ -2876,8 +2632,8 @@ async function getStockMapForSizeIds(
       new Map();
 
     for (
-      const v of
-        prismaVariants
+      const v
+      of prismaVariants
     ) {
       const sid =
         Number(
@@ -2888,13 +2644,10 @@ async function getStockMapForSizeIds(
         Number(
           v?.stockAvailable ??
           0
-        ) ||
-        0;
+        ) || 0;
 
       if (
-        Number.isFinite(
-          sid
-        ) &&
+        Number.isFinite(sid) &&
         sid > 0
       ) {
         bySizeId.set(
@@ -2911,10 +2664,8 @@ async function getStockMapForSizeIds(
 
     return {
       bySizeId,
-      source:
-        "prisma",
-      error:
-        null,
+      source: "prisma",
+      error: null,
     };
   } catch (e) {
     const bySizeId =
@@ -2922,18 +2673,12 @@ async function getStockMapForSizeIds(
 
     let hits = 0;
 
-    for (
-      const sid of
-        ids
-    ) {
+    for (const sid of ids) {
       const cached =
-        stockCacheGet(
-          sid
-        );
+        stockCacheGet(sid);
 
       if (
-        cached !=
-        null
+        cached != null
       ) {
         bySizeId.set(
           sid,
@@ -2950,8 +2695,7 @@ async function getStockMapForSizeIds(
         hits
           ? "cache"
           : "none",
-      error:
-        e,
+      error: e,
     };
   }
 }
@@ -2963,20 +2707,14 @@ function ensureAvailabilityDefaultsOnProducts(
     strapiData?.data;
 
   const items =
-    Array.isArray(
-      itemsRaw
-    )
+    Array.isArray(itemsRaw)
       ? itemsRaw
       : itemsRaw
         ? [itemsRaw]
         : [];
 
-  for (
-    const item of
-      items
-  ) {
-    const row =
-      item;
+  for (const item of items) {
+    const row = item;
 
     const attrs =
       row.attributes ||
@@ -3002,17 +2740,12 @@ function ensureAvailabilityDefaultsOnProducts(
     }
 
     if (
-      !Array.isArray(
-        variants
-      )
+      !Array.isArray(variants)
     ) {
       continue;
     }
 
-    for (
-      const v of
-        variants
-    ) {
+    for (const v of variants) {
       const vAttrs =
         v.attributes ||
         null;
@@ -3034,30 +2767,21 @@ function ensureAvailabilityDefaultsOnProducts(
           );
       }
 
-      if (
-        !Array.isArray(
-          sizes
-        )
-      ) {
+      if (!Array.isArray(sizes)) {
         continue;
       }
 
-      for (
-        const s of
-          sizes
-      ) {
+      for (const s of sizes) {
         const sAttrs =
           s.attributes ||
           null;
 
         const hasBool =
-          typeof s
-            .is_available ===
+          typeof s.is_available ===
             "boolean" ||
           (
             sAttrs &&
-            typeof sAttrs
-              .is_available ===
+            typeof sAttrs.is_available ===
               "boolean"
           );
 
@@ -3078,16 +2802,11 @@ function ensureAvailabilityDefaultsOnProducts(
           );
 
         const stockNum =
-          Number(
-            stockRaw
-          );
+          Number(stockRaw);
 
         const isAvailable =
-          Number.isFinite(
-            stockNum
-          )
-            ? stockNum >
-              0
+          Number.isFinite(stockNum)
+            ? stockNum > 0
             : true;
 
         s.is_available =
@@ -3119,8 +2838,7 @@ async function patchProductsWithPrismaStock(
     );
 
   if (
-    sizeIds.size ===
-    0
+    sizeIds.size === 0
   ) {
     return ensureAvailabilityDefaultsOnProducts(
       strapiData
@@ -3137,8 +2855,7 @@ async function patchProductsWithPrismaStock(
     );
 
   if (
-    source ===
-      "none" &&
+    source === "none" &&
     error
   ) {
     return ensureAvailabilityDefaultsOnProducts(
@@ -3146,12 +2863,8 @@ async function patchProductsWithPrismaStock(
     );
   }
 
-  for (
-    const item of
-      items
-  ) {
-    const row =
-      item;
+  for (const item of items) {
+    const row = item;
 
     const attrs =
       row.attributes ||
@@ -3177,17 +2890,12 @@ async function patchProductsWithPrismaStock(
     }
 
     if (
-      !Array.isArray(
-        variants
-      )
+      !Array.isArray(variants)
     ) {
       continue;
     }
 
-    for (
-      const v of
-        variants
-    ) {
+    for (const v of variants) {
       const vAttrs =
         v.attributes ||
         null;
@@ -3210,17 +2918,12 @@ async function patchProductsWithPrismaStock(
       }
 
       if (
-        !Array.isArray(
-          sizes
-        )
+        !Array.isArray(sizes)
       ) {
         continue;
       }
 
-      for (
-        const s of
-          sizes
-      ) {
+      for (const s of sizes) {
         const sAttrs =
           s.attributes ||
           null;
@@ -3232,32 +2935,24 @@ async function patchProductsWithPrismaStock(
           sAttrs?.id;
 
         const sid =
-          Number(
-            rawId
-          );
+          Number(rawId);
 
         if (
-          !Number.isFinite(
-            sid
-          ) ||
+          !Number.isFinite(sid) ||
           sid <= 0
         ) {
           continue;
         }
 
         if (
-          !bySizeId.has(
-            sid
-          )
+          !bySizeId.has(sid)
         ) {
           if (
-            typeof s
-              .is_available !==
+            typeof s.is_available !==
               "boolean" &&
             !(
               sAttrs &&
-              typeof sAttrs
-                .is_available ===
+              typeof sAttrs.is_available ===
                 "boolean"
             )
           ) {
@@ -3267,8 +2962,7 @@ async function patchProductsWithPrismaStock(
             if (sAttrs) {
               s.attributes = {
                 ...sAttrs,
-                is_available:
-                  true,
+                is_available: true,
               };
             }
           }
@@ -3278,15 +2972,11 @@ async function patchProductsWithPrismaStock(
 
         const liveStock =
           Number(
-            bySizeId.get(
-              sid
-            )
-          ) ||
-          0;
+            bySizeId.get(sid)
+          ) || 0;
 
         const isAvailable =
-          liveStock >
-          0;
+          liveStock > 0;
 
         s.stock_quantity =
           liveStock;
@@ -3317,7 +3007,7 @@ async function patchProductsWithPrismaStock(
   );
 }
 
-/* ───────── upstream fetch (retry hardened) ───────── */
+/* ───────── upstream fetch ───────── */
 
 async function fetchUpstreamResilient(
   target,
@@ -3325,9 +3015,7 @@ async function fetchUpstreamResilient(
   opts = {}
 ) {
   const delays =
-    Array.isArray(
-      opts.delays
-    )
+    Array.isArray(opts.delays)
       ? opts.delays
       : RETRY_DELAYS_PRODUCTS;
 
@@ -3340,37 +3028,33 @@ async function fetchUpstreamResilient(
           await fetchWithTimeout(
             target,
             {
-              method:
-                "GET",
+              method: "GET",
 
               headers: {
                 ...baseHeaders,
-
                 Authorization:
                   `Bearer ${STRAPI_TOKEN}`,
               },
 
-              cache:
-                "no-store",
+              cache: "no-store",
             }
           );
 
+        /*
+         * A stale/invalid read token should not break endpoints that are
+         * publicly readable in Strapi.
+         */
         if (
-          res.status ===
-          401
+          res.status === 401
         ) {
           res =
             await fetchWithTimeout(
               target,
               {
-                method:
-                  "GET",
-
+                method: "GET",
                 headers:
                   baseHeaders,
-
-                cache:
-                  "no-store",
+                cache: "no-store",
               }
             );
         }
@@ -3379,14 +3063,10 @@ async function fetchUpstreamResilient(
           await fetchWithTimeout(
             target,
             {
-              method:
-                "GET",
-
+              method: "GET",
               headers:
                 baseHeaders,
-
-              cache:
-                "no-store",
+              cache: "no-store",
             }
           );
       }
@@ -3394,22 +3074,18 @@ async function fetchUpstreamResilient(
       return res;
     };
 
-  let lastErr =
-    null;
+  let lastErr = null;
 
   for (
     let i = 0;
     i < delays.length;
     i++
   ) {
-    if (
-      delays[i]
-    ) {
+    if (delays[i]) {
       await sleep(
         delays[i] +
         Math.floor(
-          Math.random() *
-          60
+          Math.random() * 60
         )
       );
     }
@@ -3423,21 +3099,18 @@ async function fetchUpstreamResilient(
           res.status
         ) &&
         i <
-          delays.length -
-            1
+          delays.length - 1
       ) {
         continue;
       }
 
       return res;
     } catch (e) {
-      lastErr =
-        e;
+      lastErr = e;
 
       if (
         i ===
-        delays.length -
-          1
+        delays.length - 1
       ) {
         throw e;
       }
@@ -3458,9 +3131,7 @@ function productCountFromStrapiPayload(
     data?.data;
 
   if (
-    Array.isArray(
-      itemsRaw
-    )
+    Array.isArray(itemsRaw)
   ) {
     return itemsRaw.length;
   }
@@ -3479,16 +3150,13 @@ function isSuspectEmptyProductsResponse(
     data?.data;
 
   if (
-    !Array.isArray(
-      items
-    )
+    !Array.isArray(items)
   ) {
     return false;
   }
 
   if (
-    items.length !==
-    0
+    items.length !== 0
   ) {
     return false;
   }
@@ -3502,9 +3170,7 @@ function isSuspectEmptyProductsResponse(
     );
 
   return (
-    Number.isFinite(
-      total
-    ) &&
+    Number.isFinite(total) &&
     total > 0
   );
 }
@@ -3513,15 +3179,12 @@ function anyProductsListPayloadStr(
   profile
 ) {
   const key =
-    profile ===
-      "filtersafe"
+    profile === "filtersafe"
       ? LAST_GOOD_ANY_PRODUCTS_FILTERSAFE_KEY
       : LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY;
 
   const any =
-    lastGoodGet(
-      key
-    );
+    lastGoodGet(key);
 
   if (
     !any?.payloadStr
@@ -3551,9 +3214,7 @@ function anyProductsListPayloadStr(
     );
 
   if (
-    !Number.isFinite(
-      cnt
-    ) ||
+    !Number.isFinite(cnt) ||
     cnt <= 0
   ) {
     return null;
@@ -3565,7 +3226,10 @@ function anyProductsListPayloadStr(
 async function fetchBroaderProductsFallback(
   baseHeaders
 ) {
-  // Fallback is intentionally unfiltered and safe (cardlite), for reliability.
+  /*
+   * This fallback is deliberately used only for an UNFILTERED catalogue
+   * request. It must never replace a genuinely empty filtered result.
+   */
   const fallbackPath =
     canonicalizePath(
       forcePublicProductsListPath(
@@ -3594,6 +3258,36 @@ async function fetchBroaderProductsFallback(
     return null;
   }
 
+  /*
+   * If our optimized fallback itself is rejected because the live Strapi
+   * schema differs, retry schema-safe once.
+   */
+  if (
+    !res.ok &&
+    res.status === 400
+  ) {
+    const compatPath =
+      buildProductsCompatibilityPath(
+        fallbackPath
+      );
+
+    try {
+      res =
+        await fetchUpstreamResilient(
+          buildTargetUrl(
+            compatPath
+          ),
+          baseHeaders,
+          {
+            delays:
+              RETRY_DELAYS_PRODUCTS,
+          }
+        );
+    } catch {
+      return null;
+    }
+  }
+
   if (!res.ok) {
     return null;
   }
@@ -3613,14 +3307,9 @@ async function fetchBroaderProductsFallback(
     );
 
   const payloadObj = {
-    ok:
-      true,
-
+    ok: true,
     data,
-
-    degraded:
-      true,
-
+    degraded: true,
     reason:
       "BROAD_FALLBACK",
   };
@@ -3640,10 +3329,7 @@ async function fetchBroaderProductsFallback(
       parsed?.data
     );
 
-  if (
-    count <=
-    0
-  ) {
+  if (count <= 0) {
     return null;
   }
 
@@ -3652,27 +3338,19 @@ async function fetchBroaderProductsFallback(
 
 /* ───────── main handler ───────── */
 
-export async function GET(
-  req
-) {
+export async function GET(req) {
   const t0 =
     Date.now();
 
-  let guarded =
-    false;
+  let guarded = false;
 
   try {
-    if (
-      STRAPI_BOOT_ERROR
-    ) {
+    if (STRAPI_BOOT_ERROR) {
       return jsonResponse(
         {
-          ok:
-            false,
-
+          ok: false,
           error:
             "SERVER_MISCONFIGURED",
-
           message:
             STRAPI_BOOT_ERROR,
         },
@@ -3684,9 +3362,7 @@ export async function GET(
     }
 
     const url =
-      new URL(
-        req.url
-      );
+      new URL(req.url);
 
     const clientSecretRaw =
       url.searchParams.get(
@@ -3704,21 +3380,15 @@ export async function GET(
         "string" &&
       clientSecretRaw
         .trim()
-        .length >
-        0;
+        .length > 0;
 
     if (hasClientSecret) {
-      if (
-        !STRAPI_SYNC_SECRET
-      ) {
+      if (!STRAPI_SYNC_SECRET) {
         return jsonResponse(
           {
-            ok:
-              false,
-
+            ok: false,
             error:
               "SERVER_MISCONFIGURED",
-
             message:
               "Strapi sync secret is not configured",
           },
@@ -3735,12 +3405,9 @@ export async function GET(
       ) {
         return jsonResponse(
           {
-            ok:
-              false,
-
+            ok: false,
             error:
               "UNAUTHORIZED",
-
             message:
               "Invalid proxy secret",
           },
@@ -3752,25 +3419,19 @@ export async function GET(
     const rawPath =
       url.searchParams.get(
         "path"
-      ) ||
-      "";
+      ) || "";
 
     const normalizedPath0 =
       normalizeStrapiPath(
         rawPath
       );
 
-    if (
-      !normalizedPath0
-    ) {
+    if (!normalizedPath0) {
       return jsonResponse(
         {
-          ok:
-            false,
-
+          ok: false,
           error:
             "BAD_REQUEST",
-
           message:
             "Invalid or missing `path` query parameter (must be a relative Strapi API path).",
         },
@@ -3781,16 +3442,16 @@ export async function GET(
     const noCache =
       url.searchParams.get(
         "noCache"
-      ) ===
-      "1";
+      ) === "1";
 
     const allowHeavy =
       url.searchParams.get(
         "allowHeavy"
-      ) ===
-      "1";
+      ) === "1";
 
-    // Normalize products/meta behavior (respects lite populate[...] when no filters exist)
+    /*
+     * First normalize the request supplied by the client.
+     */
     let effectivePath =
       canonicalizePath(
         normalizeProductsPath(
@@ -3820,19 +3481,16 @@ export async function GET(
       effPathname ===
         "/products";
 
-    const productsListHasFilters =
+    let productsListHasFilters =
       isProductsList
         ? hasFiltersInPath(
             effectivePath
           )
         : false;
 
-    const productsListProfile =
-      productsListHasFilters
-        ? "filtersafe"
-        : "cardlite";
-
-    // Heavy guard (PUBLIC only)
+    /*
+     * Public heavy-query guard.
+     */
     if (
       HEAVY_GUARD_ENABLED &&
       !allowHeavy &&
@@ -3841,9 +3499,7 @@ export async function GET(
         effectivePath
       )
     ) {
-      if (
-        !isProductEndpoint
-      ) {
+      if (!isProductEndpoint) {
         effectivePath =
           canonicalizePath(
             sanitizeMetaPathForPublic(
@@ -3851,8 +3507,7 @@ export async function GET(
             )
           );
 
-        guarded =
-          true;
+        guarded = true;
       } else if (
         isProductsList
       ) {
@@ -3863,8 +3518,7 @@ export async function GET(
             )
           );
 
-        guarded =
-          true;
+        guarded = true;
       }
 
       ({
@@ -3886,25 +3540,30 @@ export async function GET(
         isProductEndpoint &&
         effPathname ===
           "/products";
+
+      productsListHasFilters =
+        isProductsList
+          ? hasFiltersInPath(
+              effectivePath
+            )
+          : false;
     }
 
-    // Meta path optimization (PUBLIC only)
+    /*
+     * Public metadata optimization.
+     */
     if (
       !hasClientSecret &&
       !isProductEndpoint
     ) {
-      const normalizedMeta =
-        normalizeMetaPath(
-          effectivePath,
-          {
-            isPublic:
-              true,
-          }
-        );
-
       effectivePath =
         canonicalizePath(
-          normalizedMeta
+          normalizeMetaPath(
+            effectivePath,
+            {
+              isPublic: true,
+            }
+          )
         );
 
       ({
@@ -3926,13 +3585,17 @@ export async function GET(
         isProductEndpoint &&
         effPathname ===
           "/products";
+
+      productsListHasFilters =
+        isProductsList
+          ? hasFiltersInPath(
+              effectivePath
+            )
+          : false;
     }
 
-    /**
-     * ✅ PUBLIC /products list enforcement (conditional)
-     * - filters => force filtersafe
-     * - populate="*" OR no populate => force cardlite (fast default)
-     * - explicit populate[...] lite queries => do NOT override
+    /*
+     * Public Product list normalization.
      */
     if (
       !hasClientSecret &&
@@ -3967,6 +3630,13 @@ export async function GET(
         isProductEndpoint &&
         effPathname ===
           "/products";
+
+      productsListHasFilters =
+        isProductsList
+          ? hasFiltersInPath(
+              effectivePath
+            )
+          : false;
     }
 
     const target =
@@ -4024,6 +3694,9 @@ export async function GET(
       );
     }
 
+    /*
+     * Runtime memory cache.
+     */
     if (CACHE_OK) {
       const map =
         isProductEndpoint
@@ -4036,12 +3709,9 @@ export async function GET(
           cacheKey
         );
 
-      if (
-        hit?.payloadStr
-      ) {
+      if (hit?.payloadStr) {
         const ms =
-          Date.now() -
-          t0;
+          Date.now() - t0;
 
         const parsed =
           isProductEndpoint
@@ -4062,7 +3732,6 @@ export async function GET(
           200,
           {
             ...hit.headers,
-
             ...cacheHeaders(
               cacheControl
             ),
@@ -4081,13 +3750,15 @@ export async function GET(
                 ? "1"
                 : "0",
 
+            "x-tdls-schema-compat":
+              "0",
+
             ...(
               isProductEndpoint
                 ? {
                     "x-tdls-products-count":
                       String(
-                        cnt ??
-                        0
+                        cnt ?? 0
                       ),
                   }
                 : {}
@@ -4141,7 +3812,7 @@ export async function GET(
                 ? RETRY_DELAYS_PRODUCTS
                 : RETRY_DELAYS_META;
 
-            const res =
+            let res =
               await fetchUpstreamResilient(
                 target,
                 baseHeaders,
@@ -4149,6 +3820,67 @@ export async function GET(
                   delays,
                 }
               );
+
+            /*
+             * CRITICAL PRODUCT COMPATIBILITY FIX
+             *
+             * An invalid optimized relation name causes Strapi 4 to reject the
+             * complete request with HTTP 400.
+             *
+             * Retry exactly once using schema-safe populate=* while preserving
+             * filters, pagination and sorting.
+             */
+            let usedSchemaCompat =
+              false;
+
+            if (
+              !res.ok &&
+              res.status === 400 &&
+              isProductEndpoint
+            ) {
+              const compatPath =
+                buildProductsCompatibilityPath(
+                  effectivePath
+                );
+
+              if (
+                compatPath !==
+                effectivePath
+              ) {
+                const compatTarget =
+                  buildTargetUrl(
+                    compatPath
+                  );
+
+                try {
+                  const compatRes =
+                    await fetchUpstreamResilient(
+                      compatTarget,
+                      baseHeaders,
+                      {
+                        delays,
+                      }
+                    );
+
+                  /*
+                   * Use compatibility response regardless of success so, when
+                   * it still fails, we expose the current-schema error rather
+                   * than the stale optimized-query error.
+                   */
+                  res = compatRes;
+
+                  if (compatRes.ok) {
+                    usedSchemaCompat =
+                      true;
+                  }
+                } catch {
+                  /*
+                   * Leave the original response untouched if compatibility
+                   * request itself cannot be completed.
+                   */
+                }
+              }
+            }
 
             if (!res.ok) {
               const text =
@@ -4159,18 +3891,13 @@ export async function GET(
                   );
 
               return {
-                ok:
-                  false,
-
+                ok: false,
                 status:
                   res.status,
-
                 statusText:
                   res.statusText,
-
                 errorText:
-                  text ||
-                  null,
+                  text || null,
               };
             }
 
@@ -4181,34 +3908,47 @@ export async function GET(
                 await res.json();
             } catch {
               return {
-                ok:
-                  false,
-
-                status:
-                  502,
-
+                ok: false,
+                status: 502,
                 statusText:
                   "Bad Gateway",
-
                 errorText:
                   "Invalid JSON",
               };
             }
 
+            /*
+             * If pagination metadata says products exist but this page came
+             * back empty, retry once.
+             */
             if (
               isProductsList &&
               isSuspectEmptyProductsResponse(
                 data
               )
             ) {
-              await sleep(
-                120
-              );
+              await sleep(120);
 
               try {
+                /*
+                 * If compatibility mode rescued the request, repeat that same
+                 * compatible path rather than returning to the rejected query.
+                 */
+                const retryPath =
+                  usedSchemaCompat
+                    ? buildProductsCompatibilityPath(
+                        effectivePath
+                      )
+                    : effectivePath;
+
+                const retryTarget =
+                  buildTargetUrl(
+                    retryPath
+                  );
+
                 const res2 =
                   await fetchUpstreamResilient(
-                    target,
+                    retryTarget,
                     baseHeaders,
                     {
                       delays:
@@ -4216,37 +3956,43 @@ export async function GET(
                     }
                   );
 
-                if (
-                  res2.ok
-                ) {
+                if (res2.ok) {
                   try {
                     const data2 =
-                      await res2
-                        .json();
+                      await res2.json();
 
                     if (
                       !isSuspectEmptyProductsResponse(
                         data2
                       )
                     ) {
-                      data =
-                        data2;
+                      data = data2;
                     }
                   } catch {}
                 }
               } catch {}
             }
 
-            if (
-              isProductEndpoint
-            ) {
+            if (isProductEndpoint) {
               data =
                 await patchProductsWithPrismaStock(
                   data
                 );
             }
 
-            // Products-list resiliency: prefer profile-matched "any" fallbacks
+            /*
+             * IMPORTANT:
+             *
+             * A filtered request returning [] may be entirely correct.
+             * Never replace it with arbitrary products from another filtered
+             * query or with an unfiltered catalogue fallback.
+             *
+             * Such fallback behavior is one cause of inconsistent filtering,
+             * counts and stale collection results.
+             *
+             * Fallback product substitution therefore runs only for an
+             * UNFILTERED catalogue request.
+             */
             if (
               !hasClientSecret &&
               isProductsList
@@ -4261,14 +4007,9 @@ export async function GET(
                   effectivePath
                 );
 
-              const wantAnyProfile =
-                hasFilters
-                  ? "filtersafe"
-                  : "cardlite";
-
               if (
-                countNow ===
-                0
+                countNow === 0 &&
+                !hasFilters
               ) {
                 const lgExact =
                   lastGoodGet(
@@ -4276,54 +4017,37 @@ export async function GET(
                   );
 
                 if (
-                  lgExact
-                    ?.payloadStr
+                  lgExact?.payloadStr
                 ) {
                   return {
-                    ok:
-                      true,
-
-                    status:
-                      200,
-
+                    ok: true,
+                    status: 200,
                     payloadStr:
                       lgExact.payloadStr,
-
-                    degraded:
-                      true,
-
+                    degraded: true,
                     reason:
-                      hasFilters
-                        ? "EMPTY->EXACT_LAST_GOOD_FILTERED"
-                        : "EMPTY->EXACT_LAST_GOOD",
+                      "EMPTY->EXACT_LAST_GOOD",
+                    schemaCompat:
+                      usedSchemaCompat,
                   };
                 }
 
                 const anyList =
                   anyProductsListPayloadStr(
-                    wantAnyProfile
+                    "cardlite"
                   );
 
-                if (
-                  anyList
-                ) {
+                if (anyList) {
                   return {
-                    ok:
-                      true,
-
-                    status:
-                      200,
-
+                    ok: true,
+                    status: 200,
                     payloadStr:
                       anyList,
-
-                    degraded:
-                      true,
-
+                    degraded: true,
                     reason:
-                      hasFilters
-                        ? "EMPTY->ANY_PRODUCTS_PROFILE_FILTERED"
-                        : "EMPTY->ANY_PRODUCTS_PROFILE",
+                      "EMPTY->ANY_PRODUCTS_PROFILE",
+                    schemaCompat:
+                      usedSchemaCompat,
                   };
                 }
 
@@ -4332,9 +4056,7 @@ export async function GET(
                     baseHeaders
                   );
 
-                if (
-                  broad
-                ) {
+                if (broad) {
                   lastGoodSet(
                     LAST_GOOD_ANY_PRODUCTS_CARDLITE_KEY,
                     broad,
@@ -4342,33 +4064,23 @@ export async function GET(
                   );
 
                   return {
-                    ok:
-                      true,
-
-                    status:
-                      200,
-
+                    ok: true,
+                    status: 200,
                     payloadStr:
                       broad,
-
-                    degraded:
-                      true,
-
+                    degraded: true,
                     reason:
-                      hasFilters
-                        ? "EMPTY->BROAD_FETCH_FILTERED"
-                        : "EMPTY->BROAD_FETCH",
+                      "EMPTY->BROAD_FETCH",
+                    schemaCompat:
+                      usedSchemaCompat,
                   };
                 }
               }
             }
 
             const payloadObj = {
-              ok:
-                true,
-
+              ok: true,
               data,
-
               ms:
                 Date.now() -
                 t0,
@@ -4380,19 +4092,16 @@ export async function GET(
               );
 
             return {
-              ok:
-                true,
-
-              status:
-                200,
-
+              ok: true,
+              status: 200,
               payloadStr,
+              schemaCompat:
+                usedSchemaCompat,
             };
           } catch (e) {
             const name =
               String(
-                e?.name ||
-                ""
+                e?.name || ""
               );
 
             const isAbort =
@@ -4404,8 +4113,7 @@ export async function GET(
                   "abort"
                 ) ||
               String(
-                e?.message ||
-                ""
+                e?.message || ""
               )
                 .toLowerCase()
                 .includes(
@@ -4413,8 +4121,7 @@ export async function GET(
                 );
 
             return {
-              ok:
-                false,
+              ok: false,
 
               status:
                 isAbort
@@ -4437,19 +4144,19 @@ export async function GET(
       );
 
     const ms =
-      Date.now() -
-      t0;
+      Date.now() - t0;
 
-    if (
-      !result?.ok
-    ) {
-      if (
-        hasClientSecret
-      ) {
+    /*
+     * Upstream request failed.
+     */
+    if (!result?.ok) {
+      /*
+       * Secret/internal caller gets the actual failure.
+       */
+      if (hasClientSecret) {
         return jsonResponse(
           {
-            ok:
-              false,
+            ok: false,
 
             error:
               "STRAPI_PROXY_ERROR",
@@ -4498,18 +4205,23 @@ export async function GET(
               guarded
                 ? "1"
                 : "0",
+
+            "x-tdls-schema-compat":
+              "0",
           }
         );
       }
 
+      /*
+       * Exact last-good response is safe because it belongs to the same
+       * canonical request path, including the same filters.
+       */
       const lg =
         lastGoodGet(
           lastGoodKey
         );
 
-      if (
-        lg?.payloadStr
-      ) {
+      if (lg?.payloadStr) {
         const parsed =
           isProductEndpoint
             ? safeJsonParse(
@@ -4552,13 +4264,15 @@ export async function GET(
                 ? "1"
                 : "0",
 
+            "x-tdls-schema-compat":
+              "0",
+
             ...(
               isProductEndpoint
                 ? {
                     "x-tdls-products-count":
                       String(
-                        cnt ??
-                        0
+                        cnt ?? 0
                       ),
                   }
                 : {}
@@ -4578,9 +4292,10 @@ export async function GET(
         );
       }
 
-      if (
-        !isProductEndpoint
-      ) {
+      /*
+       * Metadata may use a same-endpoint generic last-good response.
+       */
+      if (!isProductEndpoint) {
         const anyMeta =
           lastGoodGet(
             metaAnyKeyFromPathname(
@@ -4589,8 +4304,7 @@ export async function GET(
           );
 
         if (
-          anyMeta
-            ?.payloadStr
+          anyMeta?.payloadStr
         ) {
           return rawJsonResponse(
             anyMeta.payloadStr,
@@ -4619,27 +4333,31 @@ export async function GET(
                 guarded
                   ? "1"
                   : "0",
+
+              "x-tdls-schema-compat":
+                "0",
             }
           );
         }
       }
 
+      /*
+       * IMPORTANT:
+       * Generic Product-list fallback is permitted ONLY for an unfiltered
+       * products request.
+       *
+       * Never use another Product-list result for a filtered request.
+       */
       if (
-        isProductsList
+        isProductsList &&
+        !productsListHasFilters
       ) {
-        const anyProfile =
-          productsListHasFilters
-            ? "filtersafe"
-            : "cardlite";
-
         const anyList =
           anyProductsListPayloadStr(
-            anyProfile
+            "cardlite"
           );
 
-        if (
-          anyList
-        ) {
+        if (anyList) {
           const parsed =
             safeJsonParse(
               anyList
@@ -4680,14 +4398,14 @@ export async function GET(
 
               "x-tdls-products-count":
                 String(
-                  cnt ??
-                  0
+                  cnt ?? 0
                 ),
 
               "x-tdls-products-profile":
-                productsListHasFilters
-                  ? "filtersafe"
-                  : "cardlite",
+                "cardlite",
+
+              "x-tdls-schema-compat":
+                "0",
             }
           );
         }
@@ -4705,9 +4423,7 @@ export async function GET(
           );
 
           const parsed =
-            safeJsonParse(
-              broad
-            );
+            safeJsonParse(broad);
 
           const cnt =
             productCountFromStrapiPayload(
@@ -4744,45 +4460,41 @@ export async function GET(
 
               "x-tdls-products-count":
                 String(
-                  cnt ??
-                  0
+                  cnt ?? 0
                 ),
 
               "x-tdls-products-profile":
                 "cardlite",
+
+              "x-tdls-schema-compat":
+                "0",
             }
           );
         }
       }
 
       /*
-       * Product requests must never turn a real upstream failure into
-       * { ok: true, data: [] }. That made the storefront believe the catalog
-       * genuinely contained zero products and rendered "Showing 0 of 0 items".
+       * Product requests must never convert a real upstream error into
        *
-       * Keep the existing degraded-empty behavior for non-product metadata
-       * requests, but fail product requests truthfully so callers can retry or
-       * surface the actual upstream problem.
+       *   { ok: true, data: [] }
+       *
+       * That is exactly the type of response that makes the storefront display
+       * "Showing 0 of 0 items" even though the real problem is upstream.
        */
-      if (
-        isProductEndpoint
-      ) {
+      if (isProductEndpoint) {
         const publicStatus =
           Number(
             result?.status
-          ) ===
-          504
+          ) === 504
             ? 504
             : 502;
 
         return jsonResponse(
           {
-            ok:
-              false,
+            ok: false,
 
             error:
-              publicStatus ===
-                504
+              publicStatus === 504
                 ? "UPSTREAM_TIMEOUT"
                 : "STRAPI_PROXY_ERROR",
 
@@ -4793,8 +4505,7 @@ export async function GET(
             statusText:
               result?.statusText ||
               (
-                publicStatus ===
-                504
+                publicStatus === 504
                   ? "Gateway Timeout"
                   : "Bad Gateway"
               ),
@@ -4836,18 +4547,22 @@ export async function GET(
 
             "x-tdls-products-count":
               "0",
+
+            "x-tdls-schema-compat":
+              "0",
           }
         );
       }
 
+      /*
+       * Metadata is allowed to degrade empty.
+       */
       const payloadStr =
         JSON.stringify({
-          ok:
-            true,
+          ok: true,
 
           data: {
-            data:
-              [],
+            data: [],
 
             meta: {
               degraded:
@@ -4855,8 +4570,7 @@ export async function GET(
             },
           },
 
-          degraded:
-            true,
+          degraded: true,
 
           reason:
             "PUBLIC_META_DEGRADED_EMPTY",
@@ -4891,28 +4605,27 @@ export async function GET(
             guarded
               ? "1"
               : "0",
+
+          "x-tdls-schema-compat":
+            "0",
         }
       );
     }
 
+    /*
+     * Successful upstream response.
+     */
     const payloadStr =
       result.payloadStr ||
       JSON.stringify({
-        ok:
-          true,
-
-        data:
-          null,
-
+        ok: true,
+        data: null,
         ms,
       });
 
-    let productCount =
-      null;
+    let productCount = null;
 
-    if (
-      isProductEndpoint
-    ) {
+    if (isProductEndpoint) {
       const parsed =
         safeJsonParse(
           payloadStr
@@ -4924,14 +4637,19 @@ export async function GET(
         );
     }
 
+    /*
+     * Never cache an empty Product response as the global "good" catalogue.
+     *
+     * A legitimately empty filtered response is returned to the caller but it
+     * should not contaminate generic Product-list recovery data.
+     */
     const isGoodProductPayload =
       !isProductEndpoint ||
       (
         Number.isFinite(
           productCount
         ) &&
-        productCount >
-          0
+        productCount > 0
       );
 
     if (CACHE_OK) {
@@ -4963,9 +4681,10 @@ export async function GET(
       }
     }
 
-    if (
-      !hasClientSecret
-    ) {
+    if (!hasClientSecret) {
+      /*
+       * Exact per-request last-good response.
+       */
       if (
         !isProductEndpoint ||
         isGoodProductPayload
@@ -4977,6 +4696,13 @@ export async function GET(
         );
       }
 
+      /*
+       * Generic any-products fallback:
+       *
+       * ONLY populate the generic recovery bucket with non-empty results.
+       * A filtered result can be retained in its profile cache, but generic
+       * filtered fallback is never used to substitute another filtered query.
+       */
       if (
         isProductsList &&
         isGoodProductPayload
@@ -4998,9 +4724,7 @@ export async function GET(
         }
       }
 
-      if (
-        !isProductEndpoint
-      ) {
+      if (!isProductEndpoint) {
         lastGoodSet(
           metaAnyKeyFromPathname(
             effPathname
@@ -5047,6 +4771,15 @@ export async function GET(
             ? "1"
             : "0",
 
+        /*
+         * 1 means the optimized Product populate tree was rejected and the
+         * request succeeded through the schema-safe populate=* retry.
+         */
+        "x-tdls-schema-compat":
+          result?.schemaCompat
+            ? "1"
+            : "0",
+
         ...(
           isProductEndpoint
             ? {
@@ -5073,26 +4806,22 @@ export async function GET(
     );
   } catch (err) {
     const ms =
-      Date.now() -
-      t0;
+      Date.now() - t0;
 
     const name =
       String(
-        err?.name ||
-        ""
+        err?.name || ""
       );
 
     const isAbort =
-      name ===
-        "AbortError" ||
+      name === "AbortError" ||
       name
         .toLowerCase()
         .includes(
           "abort"
         ) ||
       String(
-        err?.message ||
-        ""
+        err?.message || ""
       )
         .toLowerCase()
         .includes(
@@ -5102,8 +4831,7 @@ export async function GET(
     if (isAbort) {
       return jsonResponse(
         {
-          ok:
-            false,
+          ok: false,
 
           error:
             "UPSTREAM_TIMEOUT",
@@ -5132,8 +4860,7 @@ export async function GET(
 
     return jsonResponse(
       {
-        ok:
-          false,
+        ok: false,
 
         error:
           "STRAPI_PROXY_ERROR",
