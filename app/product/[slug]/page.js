@@ -1,12 +1,13 @@
 // FILE: app/product/[slug]/page.js
 
-import { Suspense } from "react";
-import { connection } from "next/server";
-
 import prisma from "@/lib/prisma";
-import { fetchproductbyslug } from "@/lib/fetchproductbyslug";
+
+import {
+  fetchproductbyslug,
+} from "@/lib/fetchproductbyslug";
 
 import ClientUX from "@/components/product/clientux";
+
 import ProductViewTracker from "@/components/product/product-view-tracker";
 
 /**
@@ -15,25 +16,39 @@ import ProductViewTracker from "@/components/product/product-view-tracker";
  * - This does NOT change desktop layout; it only prevents mobile scaling quirks.
  */
 export const viewport = {
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 5,
-  viewportFit: "cover",
+  width:
+    "device-width",
+
+  initialScale:
+    1,
+
+  maximumScale:
+    5,
+
+  viewportFit:
+    "cover",
 };
 
 /* ---------------- SEO/social constants ---------------- */
 
 const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
+  process.env.NEXT_PUBLIC_SITE_URL?.replace(
+    /\/+$/,
+    ""
+  ) ||
   "https://www.thednalabstore.com";
 
-const BRAND = "TDLS";
+const BRAND =
+  "TDLS";
 
 const FALLBACK_DESC =
   "TDLS is where refined design meets effortless confidence. Timeless in character, effortless in comfort—created to be felt, lived in, and remembered.";
 
-const REVIEW_FETCH_TIMEOUT_MS = 1500;
-const STOCK_WAIT_TIMEOUT_MS = 4000;
+const REVIEW_FETCH_TIMEOUT_MS =
+  1500;
+
+const STOCK_WAIT_TIMEOUT_MS =
+  4000;
 
 /* ========= SHAPE NORMALISER ========= */
 
@@ -42,28 +57,52 @@ function normalizeProduct(raw) {
     return null;
   }
 
-  const node = Array.isArray(raw?.data) ? raw.data[0] : raw;
+  const node =
+    Array.isArray(
+      raw?.data
+    )
+      ? raw.data[0]
+      : raw;
 
   if (!node) {
     return null;
   }
 
-  if (node.attributes && typeof node.attributes === "object") {
-    const attrs = node.attributes;
+  if (
+    node.attributes &&
+    typeof node.attributes ===
+      "object"
+  ) {
+    const attrs =
+      node.attributes;
 
     return {
-      id: node.id ?? attrs.id ?? null,
+      id:
+        node.id ??
+        attrs.id ??
+        null,
+
       ...attrs,
-      attributes: attrs,
+
+      attributes:
+        attrs,
     };
   }
 
-  const attrs = node.attributes || node;
+  const attrs =
+    node.attributes ||
+    node;
 
   return {
-    id: node.id ?? attrs.id ?? null,
+    id:
+      node.id ??
+      attrs.id ??
+      null,
+
     ...attrs,
-    attributes: attrs,
+
+    attributes:
+      attrs,
   };
 }
 
@@ -74,19 +113,39 @@ function extractText(val) {
     return "";
   }
 
-  if (typeof val === "string") {
+  if (
+    typeof val ===
+    "string"
+  ) {
     return val;
   }
 
-  if (Array.isArray(val)) {
-    return val.map(extractText).join(" ");
+  if (
+    Array.isArray(val)
+  ) {
+    return val
+      .map(
+        extractText
+      )
+      .join(" ");
   }
 
-  if (typeof val === "object" && val.type && val.children) {
-    return extractText(val.children);
+  if (
+    typeof val ===
+      "object" &&
+    val.type &&
+    val.children
+  ) {
+    return extractText(
+      val.children
+    );
   }
 
-  if (typeof val === "object" && val.text) {
+  if (
+    typeof val ===
+      "object" &&
+    val.text
+  ) {
     return val.text;
   }
 
@@ -98,13 +157,25 @@ function toAbsoluteUrl(u) {
     return u;
   }
 
-  const s = String(u);
+  const s =
+    String(u);
 
-  if (/^https?:\/\//i.test(s)) {
+  if (
+    /^https?:\/\//i.test(
+      s
+    )
+  ) {
     return s;
   }
 
-  return `${SITE_URL.replace(/\/+$/, "")}${s.startsWith("/") ? "" : "/"}${s}`;
+  return `${SITE_URL.replace(
+    /\/+$/,
+    ""
+  )}${
+    s.startsWith("/")
+      ? ""
+      : "/"
+  }${s}`;
 }
 
 function firstMediaUrl(field) {
@@ -112,12 +183,21 @@ function firstMediaUrl(field) {
     return null;
   }
 
-  if (Array.isArray(field)) {
-    for (const item of field) {
+  if (
+    Array.isArray(field)
+  ) {
+    for (
+      const item of
+        field
+    ) {
       const url =
         item?.url ||
-        item?.attributes?.url ||
-        (item?.data && item.data.url) ||
+        item?.attributes
+          ?.url ||
+        (
+          item?.data &&
+          item.data.url
+        ) ||
         null;
 
       if (url) {
@@ -128,12 +208,23 @@ function firstMediaUrl(field) {
     return null;
   }
 
-  if (Array.isArray(field.data)) {
-    for (const item of field.data) {
+  if (
+    Array.isArray(
+      field.data
+    )
+  ) {
+    for (
+      const item of
+        field.data
+    ) {
       const url =
         item?.url ||
-        item?.attributes?.url ||
-        (item?.data && item.data.url) ||
+        item?.attributes
+          ?.url ||
+        (
+          item?.data &&
+          item.data.url
+        ) ||
         null;
 
       if (url) {
@@ -144,7 +235,12 @@ function firstMediaUrl(field) {
     return null;
   }
 
-  return field.url || field?.attributes?.url || null;
+  return (
+    field.url ||
+    field?.attributes
+      ?.url ||
+    null
+  );
 }
 
 function pickOgImage(product) {
@@ -152,25 +248,38 @@ function pickOgImage(product) {
     return "/tdls-social-preview";
   }
 
-  if (product.cover_image) {
+  if (
+    product.cover_image
+  ) {
     return product.cover_image;
   }
 
-  if (typeof product.image === "string") {
+  if (
+    typeof product.image ===
+    "string"
+  ) {
     return product.image;
   }
 
-  if (product.image?.url) {
+  if (
+    product.image?.url
+  ) {
     return product.image.url;
   }
 
-  const fromImages = firstMediaUrl(product.images);
+  const fromImages =
+    firstMediaUrl(
+      product.images
+    );
 
   if (fromImages) {
     return fromImages;
   }
 
-  const fromGallery = firstMediaUrl(product.gallery);
+  const fromGallery =
+    firstMediaUrl(
+      product.gallery
+    );
 
   if (fromGallery) {
     return fromGallery;
@@ -186,50 +295,111 @@ function buildScopedOptions(product) {
 
   const raw =
     product?.product_variants ||
-    product?.attributes?.product_variants;
+    product?.attributes
+      ?.product_variants;
 
-  const variants = Array.isArray(raw)
-    ? raw
-    : Array.isArray(raw?.data)
-      ? raw.data.map((v) => v.attributes || v)
+  const variants =
+    Array.isArray(raw)
+      ? raw
+      : Array.isArray(
+          raw?.data
+        )
+      ? raw.data.map(
+          (v) =>
+            v.attributes ||
+            v
+        )
       : [];
 
-  for (const v of variants) {
-    const attrs = v.attributes || v.options || v;
+  for (
+    const v of
+      variants
+  ) {
+    const attrs =
+      v.attributes ||
+      v.options ||
+      v;
 
-    if (!attrs || typeof attrs !== "object") {
+    if (
+      !attrs ||
+      typeof attrs !==
+        "object"
+    ) {
       continue;
     }
 
-    for (const [key, value] of Object.entries(attrs)) {
-      if (value == null || typeof value === "object") {
+    for (
+      const [
+        key,
+        value,
+      ] of Object.entries(
+        attrs
+      )
+    ) {
+      if (
+        value == null ||
+        typeof value ===
+          "object"
+      ) {
         continue;
       }
 
-      const k = String(key).toLowerCase();
+      const k =
+        String(
+          key
+        ).toLowerCase();
 
       if (
-        !["color", "size", "fit", "material", "style", "length"].includes(k)
+        ![
+          "color",
+          "size",
+          "fit",
+          "material",
+          "style",
+          "length",
+        ].includes(k)
       ) {
         continue;
       }
 
       if (!map[k]) {
-        map[k] = new Set();
+        map[k] =
+          new Set();
       }
 
-      map[k].add(String(value));
+      map[k].add(
+        String(value)
+      );
     }
   }
 
   const out = {};
 
-  for (const [k, set] of Object.entries(map)) {
-    out[k] = Array.from(set).sort((a, b) =>
-      a.localeCompare(b, undefined, {
-        numeric: true,
-      })
-    );
+  for (
+    const [
+      k,
+      set,
+    ] of Object.entries(
+      map
+    )
+  ) {
+    out[k] =
+      Array.from(
+        set
+      ).sort(
+        (
+          a,
+          b
+        ) =>
+          a.localeCompare(
+            b,
+            undefined,
+            {
+              numeric:
+                true,
+            }
+          )
+      );
   }
 
   return out;
@@ -252,56 +422,90 @@ function getStrapiBase() {
     process.env.STRAPI_API_URL ||
     "http://localhost:1337";
 
-  return String(raw || "")
+  return String(
+    raw ||
+    ""
+  )
     .trim()
-    .replace(/\/+$/, "")
-    .replace(/\/api$/, "");
+    .replace(
+      /\/+$/,
+      ""
+    )
+    .replace(
+      /\/api$/,
+      ""
+    );
 }
 
 async function fetchReviews(productId) {
-  if (productId == null) {
+  if (
+    productId == null
+  ) {
     return [];
   }
 
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timer = setTimeout(() => {
-    try {
-      controller.abort();
-    } catch {}
-  }, REVIEW_FETCH_TIMEOUT_MS);
+  const timer =
+    setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {}
+    }, REVIEW_FETCH_TIMEOUT_MS);
 
   try {
-    const API_BASE = getStrapiBase();
+    const API_BASE =
+      getStrapiBase();
 
-    const res = await fetch(
-      `${API_BASE}/api/reviews?product=${encodeURIComponent(String(productId))}`,
-      {
-        method: "GET",
+    const res =
+      await fetch(
+        `${API_BASE}/api/reviews?product=${encodeURIComponent(
+          String(
+            productId
+          )
+        )}`,
+        {
+          method:
+            "GET",
 
-        headers: {
-          Accept: "application/json",
-        },
+          headers: {
+            Accept:
+              "application/json",
+          },
 
-        /*
-         * Keep reviews dynamic, as they were before.
-         * The important correction is the hard timeout.
-         */
-        cache: "no-store",
+          /*
+           * Keep reviews dynamic, as they were before.
+           * The important correction is the hard timeout.
+           */
+          cache:
+            "no-store",
 
-        signal: controller.signal,
-      }
-    );
+          signal:
+            controller.signal,
+        }
+      );
 
     if (!res.ok) {
       return [];
     }
 
-    const json = await res.json().catch(() => ({}));
+    const json =
+      await res
+        .json()
+        .catch(
+          () => ({})
+        );
 
-    let arr = json?.data || json;
+    let arr =
+      json?.data ||
+      json;
 
-    if (!Array.isArray(arr)) {
+    if (
+      !Array.isArray(
+        arr
+      )
+    ) {
       arr = [];
     }
 
@@ -309,7 +513,9 @@ async function fetchReviews(productId) {
   } catch {
     return [];
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
 
@@ -320,11 +526,17 @@ function isSoftDisabled(product) {
     return true;
   }
 
-  if (product.disable_frontend === true) {
+  if (
+    product.disable_frontend ===
+    true
+  ) {
     return true;
   }
 
-  if (product.is_archived === true) {
+  if (
+    product.is_archived ===
+    true
+  ) {
     return true;
   }
 
@@ -334,58 +546,133 @@ function isSoftDisabled(product) {
 /* ========= PRISMA STOCK ========= */
 
 function toInt(val) {
-  if (val == null) {
+  if (
+    val == null
+  ) {
     return null;
   }
 
   const n =
-    typeof val === "string" ? parseInt(val, 10) : Number(val);
+    typeof val ===
+      "string"
+      ? parseInt(
+          val,
+          10
+        )
+      : Number(val);
 
-  return Number.isInteger(n) ? n : null;
+  return Number.isInteger(
+    n
+  )
+    ? n
+    : null;
 }
 
-function computeAvailableForVariant(variant) {
-  const items = Array.isArray(variant.inventoryItems)
-    ? variant.inventoryItems
-    : [];
+function computeAvailableForVariant(
+  variant
+) {
+  const items =
+    Array.isArray(
+      variant.inventoryItems
+    )
+      ? variant.inventoryItems
+      : [];
 
-  const stockAvailableRaw = Number(variant.stockAvailable ?? 0);
+  const stockAvailableRaw =
+    Number(
+      variant.stockAvailable ??
+      0
+    );
 
-  const stockAvailable = Number.isFinite(stockAvailableRaw)
-    ? stockAvailableRaw
-    : 0;
+  const stockAvailable =
+    Number.isFinite(
+      stockAvailableRaw
+    )
+      ? stockAvailableRaw
+      : 0;
 
-  if (stockAvailable <= 0) {
+  if (
+    stockAvailable <=
+    0
+  ) {
     return 0;
   }
 
-  if (items.length > 0) {
-    const total = items.reduce((sum, inv) => {
-      const onHand = Number(inv.onHand ?? 0);
-      const safety = Number(inv.safetyStock ?? 0);
-      const reserved = Number(inv.reserved ?? 0);
+  if (
+    items.length >
+    0
+  ) {
+    const total =
+      items.reduce(
+        (
+          sum,
+          inv
+        ) => {
+          const onHand =
+            Number(
+              inv.onHand ??
+              0
+            );
 
-      return sum + (onHand - safety - reserved);
-    }, 0);
+          const safety =
+            Number(
+              inv.safetyStock ??
+              0
+            );
 
-    return Math.max(0, Math.min(total, stockAvailable));
+          const reserved =
+            Number(
+              inv.reserved ??
+              0
+            );
+
+          return (
+            sum +
+            (
+              onHand -
+              safety -
+              reserved
+            )
+          );
+        },
+        0
+      );
+
+    return Math.max(
+      0,
+      Math.min(
+        total,
+        stockAvailable
+      )
+    );
   }
 
-  return Math.max(0, stockAvailable);
+  return Math.max(
+    0,
+    stockAvailable
+  );
 }
 
-async function loadStockFromPrisma({ product, slug }) {
+async function loadStockFromPrisma({
+  product,
+  slug,
+}) {
   try {
     const or = [];
 
-    const strapiId = toInt(
-      product.id ??
+    const strapiId =
+      toInt(
+        product.id ??
         product.strapiId ??
-        product.attributes?.strapiId ??
-        product.attributes?.id
-    );
+        product.attributes
+          ?.strapiId ??
+        product.attributes
+          ?.id
+      );
 
-    if (strapiId != null) {
+    if (
+      strapiId != null
+    ) {
       or.push({
         strapiId,
       });
@@ -397,90 +684,145 @@ async function loadStockFromPrisma({ product, slug }) {
       });
 
       or.push({
-        strapiSlug: slug,
-      });
-    }
-
-    if (product.slug && typeof product.slug === "string") {
-      or.push({
-        slug: product.slug,
-      });
-
-      or.push({
-        strapiSlug: product.slug,
+        strapiSlug:
+          slug,
       });
     }
 
     if (
-      product.attributes?.slug &&
-      typeof product.attributes.slug === "string"
+      product.slug &&
+      typeof product.slug ===
+        "string"
     ) {
       or.push({
-        slug: product.attributes.slug,
+        slug:
+          product.slug,
       });
 
       or.push({
-        strapiSlug: product.attributes.slug,
+        strapiSlug:
+          product.slug,
       });
     }
 
-    if (!or.length) {
+    if (
+      product.attributes
+        ?.slug &&
+      typeof product
+        .attributes
+        .slug ===
+        "string"
+    ) {
+      or.push({
+        slug:
+          product
+            .attributes
+            .slug,
+      });
+
+      or.push({
+        strapiSlug:
+          product
+            .attributes
+            .slug,
+      });
+    }
+
+    if (
+      !or.length
+    ) {
       return {
-        stockQty: null,
-        stockByVariantKey: {},
+        stockQty:
+          null,
+
+        stockByVariantKey:
+          {},
       };
     }
 
-    const dbProduct = await prisma.product.findFirst({
-      where: {
-        OR: or,
-      },
-
-      include: {
-        variants: {
-          include: {
-            inventoryItems: true,
+    const dbProduct =
+      await prisma
+        .product
+        .findFirst({
+          where: {
+            OR:
+              or,
           },
-        },
-      },
-    });
+
+          include: {
+            variants: {
+              include: {
+                inventoryItems:
+                  true,
+              },
+            },
+          },
+        });
 
     if (!dbProduct) {
       return {
-        stockQty: null,
-        stockByVariantKey: {},
+        stockQty:
+          null,
+
+        stockByVariantKey:
+          {},
       };
     }
 
     let total = 0;
 
-    const stockByVariantKey = {};
+    const stockByVariantKey =
+      {};
 
-    for (const variant of dbProduct.variants) {
-      const available = computeAvailableForVariant(variant);
+    for (
+      const variant of
+        dbProduct.variants
+    ) {
+      const available =
+        computeAvailableForVariant(
+          variant
+        );
 
       const key =
-        variant.strapiSizeId != null
-          ? String(variant.strapiSizeId)
+        variant.strapiSizeId !=
+        null
+          ? String(
+              variant.strapiSizeId
+            )
           : variant.id;
 
-      stockByVariantKey[key] = available;
+      stockByVariantKey[
+        key
+      ] =
+        available;
 
-      total += available;
+      total +=
+        available;
     }
 
     return {
-      stockQty: total,
+      stockQty:
+        total,
+
       stockByVariantKey,
     };
   } catch (err) {
-    if (process.env.NODE_ENV !== "production") {
-      console.error("[loadStockFromPrisma] failed:", err);
+    if (
+      process.env.NODE_ENV !==
+      "production"
+    ) {
+      console.error(
+        "[loadStockFromPrisma] failed:",
+        err
+      );
     }
 
     return {
-      stockQty: null,
-      stockByVariantKey: {},
+      stockQty:
+        null,
+
+      stockByVariantKey:
+        {},
     };
   }
 }
@@ -489,12 +831,18 @@ async function loadStockFromPrisma({ product, slug }) {
  * Do not let a cold/unavailable Neon/Prisma connection keep the whole product
  * route in loading state indefinitely.
  */
-async function loadStockWithTimeout({ product, slug }) {
+async function loadStockWithTimeout({
+  product,
+  slug,
+}) {
   let timer = null;
 
   const fallback = {
-    stockQty: null,
-    stockByVariantKey: {},
+    stockQty:
+      null,
+
+    stockByVariantKey:
+      {},
   };
 
   try {
@@ -504,26 +852,40 @@ async function loadStockWithTimeout({ product, slug }) {
         slug,
       }),
 
-      new Promise((resolve) => {
-        timer = setTimeout(
-          () => resolve(fallback),
-          STOCK_WAIT_TIMEOUT_MS
-        );
-      }),
+      new Promise(
+        (resolve) => {
+          timer =
+            setTimeout(
+              () =>
+                resolve(
+                  fallback
+                ),
+              STOCK_WAIT_TIMEOUT_MS
+            );
+        }
+      ),
     ]);
   } finally {
     if (timer) {
-      clearTimeout(timer);
+      clearTimeout(
+        timer
+      );
     }
   }
 }
 
 function fallbackStockFromStrapi(product) {
-  if (typeof product.stock_quantity === "number") {
+  if (
+    typeof product.stock_quantity ===
+    "number"
+  ) {
     return product.stock_quantity;
   }
 
-  if (typeof product.inventory === "number") {
+  if (
+    typeof product.inventory ===
+    "number"
+  ) {
     return product.inventory;
   }
 
@@ -533,124 +895,224 @@ function fallbackStockFromStrapi(product) {
 /* ========= JSON-LD ========= */
 
 function safeJsonLd(obj) {
-  return JSON.stringify(obj).replace(/</g, "\\u003c");
+  return JSON.stringify(
+    obj
+  ).replace(
+    /</g,
+    "\\u003c"
+  );
 }
 
 /* ========= DYNAMIC SEO METADATA ========= */
 
-export async function generateMetadata(ctx) {
-  const { params } = ctx;
+export async function generateMetadata(
+  ctx
+) {
+  const {
+    params,
+  } = ctx;
 
-  const { slug } = (await params) || {};
+  const {
+    slug,
+  } =
+    (
+      await params
+    ) ||
+    {};
 
   /*
    * fetchproductbyslug is cached per server render/request, so this lookup
    * and the ProductPage lookup below do not need to create duplicate
    * product-detail work.
    */
-  const raw = await fetchproductbyslug(slug);
+  const raw =
+    await fetchproductbyslug(
+      slug
+    );
 
-  const product = normalizeProduct(raw);
+  const product =
+    normalizeProduct(
+      raw
+    );
 
-  if (!product || isSoftDisabled(product)) {
+  if (
+    !product ||
+    isSoftDisabled(
+      product
+    )
+  ) {
     return {
       title: {
-        absolute: `Product Not Found | ${BRAND}`,
+        absolute:
+          `Product Not Found | ${BRAND}`,
       },
 
       description:
         "Sorry, this product does not exist or is unavailable.",
 
       robots: {
-        index: false,
-        follow: false,
+        index:
+          false,
+
+        follow:
+          false,
       },
     };
   }
 
   const name =
-    extractText(product.name) ||
-    extractText(product.attributes?.name) ||
+    extractText(
+      product.name
+    ) ||
+    extractText(
+      product.attributes
+        ?.name
+    ) ||
     "Product";
 
   const descRaw =
-    extractText(product.short_description) ||
-    extractText(product.attributes?.short_description) ||
-    extractText(product.description) ||
-    extractText(product.attributes?.description) ||
+    extractText(
+      product.short_description
+    ) ||
+    extractText(
+      product.attributes
+        ?.short_description
+    ) ||
+    extractText(
+      product.description
+    ) ||
+    extractText(
+      product.attributes
+        ?.description
+    ) ||
     FALLBACK_DESC;
 
-  const desc = String(descRaw || FALLBACK_DESC)
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 160);
+  const desc =
+    String(
+      descRaw ||
+      FALLBACK_DESC
+    )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim()
+      .slice(
+        0,
+        160
+      );
 
-  const ogImage = toAbsoluteUrl(pickOgImage(product));
+  const ogImage =
+    toAbsoluteUrl(
+      pickOgImage(
+        product
+      )
+    );
 
   const canonical =
-    `${SITE_URL.replace(/\/+$/, "")}/product/${encodeURIComponent(
-      slug || product.slug || ""
+    `${SITE_URL.replace(
+      /\/+$/,
+      ""
+    )}/product/${encodeURIComponent(
+      slug ||
+      product.slug ||
+      ""
     )}`;
 
   return {
     title: {
-      absolute: `${name} | ${BRAND}`,
+      absolute:
+        `${name} | ${BRAND}`,
     },
 
-    description: desc,
+    description:
+      desc,
 
     alternates: {
       canonical,
     },
 
     openGraph: {
-      title: `${name} | ${BRAND}`,
-      description: desc,
+      title:
+        `${name} | ${BRAND}`,
+
+      description:
+        desc,
 
       images: [
         {
-          url: ogImage,
-          alt: name,
+          url:
+            ogImage,
+
+          alt:
+            name,
         },
       ],
 
-      type: "website",
-      siteName: BRAND,
-      url: canonical,
+      type:
+        "website",
+
+      siteName:
+        BRAND,
+
+      url:
+        canonical,
     },
 
     twitter: {
-      card: "summary_large_image",
-      title: `${name} | ${BRAND}`,
-      description: desc,
-      images: [ogImage],
+      card:
+        "summary_large_image",
+
+      title:
+        `${name} | ${BRAND}`,
+
+      description:
+        desc,
+
+      images: [
+        ogImage,
+      ],
     },
   };
 }
 
 /* ========= MAIN PAGE ========= */
 
-export default async function ProductPage(ctx) {
-  await connection();
+export default async function ProductPage(
+  ctx
+) {
+  const {
+    params,
+  } = ctx;
 
-  const { params } = ctx;
-
-  const { slug } = (await params) || {};
+  const {
+    slug,
+  } =
+    (
+      await params
+    ) ||
+    {};
 
   /*
    * Critical request:
-   * product data and the bounded live stock lookup precede the product UI.
+   * only product data itself must finish before we can render the page.
    *
    * fetchproductbyslug now has:
    * - pageSize=1
-   * - schema-aware first-level populate
+   * - explicit product_variants populate
    * - hard per-attempt timeout
    * - bounded retry
    * - server-request deduplication
    */
-  const raw = await fetchproductbyslug(slug);
+  const raw =
+    await fetchproductbyslug(
+      slug
+    );
 
-  const product = normalizeProduct(raw);
+  const product =
+    normalizeProduct(
+      raw
+    );
 
   if (!product) {
     return (
@@ -661,13 +1123,20 @@ export default async function ProductPage(ctx) {
 
         <p className="text-slate-600 text-sm">
           We couldn&apos;t find a product with slug:{" "}
-          <code>{slug}</code>.
+          <code>
+            {slug}
+          </code>
+          .
         </p>
       </main>
     );
   }
 
-  if (isSoftDisabled(product)) {
+  if (
+    isSoftDisabled(
+      product
+    )
+  ) {
     return (
       <main className="max-w-4xl mx-auto w-full pt-16 pb-24 px-4 overflow-x-hidden">
         <h1 className="text-2xl font-semibold mb-2">
@@ -681,112 +1150,143 @@ export default async function ProductPage(ctx) {
     );
   }
 
-  // Start both requests together. Only stock is required by ClientUX.
-  const reviewsPromise = fetchReviews(product.id);
+  /*
+   * Reviews and stock are independent.
+   *
+   * They run in parallel and are BOTH non-critical.
+   * A review API problem or Prisma/Neon problem must never prevent
+   * ClientUX from rendering once the Strapi product itself is available.
+   */
+  const auxiliaryResults =
+    await Promise.allSettled([
+      fetchReviews(
+        product.id
+      ),
 
-  const prismaStock = await loadStockWithTimeout({
-    product,
-    slug,
-  });
+      loadStockWithTimeout({
+        product,
+        slug,
+      }),
+    ]);
 
-  const stockQty =
-    typeof prismaStock.stockQty === "number" &&
-    Number.isFinite(prismaStock.stockQty)
-      ? prismaStock.stockQty
-      : fallbackStockFromStrapi(product);
+  const reviewsResult =
+    auxiliaryResults[0];
 
-  const scopedOptions = buildScopedOptions(product);
+  const stockResult =
+    auxiliaryResults[1];
 
-  const isInStock = stockQty > 0;
+  const reviews =
+    reviewsResult.status ===
+      "fulfilled" &&
+    Array.isArray(
+      reviewsResult.value
+    )
+      ? reviewsResult.value
+      : [];
 
-  return (
-    <main
-      className={[
-        "max-w-6xl mx-auto w-full pt-12 pb-20 px-2 sm:px-6 lg:px-8",
-        "overflow-x-hidden",
-        "text-[13px] leading-[1.2] sm:text-[16px] sm:leading-normal",
-      ].join(" ")}
-      style={{
-        paddingLeft: "max(0.5rem, env(safe-area-inset-left))",
-        paddingRight: "max(0.5rem, env(safe-area-inset-right))",
-        paddingBottom: "max(5rem, env(safe-area-inset-bottom))",
-      }}
-    >
-      <Suspense fallback={null}>
-        <ProductSchema
-          product={product}
-          slug={slug}
-          isInStock={isInStock}
-          reviewsPromise={reviewsPromise}
-        />
-      </Suspense>
+  const prismaStockFallback = {
+    stockQty:
+      null,
 
-      {/*
-       * Analytics now happens AFTER the product renders.
-       * Analytics downtime can no longer block this page.
-       */}
-      <ProductViewTracker
-        productId={product.id ?? null}
-        slug={product.slug || slug || ""}
-      />
+    stockByVariantKey:
+      {},
+  };
 
-      <ClientUX
-        product={product}
-        stockQty={stockQty}
-        options={scopedOptions}
-        stockByVariantKey={prismaStock.stockByVariantKey || {}}
-        isOutOfStock={!isInStock}
-      />
-    </main>
-  );
-}
+  const prismaStock =
+    stockResult.status ===
+      "fulfilled" &&
+    stockResult.value &&
+    typeof stockResult.value ===
+      "object"
+      ? stockResult.value
+      : prismaStockFallback;
 
-// Review-dependent structured data streams without delaying the product UI.
-async function ProductSchema({
-  product,
-  slug,
-  isInStock,
-  reviewsPromise,
-}) {
-  const reviews = await reviewsPromise;
+  const aggregateRating =
+    reviews.length
+      ? {
+          "@type":
+            "AggregateRating",
 
-  const aggregateRating = reviews.length
-    ? {
-        "@type": "AggregateRating",
+          ratingValue:
+            (
+              reviews.reduce(
+                (
+                  sum,
+                  r
+                ) =>
+                  sum +
+                  (
+                    r.rating ||
+                    5
+                  ),
+                0
+              ) /
+              reviews.length
+            ).toFixed(
+              1
+            ),
 
-        ratingValue: (
-          reviews.reduce((sum, r) => sum + (r.rating || 5), 0) /
-          reviews.length
-        ).toFixed(1),
-
-        reviewCount: reviews.length,
-      }
-    : undefined;
+          reviewCount:
+            reviews.length,
+        }
+      : undefined;
 
   const desc =
-    extractText(product.short_description) ||
-    extractText(product.attributes?.short_description) ||
-    extractText(product.description) ||
-    extractText(product.attributes?.description) ||
+    extractText(
+      product.short_description
+    ) ||
+    extractText(
+      product.attributes
+        ?.short_description
+    ) ||
+    extractText(
+      product.description
+    ) ||
+    extractText(
+      product.attributes
+        ?.description
+    ) ||
     FALLBACK_DESC;
 
-  const ogImage = toAbsoluteUrl(pickOgImage(product));
+  const ogImage =
+    toAbsoluteUrl(
+      pickOgImage(
+        product
+      )
+    );
 
   const price =
-    typeof product.price === "number"
+    typeof product.price ===
+    "number"
       ? product.price
-      : typeof product.discount_price === "number"
-        ? product.discount_price
-        : typeof product.base_price === "number"
-          ? product.base_price
-          : typeof product.price_mrp === "number"
-            ? product.price_mrp
-            : 0;
+      : typeof product.discount_price ===
+        "number"
+      ? product.discount_price
+      : typeof product.base_price ===
+        "number"
+      ? product.base_price
+      : typeof product.price_mrp ===
+        "number"
+      ? product.price_mrp
+      : 0;
 
   const priceCurrency =
     product.currency ||
-    product.attributes?.currency ||
+    product.attributes
+      ?.currency ||
     "BDT";
+
+  const stockQty =
+    typeof prismaStock
+      .stockQty ===
+      "number" &&
+    Number.isFinite(
+      prismaStock.stockQty
+    )
+      ? prismaStock.stockQty
+      : fallbackStockFromStrapi(
+          product
+        );
 
   const sku =
     product.sku ||
@@ -794,35 +1294,68 @@ async function ProductSchema({
     product.base_sku ||
     undefined;
 
+  const scopedOptions =
+    buildScopedOptions(
+      product
+    );
+
+  const isInStock =
+    stockQty > 0;
+
   const productUrlAbs =
-    `${SITE_URL.replace(/\/+$/, "")}/product/${encodeURIComponent(
-      product.slug || slug || ""
+    `${SITE_URL.replace(
+      /\/+$/,
+      ""
+    )}/product/${encodeURIComponent(
+      product.slug ||
+      slug ||
+      ""
     )}`;
 
   const productSchema = {
-    "@context": "https://schema.org/",
-    "@type": "Product",
+    "@context":
+      "https://schema.org/",
 
-    name: extractText(product.name),
-    image: [ogImage],
-    description: desc,
+    "@type":
+      "Product",
+
+    name:
+      extractText(
+        product.name
+      ),
+
+    image: [
+      ogImage,
+    ],
+
+    description:
+      desc,
+
     sku,
 
     brand: {
-      "@type": "Brand",
-      name: BRAND,
+      "@type":
+        "Brand",
+
+      name:
+        BRAND,
     },
 
     offers: {
-      "@type": "Offer",
+      "@type":
+        "Offer",
+
       price,
+
       priceCurrency,
 
-      availability: isInStock
-        ? "https://schema.org/InStock"
-        : "https://schema.org/OutOfStock",
+      availability:
+        isInStock
+          ? "https://schema.org/InStock"
+          : "https://schema.org/OutOfStock",
 
-      url: productUrlAbs,
+      url:
+        productUrlAbs,
     },
 
     ...(aggregateRating
@@ -833,33 +1366,112 @@ async function ProductSchema({
 
     ...(reviews.length
       ? {
-          review: reviews.map((r) => ({
-            "@type": "Review",
+          review:
+            reviews.map(
+              (r) => ({
+                "@type":
+                  "Review",
 
-            reviewRating: {
-              "@type": "Rating",
-              ratingValue: r.rating || 5,
-            },
+                reviewRating: {
+                  "@type":
+                    "Rating",
 
-            author: {
-              "@type": "Person",
-              name: r.user?.name || "Customer",
-            },
+                  ratingValue:
+                    r.rating ||
+                    5,
+                },
 
-            reviewBody: r.text || r.body || "",
-            datePublished: r.createdAt || "",
-          })),
+                author: {
+                  "@type":
+                    "Person",
+
+                  name:
+                    r.user
+                      ?.name ||
+                    "Customer",
+                },
+
+                reviewBody:
+                  r.text ||
+                  r.body ||
+                  "",
+
+                datePublished:
+                  r.createdAt ||
+                  "",
+              })
+            ),
         }
       : {}),
   };
 
   return (
-    <script
-      id="product-schema"
-      type="application/ld+json"
-      dangerouslySetInnerHTML={{
-        __html: safeJsonLd(productSchema),
+    <main
+      className={[
+        "max-w-6xl mx-auto w-full pt-12 pb-20 px-2 sm:px-6 lg:px-8",
+
+        "overflow-x-hidden",
+
+        "text-[13px] leading-[1.2] sm:text-[16px] sm:leading-normal",
+      ].join(
+        " "
+      )}
+      style={{
+        paddingLeft:
+          "max(0.5rem, env(safe-area-inset-left))",
+
+        paddingRight:
+          "max(0.5rem, env(safe-area-inset-right))",
+
+        paddingBottom:
+          "max(5rem, env(safe-area-inset-bottom))",
       }}
-    />
+    >
+      <script
+        id="product-schema"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html:
+            safeJsonLd(
+              productSchema
+            ),
+        }}
+      />
+
+      {/*
+       * Analytics now happens AFTER the product renders.
+       * Analytics downtime can no longer block this page.
+       */}
+      <ProductViewTracker
+        productId={
+          product.id ??
+          null
+        }
+        slug={
+          product.slug ||
+          slug ||
+          ""
+        }
+      />
+
+      <ClientUX
+        product={
+          product
+        }
+        stockQty={
+          stockQty
+        }
+        options={
+          scopedOptions
+        }
+        stockByVariantKey={
+          prismaStock.stockByVariantKey ||
+          {}
+        }
+        isOutOfStock={
+          !isInStock
+        }
+      />
+    </main>
   );
 }

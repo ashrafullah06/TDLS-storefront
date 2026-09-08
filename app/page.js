@@ -1,8 +1,7 @@
 // FILE: app/page.js
 export const revalidate = 60;
 export const runtime = "nodejs";
-
-import { connection } from "next/server";
+export const dynamic = "force-dynamic";
 
 import ClientHomepage from "@/components/homepage/homepage-client";
 import BottomFloatingBarShell from "@/components/common/bottomfloatingbar.shell.server";
@@ -79,9 +78,6 @@ export const metadata = {
 };
 
 export default async function Page() {
-  // Render at request time without overriding the fetch helper's cache policy.
-  await connection();
-
   let homepage = {};
   let error = null;
 
