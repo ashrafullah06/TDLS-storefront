@@ -1,52 +1,84 @@
 // FILE: src/lib/fetchproducts.js
+
 import { fetchStrapi } from "./strapifetch";
 import { getFirstGalleryImage } from "./strapimedia";
 
-/**
- * Fetch all products and normalize to:
- *   { id, ...flattenedAttributes, attributes, image }
- *
- * Works with BOTH:
- * - Strapi raw: { data: [...] }
- * - Already-unwrapped arrays: [...]
- */
 export default async function fetchproducts() {
-  let res;
-  try {
-    res = await fetchStrapi("/products?populate=*");
-  } catch (e) {
-    console.error("[fetchproducts] fetchStrapi error:", e);
-    return [];
+  const products = [];
+  const seen = new Set();
+
+  let pageCount = 1;
+
+  for (
+    let page = 1;
+    page <= pageCount;
+    page++
+  ) {
+    const response = await fetchStrapi(
+      `/products?pagination[page]=${page}` +
+        "&pagination[pageSize]=100" +
+        "&pagination[withCount]=true"
+    );
+
+    const nodes = Array.isArray(response)
+      ? response
+      : response?.data;
+
+    if (!Array.isArray(nodes)) {
+      throw new Error(
+        "Invalid Strapi product catalogue response."
+      );
+    }
+
+    const count = Number(
+      response?.meta?.pagination?.pageCount
+    );
+
+    if (
+      Number.isFinite(count) &&
+      count > 0
+    ) {
+      pageCount = Math.ceil(count);
+    }
+
+    for (const node of nodes) {
+      const attributes =
+        node?.attributes ||
+        node ||
+        {};
+
+      const id =
+        node?.id ??
+        attributes.id ??
+        null;
+
+      const key =
+        id ??
+        attributes.slug;
+
+      if (
+        key != null &&
+        seen.has(key)
+      ) {
+        continue;
+      }
+
+      if (key != null) {
+        seen.add(key);
+      }
+
+      const base = {
+        ...attributes,
+        id,
+      };
+
+      products.push({
+        ...base,
+        attributes: base,
+        image: getFirstGalleryImage(base),
+      });
+    }
   }
 
-  // Handle:
-  // 1) Strapi response: { data: [...] }
-  // 2) Already-unwrapped array: [...]
-  const rawNodes = Array.isArray(res?.data)
-    ? res.data
-    : Array.isArray(res)
-    ? res
-    : [];
-
-  if (!rawNodes.length) {
-    console.warn("[fetchproducts] No products returned from Strapi.");
-  }
-
-  return rawNodes.map((node) => {
-    const attrs = node?.attributes || node || {};
-
-    const base = {
-      id: node?.id ?? attrs.id ?? null,
-      ...attrs,
-    };
-
-    // derive primary image from gallery/images/image/cover_image
-    const image = getFirstGalleryImage(base);
-
-    return {
-      ...base,
-      attributes: base, // for any code still doing product.attributes.xxx
-      image,
-    };
-  });
+  return products;
 }
