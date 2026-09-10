@@ -51,7 +51,7 @@ const fetchProductBySlugCached = cache(
         timeoutMs: Number(
           process.env
             .TDLS_PRODUCT_DETAIL_FETCH_TIMEOUT_MS ||
-            10000
+            25000
         ),
 
         next: {
@@ -103,11 +103,11 @@ const fetchProductBySlugCached = cache(
         attributes.image
           ? {}
           : attributes.cover_image
-          ? {
-              image:
-                attributes.cover_image,
-            }
-          : {}
+            ? {
+                image:
+                  attributes.cover_image,
+              }
+            : {}
       ),
     };
   }

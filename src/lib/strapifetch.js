@@ -60,7 +60,7 @@ export async function fetchStrapi(
     typeof window !== "undefined";
 
   const {
-    timeoutMs = 10000,
+    timeoutMs = 25000,
     signal,
     ...init
   } = opts;
@@ -71,7 +71,7 @@ export async function fetchStrapi(
     Number.isFinite(numericTimeout) &&
     numericTimeout > 0
       ? Math.min(30000, numericTimeout)
-      : 10000;
+      : 25000;
 
   const absolute = /^https?:\/\//i.test(
     String(path)
@@ -239,10 +239,10 @@ export async function fetchStrapi(
       );
     }
 
-    // The proxy returns:
+    // Proxy response:
     // { ok: true, data: { data: [], meta: {...} } }
     //
-    // Direct Strapi requests already return:
+    // Direct Strapi response:
     // { data: [], meta: {...} }
     return json?.ok === true
       ? json.data

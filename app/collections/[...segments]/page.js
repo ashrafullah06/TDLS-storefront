@@ -1,24 +1,28 @@
-// FILE: app/collections/[...segments]/page.jsx
+// FILE: app/collections/[...segments]/page.js
+
 export const revalidate = 60;
 export const runtime = "nodejs";
+export const maxDuration = 60;
+
+import { Suspense } from "react";
 
 import Navbar from "@/components/common/navbar";
 import CollectionsSegmentClient from "./collections-segment-client";
-import { Suspense } from "react";
+import { fetchStrapiProxy } from "@/lib/strapi-proxy";
 
 /**
  * Segment route for collections browsing.
  *
  * Examples:
- *  /collections/men
- *  /collections/men/panjabi
- *  /collections/kids/boys/6-10/panjabi
+ * /collections/men
+ * /collections/men/panjabi
+ * /collections/kids/boys/6-10/panjabi
  *
- * Tier MUST remain a query param:
- *  /collections/men/panjabi?tier=limited-edition
+ * Tier remains a query parameter:
+ * /collections/men/panjabi?tier=limited-edition
  */
 
-/* ---------------- SEO/social only ---------------- */
+/* ---------------- SEO/social ---------------- */
 
 const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
@@ -26,169 +30,77 @@ const SITE_URL =
 
 const BRAND = "TDLS";
 
-const OG_IMAGE =
-  `${SITE_URL}/tdls-social-preview`;
+const OG_IMAGE = `${SITE_URL}/tdls-social-preview`;
 
-const COLLECTION_FETCH_TIMEOUT_MS =
-  15000;
-
-function getServerAppOrigin() {
-  if (
-    process.env.NODE_ENV !==
-    "production"
-  ) {
-    return `http://127.0.0.1:${
-      process.env.PORT ||
-      3000
-    }`;
-  }
-
-  const vercelHost =
-    String(
-      process.env.VERCEL_URL ||
-      ""
-    ).trim();
-
-  if (vercelHost) {
-    return /^https?:\/\//i.test(
-      vercelHost
-    )
-      ? vercelHost.replace(
-          /\/+$/,
-          ""
-        )
-      : `https://${vercelHost.replace(
-          /\/+$/,
-          ""
-        )}`;
-  }
-
-  return SITE_URL;
-}
-
-/* ---------------- existing helpers ---------------- */
+/* ---------------- Slug helpers ---------------- */
 
 function cleanSlug(v) {
-  const raw =
-    (v ?? "")
-      .toString()
-      .trim()
-      .toLowerCase();
+  const raw = (v ?? "")
+    .toString()
+    .trim()
+    .toLowerCase();
 
   if (!raw) {
     return "";
   }
 
-  const cut =
-    raw.split(";")[0];
+  const cut = raw.split(";")[0];
 
   return cut
-    .replace(
-      /[?#].*$/g,
-      ""
-    )
-    .replace(
-      /[^a-z0-9]+/g,
-      "-"
-    )
-    .replace(
-      /-+/g,
-      "-"
-    )
-    .replace(
-      /^-|-$/g,
-      ""
-    );
+    .replace(/[?#].*$/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
-
-/* ---------------- SEO helper only ---------------- */
 
 function prettySlug(v) {
   return String(v || "")
     .replace(/-/g, " ")
-    .replace(
-      /\b\w/g,
-      (m) =>
-        m.toUpperCase()
-    );
+    .replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
-function buildCollectionLabel(
-  rawSegments
-) {
-  const parts =
-    (
-      Array.isArray(
-        rawSegments
-      )
-        ? rawSegments
-        : []
-    )
-      .map(cleanSlug)
-      .filter(Boolean);
+function buildCollectionLabel(rawSegments) {
+  const parts = (
+    Array.isArray(rawSegments)
+      ? rawSegments
+      : []
+  )
+    .map(cleanSlug)
+    .filter(Boolean);
 
   if (!parts.length) {
     return "Collections";
   }
 
-  if (
-    parts.length ===
-    1
-  ) {
-    return prettySlug(
-      parts[0]
-    );
+  if (parts.length === 1) {
+    return prettySlug(parts[0]);
   }
 
-  const first =
-    parts[0];
+  const first = parts[0];
 
-  const audiences =
-    new Set([
-      "men",
-      "women",
-      "kids",
-      "young",
-    ]);
+  const audiences = new Set([
+    "men",
+    "women",
+    "kids",
+    "young",
+  ]);
 
-  if (
-    audiences.has(
-      first
-    )
-  ) {
-    const last =
-      parts[
-        parts.length -
-          1
-      ];
+  if (audiences.has(first)) {
+    const last = parts[parts.length - 1];
 
-    const qualifiers =
-      parts
-        .slice(
-          1,
-          -1
-        )
-        .map(
-          prettySlug
-        )
-        .filter(Boolean);
+    const qualifiers = parts
+      .slice(1, -1)
+      .map(prettySlug)
+      .filter(Boolean);
 
     const base =
-      `${prettySlug(
-        last
-      )} for ${prettySlug(
-        first
-      )}`;
+      `${prettySlug(last)} for ${prettySlug(first)}`;
 
-    if (
-      !qualifiers.length
-    ) {
+    if (!qualifiers.length) {
       return base;
     }
 
-    return `${base} · ${qualifiers.join(
-      " · "
-    )}`;
+    return `${base} · ${qualifiers.join(" · ")}`;
   }
 
   return parts
@@ -196,87 +108,60 @@ function buildCollectionLabel(
     .join(" · ");
 }
 
+/* ---------------- Dynamic metadata ---------------- */
+
 export async function generateMetadata({
   params,
   searchParams,
 }) {
-  const resolvedParams =
-    await Promise.resolve(
-      params
-    );
+  const resolvedParams = await Promise.resolve(params);
 
-  const resolvedSearch =
-    await Promise.resolve(
-      searchParams
-    );
+  const resolvedSearch = await Promise.resolve(
+    searchParams
+  );
 
   const rawSegments =
-    Array.isArray(
-      resolvedParams
-        ?.segments
-    )
-      ? resolvedParams
-          .segments
+    Array.isArray(resolvedParams?.segments)
+      ? resolvedParams.segments
       : [];
 
-  const cleanSegments =
-    rawSegments
-      .map(cleanSlug)
-      .filter(Boolean);
+  const cleanSegments = rawSegments
+    .map(cleanSlug)
+    .filter(Boolean);
 
-  const searchObj =
-    objFromSearchParams(
-      resolvedSearch
-    );
+  const searchObj = objFromSearchParams(resolvedSearch);
 
-  const tier =
-    cleanSlug(
-      searchObj?.tier ||
-      ""
-    );
+  const tier = cleanSlug(searchObj?.tier || "");
 
-  const collectionLabel =
-    buildCollectionLabel(
-      cleanSegments
-    );
+  const collectionLabel = buildCollectionLabel(
+    cleanSegments
+  );
 
   const titleCore =
     tier
-      ? `${prettySlug(
-          tier
-        )} · ${collectionLabel}`
+      ? `${prettySlug(tier)} · ${collectionLabel}`
       : collectionLabel;
 
-  const title =
-    `${titleCore} | ${BRAND}`;
+  const title = `${titleCore} | ${BRAND}`;
 
   const description =
     `Explore ${collectionLabel} by TDLS—refined pieces shaped by timeless character, effortless comfort and confident design.`;
 
-  const path =
-    cleanSegments
-      .map(
-        (segment) =>
-          encodeURIComponent(
-            segment
-          )
-      )
-      .join("/");
+  const path = cleanSegments
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
 
   const canonicalBase =
     `${SITE_URL}/collections/${path}`;
 
   const canonical =
     tier
-      ? `${canonicalBase}?tier=${encodeURIComponent(
-          tier
-        )}`
+      ? `${canonicalBase}?tier=${encodeURIComponent(tier)}`
       : canonicalBase;
 
   return {
     title: {
-      absolute:
-        title,
+      absolute: title,
     },
 
     description,
@@ -291,127 +176,77 @@ export async function generateMetadata({
     },
 
     openGraph: {
-      type:
-        "website",
-
-      url:
-        canonical,
-
-      siteName:
-        BRAND,
-
+      type: "website",
+      url: canonical,
+      siteName: BRAND,
       title,
-
       description,
 
       images: [
         {
-          url:
-            OG_IMAGE,
-
-          width:
-            1200,
-
-          height:
-            630,
-
-          alt:
-            `${titleCore} — TDLS`,
+          url: OG_IMAGE,
+          width: 1200,
+          height: 630,
+          alt: `${titleCore} — TDLS`,
         },
       ],
     },
 
     twitter: {
-      card:
-        "summary_large_image",
-
+      card: "summary_large_image",
       title,
-
       description,
-
-      images: [
-        OG_IMAGE,
-      ],
+      images: [OG_IMAGE],
     },
   };
 }
 
-/* ---------------- existing code below remains unchanged ---------------- */
+/* ---------------- Parameter helpers ---------------- */
 
-function clampInt(
-  v,
-  fallback,
-  min,
-  max
-) {
-  const n =
-    Number(v);
+function clampInt(v, fallback, min, max) {
+  const n = Number(v);
 
-  if (
-    !Number.isFinite(
-      n
-    )
-  ) {
+  if (!Number.isFinite(n)) {
     return fallback;
   }
 
-  const x =
-    Math.floor(n);
+  const x = Math.floor(n);
 
   return Math.min(
     max,
-    Math.max(
-      min,
-      x
-    )
+    Math.max(min, x)
   );
 }
 
-function objFromSearchParams(
-  sp
-) {
+function objFromSearchParams(sp) {
   const out = {};
 
   if (!sp) {
     return out;
   }
 
-  if (
-    typeof sp?.entries ===
-    "function"
-  ) {
-    for (
-      const [
-        k,
-        v,
-      ] of sp.entries()
-    ) {
+  if (typeof sp?.entries === "function") {
+    for (const [k, v] of sp.entries()) {
       out[k] = v;
     }
 
     return out;
   }
 
-  if (
-    typeof sp ===
-    "object"
-  ) {
-    for (
-      const k of
-        Object.keys(sp)
-    ) {
-      const v =
-        sp[k];
+  if (typeof sp === "object") {
+    for (const k of Object.keys(sp)) {
+      const v = sp[k];
 
-      out[k] =
-        Array.isArray(v)
-          ? v[0]
-          : v;
+      out[k] = Array.isArray(v)
+        ? v[0]
+        : v;
     }
   }
 
   return out;
 }
+
+/* ---------------- Product query ---------------- */
 
 function buildProductsStrapiPath({
   tier,
@@ -424,8 +259,7 @@ function buildProductsStrapiPath({
   page,
   pageSize,
 }) {
-  const p =
-    new URLSearchParams();
+  const p = new URLSearchParams();
 
   p.set(
     "pagination[page]",
@@ -485,6 +319,8 @@ function buildProductsStrapiPath({
   }
 
   if (tier) {
+    // The shared proxy normalizes this exact legacy tier
+    // expression through normalizeProductFilters().
     const tierRelations = [
       "tiers",
       "brand_tiers",
@@ -493,55 +329,18 @@ function buildProductsStrapiPath({
       "product_collections",
     ];
 
-    tierRelations.forEach(
-      (
-        rel,
-        index
-      ) => {
-        p.set(
-          `filters[$or][${index}][${rel}][slug][$eq]`,
-          tier
-        );
-      }
-    );
+    tierRelations.forEach((rel, index) => {
+      p.set(
+        `filters[$or][${index}][${rel}][slug][$eq]`,
+        tier
+      );
+    });
   }
 
   return `/products?${p.toString()}`;
 }
 
-async function fetchWithTimeout(
-  url,
-  options = {},
-  timeoutMs = COLLECTION_FETCH_TIMEOUT_MS
-) {
-  const controller =
-    new AbortController();
-
-  const timer =
-    setTimeout(
-      () => {
-        try {
-          controller.abort();
-        } catch {}
-      },
-      timeoutMs
-    );
-
-  try {
-    return await fetch(
-      url,
-      {
-        ...options,
-        signal:
-          controller.signal,
-      }
-    );
-  } finally {
-    clearTimeout(
-      timer
-    );
-  }
-}
+/* ---------------- Initial server fetch ---------------- */
 
 async function fetchInitialProducts({
   tier,
@@ -554,51 +353,39 @@ async function fetchInitialProducts({
   pageSize,
 }) {
   try {
-    const strapiPath =
-      buildProductsStrapiPath({
-        tier,
-        event,
-        audience,
-        category,
-        subCategory,
-        genderGroup,
-        ageGroup,
-        page: 1,
-        pageSize,
-      });
+    const strapiPath = buildProductsStrapiPath({
+      tier,
+      event,
+      audience,
+      category,
+      subCategory,
+      genderGroup,
+      ageGroup,
+      page: 1,
+      pageSize,
+    });
 
-    const proxyUrl =
-      new URL(
-        "/api/strapi",
-        getServerAppOrigin()
-      );
+    // This URL constructs a Request object only.
+    // No network request is sent to tdls.internal.
+    const proxyUrl = new URL(
+      "/api/strapi",
+      "http://tdls.internal"
+    );
 
     proxyUrl.searchParams.set(
       "path",
       strapiPath
     );
 
-    const res =
-      await fetchWithTimeout(
-        proxyUrl.toString(),
-        {
-          method:
-            "GET",
-
-          headers: {
-            Accept:
-              "application/json",
-          },
-
-          next: {
-            revalidate,
-
-            tags: [
-              "tdls-collections-products",
-            ],
-          },
-        }
-      );
+    // Execute the shared public proxy directly on the server,
+    // preserving its query, cache, and stock handling.
+    const res = await fetchStrapiProxy(
+      new Request(proxyUrl, {
+        headers: {
+          Accept: "application/json",
+        },
+      })
+    );
 
     if (!res.ok) {
       return {
@@ -607,12 +394,9 @@ async function fetchInitialProducts({
       };
     }
 
-    const json =
-      await res
-        .json()
-        .catch(
-          () => null
-        );
+    const json = await res
+      .json()
+      .catch(() => null);
 
     if (
       !json?.ok ||
@@ -626,8 +410,7 @@ async function fetchInitialProducts({
 
     return {
       ok: true,
-      data:
-        json.data,
+      data: json.data,
     };
   } catch {
     return {
@@ -636,6 +419,8 @@ async function fetchInitialProducts({
     };
   }
 }
+
+/* ---------------- Existing page styling ---------------- */
 
 const GRIDKILL_CSS = `
   html, body, #app-shell, main { background-image:none !important; }
@@ -657,6 +442,8 @@ const GRIDKILL_CSS = `
   .tdls-collections-gridkill-content { position:relative; z-index:1; }
 `;
 
+/* ---------------- Existing loading UI ---------------- */
+
 function InlineProductsLoading() {
   return (
     <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 py-6">
@@ -671,22 +458,20 @@ function InlineProductsLoading() {
   );
 }
 
+/* ---------------- Server product block ---------------- */
+
 async function ProductsBlock({
   initialQuery,
   initialSearch,
 }) {
-  const initial =
-    await fetchInitialProducts(
-      initialQuery
-    );
-
-  const pageSize =
+  const initial = await fetchInitialProducts(
     initialQuery
-      .pageSize;
+  );
+
+  const pageSize = initialQuery.pageSize;
 
   const initialStrapi =
-    initial.ok &&
-    initial.data
+    initial.ok && initial.data
       ? initial.data
       : {
           data: [],
@@ -703,253 +488,141 @@ async function ProductsBlock({
 
   return (
     <CollectionsSegmentClient
-      initialStrapi={
-        initialStrapi
-      }
-      initialOk={
-        initial.ok
-      }
-      initialQuery={
-        initialQuery
-      }
-      initialSearch={
-        initialSearch
-      }
+      initialStrapi={initialStrapi}
+      initialOk={initial.ok}
+      initialQuery={initialQuery}
+      initialSearch={initialSearch}
     />
   );
 }
+
+/* ---------------- Collection page ---------------- */
 
 export default async function CollectionsSegmentPage({
   params,
   searchParams,
 }) {
-  const sp =
-    await Promise.resolve(
-      searchParams
-    );
+  const sp = await Promise.resolve(searchParams);
 
-  const spObj =
-    objFromSearchParams(
-      sp
-    );
+  const spObj = objFromSearchParams(sp);
 
-  const p =
-    await Promise.resolve(
-      params
-    );
+  const p = await Promise.resolve(params);
 
   const segs =
-    Array.isArray(
-      p?.segments
-    )
+    Array.isArray(p?.segments)
       ? p.segments
       : [];
 
-  /*
-   * Parse the route exactly the same way as CollectionsSegmentClient.
-   */
-  const parsed =
-    (() => {
-      const out = {
-        event: "",
-        audience: "",
-        category: "",
-        subCategory: "",
-        genderGroup: "",
-        ageGroup: "",
-      };
+  // Keep route parsing aligned with CollectionsSegmentClient.
+  const parsed = (() => {
+    const out = {
+      event: "",
+      audience: "",
+      category: "",
+      subCategory: "",
+      genderGroup: "",
+      ageGroup: "",
+    };
 
-      const clean =
-        segs
-          .map(
-            (x) =>
-              cleanSlug(x)
-          )
-          .filter(Boolean);
+    const clean = segs
+      .map((x) => cleanSlug(x))
+      .filter(Boolean);
 
-      if (
-        !clean.length
-      ) {
-        return out;
-      }
+    if (!clean.length) {
+      return out;
+    }
 
-      const SEASON_SLUGS =
-        new Set([
-          "eid",
-          "winter",
-          "launch-week",
-          "new-arrival",
-          "on-sale",
-          "monsoon",
-          "summer",
-        ]);
+    const SEASON_SLUGS = new Set([
+      "eid",
+      "winter",
+      "launch-week",
+      "new-arrival",
+      "on-sale",
+      "monsoon",
+      "summer",
+    ]);
 
-      const AUD_MAIN =
-        new Set([
-          "men",
-          "women",
-          "kids",
-          "young",
-          "home-decor",
-          "accessories",
-        ]);
+    const AUD_MAIN = new Set([
+      "men",
+      "women",
+      "kids",
+      "young",
+      "home-decor",
+      "accessories",
+    ]);
 
-      const first =
-        clean[0] ||
-        "";
+    const first = clean[0] || "";
+
+    if (SEASON_SLUGS.has(first)) {
+      out.event = first;
+
+      const second = clean[1] || "";
 
       if (
-        SEASON_SLUGS.has(
-          first
-        )
+        second &&
+        AUD_MAIN.has(second)
       ) {
-        out.event =
-          first;
-
-        const second =
-          clean[1] ||
-          "";
+        out.audience = second;
 
         if (
-          second &&
-          AUD_MAIN.has(
-            second
-          )
+          second === "kids" ||
+          second === "young"
         ) {
-          out.audience =
-            second;
-
-          if (
-            second ===
-              "kids" ||
-            second ===
-              "young"
-          ) {
-            out.genderGroup =
-              clean[2] ||
-              "";
-
-            out.ageGroup =
-              clean[3] ||
-              "";
-
-            out.category =
-              clean[4] ||
-              "";
-
-            out.subCategory =
-              clean[5] ||
-              "";
-          } else {
-            out.category =
-              clean[2] ||
-              "";
-
-            out.subCategory =
-              clean[3] ||
-              "";
-          }
+          out.genderGroup = clean[2] || "";
+          out.ageGroup = clean[3] || "";
+          out.category = clean[4] || "";
+          out.subCategory = clean[5] || "";
         } else {
-          out.category =
-            second;
-
-          out.subCategory =
-            clean[2] ||
-            "";
+          out.category = clean[2] || "";
+          out.subCategory = clean[3] || "";
         }
-
-        return out;
+      } else {
+        out.category = second;
+        out.subCategory = clean[2] || "";
       }
-
-      if (
-        AUD_MAIN.has(
-          first
-        )
-      ) {
-        out.audience =
-          first;
-
-        if (
-          first ===
-            "kids" ||
-          first ===
-            "young"
-        ) {
-          out.genderGroup =
-            clean[1] ||
-            "";
-
-          out.ageGroup =
-            clean[2] ||
-            "";
-
-          out.category =
-            clean[3] ||
-            "";
-
-          out.subCategory =
-            clean[4] ||
-            "";
-        } else {
-          out.category =
-            clean[1] ||
-            "";
-
-          out.subCategory =
-            clean[2] ||
-            "";
-        }
-
-        return out;
-      }
-
-      out.audience =
-        first;
-
-      out.category =
-        clean[1] ||
-        "";
-
-      out.subCategory =
-        clean[2] ||
-        "";
 
       return out;
-    })();
+    }
 
-  const tier =
-    cleanSlug(
-      spObj?.tier ||
-      ""
-    );
+    if (AUD_MAIN.has(first)) {
+      out.audience = first;
 
-  /*
-   * Must match CollectionsSegmentClient PAGE_SIZE.
-   */
-  const pageSize =
-    24;
+      if (
+        first === "kids" ||
+        first === "young"
+      ) {
+        out.genderGroup = clean[1] || "";
+        out.ageGroup = clean[2] || "";
+        out.category = clean[3] || "";
+        out.subCategory = clean[4] || "";
+      } else {
+        out.category = clean[1] || "";
+        out.subCategory = clean[2] || "";
+      }
+
+      return out;
+    }
+
+    out.audience = first;
+    out.category = clean[1] || "";
+    out.subCategory = clean[2] || "";
+
+    return out;
+  })();
+
+  const tier = cleanSlug(spObj?.tier || "");
+
+  // Must match CollectionsSegmentClient PAGE_SIZE.
+  const pageSize = 24;
 
   const initialQuery = {
     tier,
-
-    event:
-      parsed.event,
-
-    audience:
-      parsed.audience,
-
-    category:
-      parsed.category,
-
-    subCategory:
-      parsed.subCategory,
-
-    genderGroup:
-      parsed.genderGroup,
-
-    ageGroup:
-      parsed.ageGroup,
-
+    event: parsed.event,
+    audience: parsed.audience,
+    category: parsed.category,
+    subCategory: parsed.subCategory,
+    genderGroup: parsed.genderGroup,
+    ageGroup: parsed.ageGroup,
     pageSize,
   };
 
@@ -957,8 +630,7 @@ export default async function CollectionsSegmentPage({
     <>
       <style
         dangerouslySetInnerHTML={{
-          __html:
-            GRIDKILL_CSS,
+          __html: GRIDKILL_CSS,
         }}
       />
 
@@ -971,18 +643,10 @@ export default async function CollectionsSegmentPage({
         <div className="tdls-collections-gridkill-content">
           <Navbar />
 
-          <Suspense
-            fallback={
-              <InlineProductsLoading />
-            }
-          >
+          <Suspense fallback={<InlineProductsLoading />}>
             <ProductsBlock
-              initialQuery={
-                initialQuery
-              }
-              initialSearch={
-                spObj
-              }
+              initialQuery={initialQuery}
+              initialSearch={spObj}
             />
           </Suspense>
         </div>

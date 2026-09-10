@@ -1,5 +1,5 @@
 // FILE: src/lib/product-query.js
-// Product relations verified against the supplied Strapi Product schema.
+// Retains the existing product population fields.
 
 const TAXONOMY = [
   "categories",
@@ -30,43 +30,10 @@ export function normalizeProductPath(path) {
 
   const p = url.searchParams;
 
-  // Recognize only the exact five-branch tier query emitted
-  // by the old clients. Other OR expressions and event filters
-  // retain their original meaning.
-  const legacy = [
-    "tiers",
-    "brand_tiers",
-    "collection_tiers",
-    "events_products_collections",
-    "product_collections",
-  ];
-
-  const keys = legacy.map(
-    (rel, i) =>
-      `filters[$or][${i}][${rel}][slug][$eq]`
-  );
-
-  const orKeys = [...p.keys()].filter(
-    (key) => key.startsWith("filters[$or]")
-  );
-
-  const values = keys.map((key) => p.get(key));
-
-  if (
-    orKeys.length === keys.length &&
-    values[0] &&
-    values.every((value) => value === values[0])
-  ) {
-    keys.forEach((key) => p.delete(key));
-
-    p.set(
-      "filters[brand_tiers][slug][$eq]",
-      values[0]
-    );
-  }
+  normalizeProductFilters(p);
 
   // Replace the obsolete product population profile,
-  // not the caller's filters.
+  // preserving the caller's normalized filters.
   for (const key of [...p.keys()]) {
     if (
       key === "populate" ||
@@ -85,8 +52,7 @@ export function normalizeProductPath(path) {
   }
 
   // Populate the immediate children of each variant,
-  // including its size rows. No guessed child relation
-  // names are needed.
+  // including its size rows.
   p.set(
     "populate[product_variants][populate]",
     "*"
@@ -138,4 +104,44 @@ export function normalizeProductPath(path) {
   }
 
   return `${pathname}?${p.toString()}`;
+}
+
+// Shared by direct CMS fetches and the public proxy.
+export function normalizeProductFilters(p) {
+  // Recognize only the exact five-branch tier query emitted
+  // by the old clients. Other OR expressions and event filters
+  // retain their original meaning.
+  const legacy = [
+    "tiers",
+    "brand_tiers",
+    "collection_tiers",
+    "events_products_collections",
+    "product_collections",
+  ];
+
+  const keys = legacy.map(
+    (rel, i) =>
+      `filters[$or][${i}][${rel}][slug][$eq]`
+  );
+
+  const orKeys = [...p.keys()].filter(
+    (key) => key.startsWith("filters[$or]")
+  );
+
+  const values = keys.map((key) => p.get(key));
+
+  if (
+    orKeys.length === keys.length &&
+    values[0] &&
+    values.every((value) => value === values[0])
+  ) {
+    keys.forEach((key) => p.delete(key));
+
+    p.set(
+      "filters[brand_tiers][slug][$eq]",
+      values[0]
+    );
+  }
+
+  return p;
 }

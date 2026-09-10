@@ -1,4 +1,5 @@
 // FILE: app/product/page.jsx
+
 export const revalidate = 60;
 export const runtime = "nodejs";
 
@@ -7,7 +8,7 @@ import Navbar from "@/components/common/navbar";
 import { headers } from "next/headers";
 import { fetchStrapi } from "@/lib/strapifetch";
 
-/* ───────── env helpers ───────── */
+/* ───────── Environment helpers ───────── */
 
 const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
@@ -28,7 +29,7 @@ const STRAPI_ORIGIN = String(RAW_STRAPI_ORIGIN || "")
   .replace(/\/+$/, "")
   .replace(/\/api$/, "");
 
-const PRODUCT_INDEX_FETCH_TIMEOUT_MS = 10000;
+const PRODUCT_INDEX_FETCH_TIMEOUT_MS = 25000;
 
 /* ───────── SEO ───────── */
 
@@ -72,7 +73,7 @@ export const metadata = {
   },
 };
 
-/* ───────── request-aware base URL ───────── */
+/* ───────── Request-aware base URL ───────── */
 
 async function resolveRequestBaseUrl() {
   try {
@@ -123,10 +124,9 @@ function pickStrapiProductName(node) {
   );
 }
 
-/* ───────── Strapi fetch helper ───────── */
+/* ───────── Strapi fetch helpers ───────── */
 
-const PRODUCTS_PAGE_SIZE = 100;
-const PRODUCTS_FETCH_CONCURRENCY = 3;
+const PRODUCTS_PAGE_SIZE = 24;
 const MAX_PRODUCT_PAGES = 1000;
 
 function buildProductsStrapiPath(page, populate = true) {
@@ -162,9 +162,7 @@ function readPagination(payload) {
   const explicitPageCount = Number(p.pageCount);
 
   const safePage =
-    Number.isFinite(page) && page > 0
-      ? Math.floor(page)
-      : 1;
+    Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
 
   const safePageSize =
     Number.isFinite(pageSize) && pageSize > 0
@@ -172,9 +170,7 @@ function readPagination(payload) {
       : PRODUCTS_PAGE_SIZE;
 
   const safeTotal =
-    Number.isFinite(total) && total >= 0
-      ? Math.floor(total)
-      : 0;
+    Number.isFinite(total) && total >= 0 ? Math.floor(total) : 0;
 
   let pageCount =
     Number.isFinite(explicitPageCount) && explicitPageCount > 0
@@ -183,10 +179,7 @@ function readPagination(payload) {
         ? Math.ceil(safeTotal / safePageSize)
         : 1;
 
-  pageCount = Math.min(
-    MAX_PRODUCT_PAGES,
-    Math.max(1, pageCount)
-  );
+  pageCount = Math.min(MAX_PRODUCT_PAGES, Math.max(1, pageCount));
 
   return {
     page: safePage,
@@ -232,105 +225,9 @@ async function fetchProductsPageWithRetry(appBaseUrl, page) {
   return fetchProductsPageFromStrapi(appBaseUrl, page);
 }
 
-function mergeUniqueProducts(target, incoming) {
-  const out = Array.isArray(target) ? target : [];
-
-  const seen = new Set(
-    out
-      .map((product) =>
-        String(
-          product?.id ??
-            product?.documentId ??
-            product?.attributes?.id ??
-            product?.slug ??
-            product?.attributes?.slug ??
-            ""
-        )
-      )
-      .filter(Boolean)
-  );
-
-  for (const product of Array.isArray(incoming) ? incoming : []) {
-    const key = String(
-      product?.id ??
-        product?.documentId ??
-        product?.attributes?.id ??
-        product?.slug ??
-        product?.attributes?.slug ??
-        ""
-    );
-
-    if (!key) {
-      out.push(product);
-      continue;
-    }
-
-    if (seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    out.push(product);
-  }
-
-  return out;
-}
-
 async function fetchProductsFromStrapi(appBaseUrl) {
-  const first = await fetchProductsPageWithRetry(appBaseUrl, 1);
-
-  if (!first) {
-    return [];
-  }
-
-  const allProducts = mergeUniqueProducts([], first.products);
-
-  const pageCount = Math.min(
-    MAX_PRODUCT_PAGES,
-    Math.max(1, Number(first.pagination?.pageCount || 1))
-  );
-
-  if (pageCount <= 1) {
-    return allProducts;
-  }
-
-  for (
-    let startPage = 2;
-    startPage <= pageCount;
-    startPage += PRODUCTS_FETCH_CONCURRENCY
-  ) {
-    const pages = [];
-
-    for (
-      let offset = 0;
-      offset < PRODUCTS_FETCH_CONCURRENCY;
-      offset++
-    ) {
-      const page = startPage + offset;
-
-      if (page > pageCount) {
-        break;
-      }
-
-      pages.push(page);
-    }
-
-    const results = await Promise.all(
-      pages.map((page) =>
-        fetchProductsPageWithRetry(appBaseUrl, page)
-      )
-    );
-
-    if (results.some((result) => !result)) {
-      return allProducts;
-    }
-
-    for (const result of results) {
-      mergeUniqueProducts(allProducts, result.products);
-    }
-  }
-
-  return allProducts;
+  // Render page 1 first. The client progressively loads remaining pages.
+  return fetchProductsPageWithRetry(appBaseUrl, 1);
 }
 
 /* ───────── Page component ───────── */
@@ -338,10 +235,10 @@ async function fetchProductsFromStrapi(appBaseUrl) {
 export default async function ProductIndexPage() {
   const requestBaseUrl = await resolveRequestBaseUrl();
 
-  let products;
+  let firstPage;
 
   try {
-    products = await fetchProductsFromStrapi(requestBaseUrl);
+    firstPage = await fetchProductsFromStrapi(requestBaseUrl);
   } catch (error) {
     console.error(
       "[products] Catalogue request failed:",
@@ -376,7 +273,9 @@ export default async function ProductIndexPage() {
     );
   }
 
-  const safeList = Array.isArray(products) ? products : [];
+  const safeList = Array.isArray(firstPage?.products)
+    ? firstPage.products
+    : [];
 
   const itemListJsonLd = {
     "@context": "https://schema.org",
@@ -412,6 +311,7 @@ export default async function ProductIndexPage() {
 
       <AllProductsClient
         products={safeList}
+        initialPageCount={firstPage.pagination.pageCount}
         siteBaseUrl={requestBaseUrl}
       />
     </>
