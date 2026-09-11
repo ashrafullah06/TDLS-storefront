@@ -19,7 +19,7 @@ export function normalizeProductPath(path) {
   const pathname = url.pathname.replace(
     /^\/api(?=\/)/,
     ""
-  ).replace(/\/+$/, "");
+  );
 
   if (
     pathname !== "/products" &&
@@ -32,36 +32,49 @@ export function normalizeProductPath(path) {
 
   normalizeProductFilters(p);
 
-  // Respect an explicit population profile. Replacing it here can turn
-  // a small card/menu request into a much larger query.
-  const hasPopulate = [...p.keys()].some(
-    (key) => key === "populate" || key.startsWith("populate[")
+  // Replace the obsolete product population profile,
+  // preserving the caller's normalized filters.
+  for (const key of [...p.keys()]) {
+    if (
+      key === "populate" ||
+      key.startsWith("populate[")
+    ) {
+      p.delete(key);
+    }
+  }
+
+  for (const relation of [
+    "images",
+    "gallery",
+    ...TAXONOMY,
+  ]) {
+    p.set(`populate[${relation}]`, "*");
+  }
+
+  // Populate the immediate children of each variant,
+  // including its size rows.
+  p.set(
+    "populate[product_variants][populate]",
+    "*"
   );
 
-  if (!hasPopulate) {
-    // Keep the existing default fields when the caller supplies no profile.
-    for (const relation of ["images", "gallery", ...TAXONOMY]) {
-      p.set(`populate[${relation}]`, "*");
-    }
+  const detail =
+    pathname !== "/products" ||
+    [...p.keys()].some((key) =>
+      /^filters\[slug\]/.test(key)
+    );
 
-    // Keep the existing variant children, including size rows.
-    p.set("populate[product_variants][populate]", "*");
-
-    const detail =
-      pathname !== "/products" ||
-      [...p.keys()].some((key) =>
-        /^filters(?:\[\$(?:and|or)\]\[\d+\])*\[slug\](?:\[|$)/.test(key)
+  if (detail) {
+    for (const component of [
+      "seo",
+      "alt_names_entries",
+      "materials_lines",
+      "translations",
+    ]) {
+      p.set(
+        `populate[${component}][populate]`,
+        "*"
       );
-
-    if (detail) {
-      for (const component of [
-        "seo",
-        "alt_names_entries",
-        "materials_lines",
-        "translations",
-      ]) {
-        p.set(`populate[${component}][populate]`, "*");
-      }
     }
   }
 
@@ -120,20 +133,14 @@ export function normalizeProductFilters(p) {
   if (
     orKeys.length === keys.length &&
     values[0] &&
-    keys.every((key) => p.getAll(key).length === 1) &&
     values.every((value) => value === values[0])
   ) {
     keys.forEach((key) => p.delete(key));
 
-    const canonicalKey = "filters[brand_tiers][slug][$eq]";
-
-    // A separate tier condition is implicitly ANDed with this OR group.
-    // Do not overwrite that condition and accidentally broaden the results.
-    if (p.has(canonicalKey)) {
-      p.set("filters[$or][0][brand_tiers][slug][$eq]", values[0]);
-    } else {
-      p.set(canonicalKey, values[0]);
-    }
+    p.set(
+      "filters[brand_tiers][slug][$eq]",
+      values[0]
+    );
   }
 
   return p;
