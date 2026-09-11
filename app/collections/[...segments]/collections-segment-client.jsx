@@ -24,10 +24,9 @@ const BottomFloatingBar = dynamic(
 
 const PAGE_SIZE = 24;
 const DISPLAY_STEP = 24;
-const PREFETCH_AHEAD_PAGES = 0;
 const FETCH_TIMEOUT_MS = 35000;
 
-const CACHE_PREFIX = "tdls_collections_route_cache_v1::";
+const CACHE_PREFIX = "tdls_collections_route_cache_v2::";
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
 function fetchWithTimeout(url, options = {}, ms = FETCH_TIMEOUT_MS) {
@@ -934,27 +933,8 @@ export default function CollectionsSegmentClient({
   const [displayTarget, setDisplayTarget] = useState(DISPLAY_STEP);
   const [showLoadingHint, setShowLoadingHint] = useState(false);
 
-  const inflightRef = useRef(new Set());
-  const loadedPagesRef = useRef(new Set());
-  const routeKeyRef = useRef(routeKey);
-  const prefetchRef = useRef({ routeKey, pages: new Map() });
-  const abortAllRef = useRef([]);
-
-  const registerAbort = (ctrl) => {
-    abortAllRef.current.push(ctrl);
-  };
-
-  const abortAll = () => {
-    abortAllRef.current.forEach((c) => {
-      try {
-        c.abort();
-      } catch {
-        // Continue cancelling the remaining requests.
-      }
-    });
-
-    abortAllRef.current = [];
-  };
+  // Each boot owns its requests; old requests cannot update a newer boot.
+  const requestSessionRef = useRef(null);
 
   const buildServerFiltersQS = useCallback(() => {
     const p = new URLSearchParams();
@@ -1002,200 +982,103 @@ export default function CollectionsSegmentClient({
   ]);
 
   const fetchStrapiPage = useCallback(
-    async ({ page, useServerFilters, noCache = false }) => {
-      const baseQS =
-        `pagination[page]=${page}` +
-        `&pagination[pageSize]=${PAGE_SIZE}` +
-        "&pagination[withCount]=true";
-
-      const filtersQS = useServerFilters ? buildServerFiltersQS() : "";
-      const qs = filtersQS ? `${baseQS}&${filtersQS}` : baseQS;
-      const strapiPath = `/products?${qs}`;
-
-      const proxyQS = new URLSearchParams();
-      proxyQS.set("path", strapiPath);
-
-      if (noCache) {
-        proxyQS.set("noCache", "1");
+    async ({ page, useServerFilters, session }) => {
+      const params = new URLSearchParams(buildServerFiltersQS());
+      if (!useServerFilters) {
+        for (const key of [...params.keys()]) params.delete(key);
       }
+      params.set("pagination[page]", String(page));
+      params.set("pagination[pageSize]", String(PAGE_SIZE));
+      params.set("pagination[withCount]", "true");
+      params.set("sort", "id:asc");
+      const query = new URLSearchParams({ path: `/products?${params}` });
+      const controller = new AbortController();
+      session.controllers.add(controller);
+      if (!session.active) controller.abort();
 
-      const ctrl = new AbortController();
-      registerAbort(ctrl);
-
-      const res = await fetchWithTimeout(
-        `/api/strapi?${proxyQS.toString()}`,
-        {
+      try {
+        const res = await fetchWithTimeout(`/api/strapi?${query}`, {
           method: "GET",
           headers: { Accept: "application/json" },
           cache: "no-store",
-          signal: ctrl.signal,
-        },
-        FETCH_TIMEOUT_MS
-      );
-
-      const raw = await safeJson(res);
-
-      if (!res.ok || !raw || raw?.ok === false) {
-        return {
-          ok: false,
-          status: res.status,
-          items: [],
-          pagination: null,
-        };
+          signal: controller.signal,
+        });
+        const raw = await safeJson(res);
+        const payload = raw?.ok === true ? raw.data : raw;
+        if (!res.ok || raw?.ok === false || payload?.error ||
+            !Array.isArray(payload?.data)) {
+          const error = new Error(`Product request failed (HTTP ${res.status}).`);
+          error.status = res.status;
+          throw error;
+        }
+        const result = unwrapAndFlatten(payload);
+        const pagination = payload.meta?.pagination;
+        if (pagination?.page != null && Number(pagination.page) !== page) {
+          throw new Error("Product response returned a different page.");
+        }
+        if (pagination?.pageSize != null && Number(pagination.pageSize) !== PAGE_SIZE) {
+          throw new Error("Product response page size does not match the collection.");
+        }
+        result.pagination.page = page;
+        return result;
+      } finally {
+        session.controllers.delete(controller);
       }
-
-      const { items, pagination } = unwrapAndFlatten(raw);
-
-      return {
-        ok: true,
-        status: res.status,
-        items,
-        pagination,
-      };
     },
     [buildServerFiltersQS]
   );
 
-  const prefetchAhead = useCallback(
-    async ({ fromPage, useServerFilters }) => {
-      const pr = prefetchRef.current;
-      if (pr.routeKey !== routeKey) return;
+  const loadPage = useCallback(async ({ page, useServerFilters }) => {
+    const session = requestSessionRef.current;
+    if (!session?.active || session.routeKey !== routeKey || !session.ready ||
+        session.busy || session.failed.size || session.loaded.has(page)) return false;
 
-      const start = Number(fromPage || 1);
-
-      for (let i = 1; i <= PREFETCH_AHEAD_PAGES; i++) {
-        const p = start + i;
-
-        if (p > remotePageCount) break;
-        if (loadedPagesRef.current.has(p)) continue;
-        if (inflightRef.current.has(p)) continue;
-        if (pr.pages.has(p)) continue;
-
-        inflightRef.current.add(p);
-
-        fetchStrapiPage({ page: p, useServerFilters })
-          .then((r) => {
-            if (!r?.ok) return;
-
-            const now = prefetchRef.current;
-            if (now.routeKey !== routeKey) return;
-
-            now.pages.set(p, {
-              items: r.items,
-              pagination: r.pagination,
-            });
-          })
-          .finally(() => {
-            inflightRef.current.delete(p);
-          });
-      }
-    },
-    [fetchStrapiPage, routeKey, remotePageCount]
-  );
-
-  const applyPageResult = useCallback(
-    ({ page, items, pagination, allowCacheWrite }) => {
-      setRawProducts((prev) => mergeUnique(prev, items));
-
-      if (pagination) {
-        setRemotePage(Number(pagination.page || page || 1));
-        setRemotePageCount(Number(pagination.pageCount || 1));
-        setRemoteTotal(Number(pagination.total || 0));
-
-        if (allowCacheWrite) {
-          writeRouteCache(routeKey, mergeUnique([], items), pagination);
-        }
-      } else {
-        setRemotePage((x) => Math.max(x, page || 1));
-      }
-    },
-    [routeKey]
-  );
-
-  const loadPage = useCallback(
-    async ({ page, useServerFilters, allowCacheWrite = false }) => {
-      const p = Number(page || 1);
-
-      if (loadedPagesRef.current.has(p)) return true;
-
-      const pref = prefetchRef.current;
-
-      if (pref.routeKey === routeKey && pref.pages.has(p)) {
-        const cached = pref.pages.get(p);
-        pref.pages.delete(p);
-        loadedPagesRef.current.add(p);
-
-        applyPageResult({
-          page: p,
-          items: cached.items,
-          pagination: cached.pagination,
-          allowCacheWrite,
-        });
-
-        return true;
-      }
-
-      if (inflightRef.current.has(p)) return true;
-
-      inflightRef.current.add(p);
-
-      const isInitial = p === 1;
-
-      if (isInitial) {
-        setLoadingInitial(true);
-      } else {
-        setLoadingMore(true);
-      }
-
-      try {
-        const r = await fetchStrapiPage({
-          page: p,
-          useServerFilters,
-        });
-
-        if (!r.ok) return false;
-        if (routeKeyRef.current !== routeKey) return false;
-
-        loadedPagesRef.current.add(p);
-
-        applyPageResult({
-          page: p,
-          items: r.items,
-          pagination: r.pagination,
-          allowCacheWrite,
-        });
-
-        prefetchAhead({ fromPage: p, useServerFilters });
-
-        return true;
-      } catch {
-        return false;
-      } finally {
-        inflightRef.current.delete(p);
-        setLoadingMore(false);
-        setLoadingInitial(false);
-      }
-    },
-    [applyPageResult, fetchStrapiPage, prefetchAhead, routeKey]
-  );
+    session.busy = true;
+    setLoadingMore(true);
+    const isCurrent = () => session.active && requestSessionRef.current === session;
+    try {
+      const result = await fetchStrapiPage({ page, useServerFilters, session });
+      if (!isCurrent()) return false;
+      session.loaded.add(page);
+      setRawProducts((prev) => mergeUnique(prev, result.items));
+      setRemotePage(page);
+      setRemotePageCount(result.pagination.pageCount);
+      setRemoteTotal(result.pagination.total);
+      return true;
+    } catch (error) {
+      if (!isCurrent()) return false;
+      // Mark the failure BEFORE clearing loading. Effects cannot retry this page.
+      session.failed.add(page);
+      setFetchError("Unable to load products. Please reload this page to try again.");
+      console.error("[collections] Product page failed:", error.message);
+      return false;
+    } finally {
+      session.busy = false;
+      if (isCurrent()) setLoadingMore(false);
+    }
+  }, [fetchStrapiPage, routeKey]);
 
   useEffect(() => {
     if (!loadingInitial) {
       setShowLoadingHint(false);
       return;
     }
-
-    const t = setTimeout(() => setShowLoadingHint(true), 180);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setShowLoadingHint(true), 180);
+    return () => clearTimeout(timer);
   }, [loadingInitial]);
 
   useEffect(() => {
-    routeKeyRef.current = routeKey;
-    abortAll();
-
-    inflightRef.current = new Set();
-    loadedPagesRef.current = new Set();
-    prefetchRef.current = { routeKey, pages: new Map() };
+    const session = {
+      active: true, routeKey, ready: false, busy: true,
+      controllers: new Set(), loaded: new Set(), failed: new Set(),
+    };
+    requestSessionRef.current = session;
+    const isCurrent = () => session.active && requestSessionRef.current === session;
+    const cleanup = () => {
+      session.active = false;
+      session.controllers.forEach((controller) => controller.abort());
+      session.controllers.clear();
+    };
 
     setRawProducts([]);
     setFetchError("");
@@ -1205,145 +1088,58 @@ export default function CollectionsSegmentClient({
     setLoadingInitial(true);
     setLoadingMore(false);
     setDisplayTarget(DISPLAY_STEP);
+    setFetchMode("serverFiltered");
 
-    const hasAnySelection = [
-      selectedTier,
-      selectedAudience,
-      selectedCategory,
-      selectedSubCategory,
-      selectedEvent,
-      selectedGender,
-      selectedAge,
-    ].some(isNonEmpty);
-
-    const serverMode = hasAnySelection ? "serverFiltered" : "catalogScan";
-    setFetchMode(serverMode);
-
-    const applyInitialResult = (result, mode) => {
-      if (!result?.ok) return false;
-
-      const pg = result.pagination || {
-        page: 1,
-        pageSize: PAGE_SIZE,
-        pageCount: 1,
-        total: Array.isArray(result.items) ? result.items.length : 0,
-      };
-
-      const items = Array.isArray(result.items) ? result.items : [];
-
-      setFetchMode(mode);
+    const applyInitial = ({ items, pagination }) => {
+      if (!isCurrent()) return;
+      session.loaded.add(1);
+      session.ready = true;
+      session.busy = false;
       setRawProducts(items);
-      setRemotePage(Number(pg?.page || 1));
-      setRemotePageCount(Number(pg?.pageCount || 1));
-      setRemoteTotal(Number(pg?.total || items.length || 0));
-
-      loadedPagesRef.current = new Set([Number(pg?.page || 1)]);
+      setRemotePage(1);
+      setRemotePageCount(pagination.pageCount);
+      setRemoteTotal(pagination.total);
       setLoadingInitial(false);
-
-      if (items.length) {
-        writeRouteCache(routeKey, items, pg);
-      }
-
-      return true;
+      writeRouteCache(routeKey, items, pagination);
     };
 
-    if (initialOk && initialStrapi) {
-      const seeded = unwrapAndFlatten(initialStrapi);
-
-      // A successful empty collection is also a completed response.
-      if (Array.isArray(initialStrapi?.data)) {
-        applyInitialResult(
-          {
-            ok: true,
-            items: seeded.items,
-            pagination: seeded.pagination,
-          },
-          serverMode
-        );
-
-        return () => {
-          abortAll();
-        };
-      }
+    const seed = initialStrapi?.ok === true ? initialStrapi.data : initialStrapi;
+    const seedPagination = seed?.meta?.pagination;
+    const seedMatches = (!seedPagination?.page || Number(seedPagination.page) === 1) &&
+      (!seedPagination?.pageSize || Number(seedPagination.pageSize) === PAGE_SIZE);
+    if (initialOk && seedMatches && !seed?.error && Array.isArray(seed?.data)) {
+      // An empty successful collection is complete; never scan the whole catalogue.
+      applyInitial(unwrapAndFlatten(seed));
+      return cleanup;
     }
 
     const cached = readRouteCache(routeKey);
-
-    if (cached?.items?.length) {
-      setRawProducts(Array.isArray(cached.items) ? cached.items : []);
-
-      if (cached.pagination) {
-        setRemotePage(Number(cached.pagination.page || 1));
-        setRemotePageCount(Number(cached.pagination.pageCount || 1));
-        setRemoteTotal(
-          Number(cached.pagination.total || cached.items.length || 0)
-        );
-      }
-
+    if (cached?.pagination && Number(cached.pagination.page) === 1 &&
+        Number(cached.pagination.pageSize) === PAGE_SIZE) {
+      // Keep cached cards visible while refreshing, but don't start pagination yet.
+      setRawProducts(cached.items);
+      setRemotePage(1);
+      setRemotePageCount(Number(cached.pagination.pageCount) || 1);
+      setRemoteTotal(Number(cached.pagination.total) || 0);
       setLoadingInitial(false);
     }
 
-    (async () => {
-      let filteredResult = null;
-
+    void (async () => {
       try {
-        filteredResult = await fetchStrapiPage({
-          page: 1,
-          useServerFilters: hasAnySelection,
-          noCache: true,
-        });
-      } catch {
-        filteredResult = null;
-      }
-
-      if (routeKeyRef.current !== routeKey) return;
-
-      if (
-        filteredResult?.ok &&
-        (!hasAnySelection || filteredResult.items.length > 0)
-      ) {
-        applyInitialResult(filteredResult, serverMode);
-        return;
-      }
-
-      if (hasAnySelection) {
-        let catalogResult = null;
-
-        try {
-          catalogResult = await fetchStrapiPage({
-            page: 1,
-            useServerFilters: false,
-            noCache: true,
-          });
-        } catch {
-          catalogResult = null;
-        }
-
-        if (routeKeyRef.current !== routeKey) return;
-
-        if (catalogResult?.ok) {
-          applyInitialResult(catalogResult, "catalogScan");
-          return;
-        }
-      }
-
-      if (filteredResult?.ok) {
-        applyInitialResult(filteredResult, serverMode);
-        return;
-      }
-
-      setLoadingInitial(false);
-
-      if (!(cached?.items?.length > 0)) {
-        setFetchError("Unable to load products. Please try again.");
+        const result = await fetchStrapiPage({ page: 1, useServerFilters: true, session });
+        applyInitial(result);
+      } catch (error) {
+        if (!isCurrent()) return;
+        session.failed.add(1);
+        setFetchError("Unable to load products. Please reload this page to try again.");
+        console.error("[collections] Initial product request failed:", error.message);
+      } finally {
+        session.busy = false;
+        if (isCurrent()) setLoadingInitial(false);
       }
     })();
-
-    return () => {
-      abortAll();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeKey]);
+    return cleanup;
+  }, [routeKey, initialStrapi, initialOk, fetchStrapiPage]);
 
   const matchesCollection = useCallback(
     (p) => {
@@ -1583,15 +1379,12 @@ export default function CollectionsSegmentClient({
     tagSet,
   ]);
 
+  const previousPriceBounds = useRef({ min: 0, max: 0 });
   useEffect(() => {
-    if (facets.priceMax && maxPrice === 0) {
-      setMaxPrice(facets.priceMax);
-    }
-
-    if (minPrice === 0) {
-      setMinPrice(facets.priceMin || 0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const previous = previousPriceBounds.current;
+    setMinPrice((value) => value === 0 || value === previous.min ? facets.priceMin : value);
+    setMaxPrice((value) => value === 0 || value === previous.max ? facets.priceMax : value);
+    previousPriceBounds.current = { min: facets.priceMin, max: facets.priceMax };
   }, [facets.priceMin, facets.priceMax]);
 
   useEffect(() => {
@@ -1833,6 +1626,7 @@ export default function CollectionsSegmentClient({
     let cancelled = false;
 
     const run = async () => {
+      if (fetchError) return;
       if (loadingInitial) return;
       if (loadingMore) return;
       if (!hasMoreRemote) return;
@@ -1867,6 +1661,7 @@ export default function CollectionsSegmentClient({
       cancelled = true;
     };
   }, [
+    fetchError,
     displayTarget,
     pageFiltered.length,
     remotePage,
@@ -1886,7 +1681,9 @@ export default function CollectionsSegmentClient({
   ]);
 
   useEffect(() => {
-    if (loadingInitial || !sentinelRef.current) return;
+    if (loadingInitial || loadingMore || fetchError ||
+        !sentinelRef.current ||
+        (displayTarget >= pageFiltered.length && !hasMoreRemote)) return;
 
     const node = sentinelRef.current;
 
@@ -1906,7 +1703,7 @@ export default function CollectionsSegmentClient({
       io.unobserve(node);
       io.disconnect();
     };
-  }, [loadingInitial, pageFiltered.length]);
+  }, [loadingInitial, loadingMore, fetchError, pageFiltered.length, displayTarget, hasMoreRemote]);
 
   const [quickOpen, setQuickOpen] = useState(false);
   const [quickProduct, setQuickProduct] = useState(null);
@@ -1964,7 +1761,7 @@ export default function CollectionsSegmentClient({
   };
 
   const exhausted =
-    !loadingInitial && !loadingMore && remotePage >= remotePageCount;
+    !fetchError && !loadingInitial && !loadingMore && remotePage >= remotePageCount;
 
   const showTotal =
     fetchMode === "serverFiltered" &&

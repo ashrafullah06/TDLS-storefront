@@ -313,9 +313,8 @@ function normalizeStrapiPath(input) {
     }
   }
 
-  return p0.startsWith("/")
-    ? p0
-    : `/${p0}`;
+  const relative = p0.startsWith("/") ? p0 : `/${p0}`;
+  return relative.replace(/^\/api(?=\/)/, "");
 }
 
 function splitPathAndQuery(p) {
@@ -549,16 +548,16 @@ function isHeavyPopulateRequest(path) {
 
 const DEFAULT_PRODUCTS_PAGESIZE = (() => {
   const n = Number(
-    process.env.TDLS_STRAPI_PRODUCTS_PAGESIZE ?? 100
+    process.env.TDLS_STRAPI_PRODUCTS_PAGESIZE ?? 24
   );
 
   if (!Number.isFinite(n) || n <= 0) {
-    return 100;
+    return 24;
   }
 
   return Math.min(
     500,
-    Math.max(25, Math.round(n))
+    Math.max(1, Math.round(n))
   );
 })();
 
@@ -886,32 +885,68 @@ function applyProductsCardLitePopulate(params) {
 }
 
 function ensureProductVariantSizesPopulate(params) {
-  if (!hasPopulateForRel(params, "product_variants")) {
-    params.set(
-      "populate[product_variants][populate][sizes]",
-      "*"
-    );
+  const root = "populate[product_variants]";
+  const nested = `${root}[populate]`;
 
-    return;
-  }
+  // A nested wildcard already includes sizes. Mixing that scalar with
+  // nested object keys produces an ambiguous population tree.
+  if (params.get(nested) === "*") return;
 
-  let hasSizes = false;
-
-  for (const k of params.keys()) {
+  for (const [key, value] of params.entries()) {
     if (
-      k.startsWith(
-        "populate[product_variants][populate][sizes]"
+      key === `${nested}[sizes]` ||
+      key.startsWith(`${nested}[sizes][`) ||
+      (
+        /^populate\[product_variants\]\[populate\]\[\d+\]$/.test(key) &&
+        value === "sizes"
       )
     ) {
-      hasSizes = true;
-      break;
+      return;
     }
   }
 
-  if (!hasSizes) {
+  // Convert a direct wildcard to the existing explicit size profile.
+  if (["*", "true"].includes(params.get(root))) {
+    params.delete(root);
+  }
+
+  if (params.has(root) || params.has(nested)) return;
+
+  params.set(`${nested}[sizes]`, "*");
+}
+
+function isProductDetailPath(path) {
+  const { pathname, search } = splitPathAndQuery(path);
+
+  return (
+    pathname.startsWith("/products/") ||
+    (
+      pathname === "/products" &&
+      [...new URLSearchParams(search).keys()].some(
+        (key) =>
+          /^filters(?:\[\$(?:and|or)\]\[\d+\])*\[slug\](?:\[|$)/.test(key)
+      )
+    )
+  );
+}
+
+function ensureProductsPagination(params) {
+  // Offset pagination must not be mixed with page pagination.
+  if (
+    params.has("pagination[start]") ||
+    params.has("pagination[limit]")
+  ) {
+    return;
+  }
+
+  if (!params.get("pagination[page]")) {
+    params.set("pagination[page]", "1");
+  }
+
+  if (!params.get("pagination[pageSize]")) {
     params.set(
-      "populate[product_variants][populate][sizes]",
-      "*"
+      "pagination[pageSize]",
+      String(DEFAULT_PRODUCTS_PAGESIZE)
     );
   }
 }
@@ -979,10 +1014,6 @@ function normalizePopulateStringToObject(
       continue;
     }
 
-    if (TAXONOMY_REL_SET.has(rel)) {
-      continue;
-    }
-
     if (
       rel === "variants" ||
       rel === "product_variants"
@@ -1002,42 +1033,33 @@ function normalizePopulateStringToObject(
 }
 
 function normalizeProductsPath(p) {
-  const { pathname, search } = splitPathAndQuery(p);
+  const parts = splitPathAndQuery(p);
 
-  if (!pathname.startsWith("/products")) {
+  const pathname = parts.pathname
+    .replace(/^\/api(?=\/)/, "")
+    .replace(/\/+$/, "");
+
+  if (
+    pathname !== "/products" &&
+    !pathname.startsWith("/products/")
+  ) {
     return p;
   }
 
-  const params = new URLSearchParams(search || "");
+  const params = new URLSearchParams(parts.search || "");
 
   normalizeProductFilters(params);
 
   const isList = pathname === "/products";
-  const isDetail = !isList;
-
-  const listHasFilters =
-    isList
-      ? hasFiltersInPath(p)
-      : false;
+  const isDetail = isProductDetailPath(`${pathname}?${params}`);
 
   const listProfile =
-    listHasFilters
+    hasFiltersInPath(p) ||
+    DEFAULT_PRODUCTS_LIST_PROFILE === "filtersafe"
       ? "filtersafe"
-      : DEFAULT_PRODUCTS_LIST_PROFILE === "filtersafe"
-        ? "filtersafe"
-        : "cardlite";
+      : "cardlite";
 
-  if (
-    params.has("populate") &&
-    hasObjectPopulate(params)
-  ) {
-    params.delete("populate");
-  }
-
-  if (
-    params.has("populate") &&
-    !hasObjectPopulate(params)
-  ) {
+  if (params.has("populate")) {
     normalizePopulateStringToObject(
       params,
       isDetail
@@ -1048,87 +1070,54 @@ function normalizeProductsPath(p) {
     );
   }
 
-  if (isDetail) {
-    applyProductDetailPopulate(params);
-  } else {
-    if (listProfile === "filtersafe") {
-      stripPopulateParams(params);
+  // Preserve explicit field selections, especially slug-based detail queries.
+  if (!hasAnyPopulate(params)) {
+    if (isDetail) {
+      applyProductDetailPopulate(params);
+    } else if (listProfile === "filtersafe") {
       applyProductsFilterSafePopulate(params);
     } else {
-      if (!hasAnyPopulate(params)) {
-        applyProductsCardLitePopulate(params);
-      } else {
-        if (
-          hasPopulateForRel(
-            params,
-            "product_variants"
-          )
-        ) {
-          ensureProductVariantSizesPopulate(params);
-        }
+      applyProductsCardLitePopulate(params);
+    }
+  }
 
-        if (
-          hasPopulateForRel(params, "variants") &&
-          !hasPopulateForRel(
-            params,
-            "product_variants"
-          )
-        ) {
-          const legacyEntries = Array.from(
-            params.entries()
-          ).filter(
-            ([k]) =>
-              k === "populate[variants]" ||
-              k.startsWith("populate[variants][")
-          );
+  if (
+    hasPopulateForRel(params, "variants") &&
+    !hasPopulateForRel(params, "product_variants")
+  ) {
+    for (const [key, value] of [...params.entries()]) {
+      if (
+        key === "populate[variants]" ||
+        key.startsWith("populate[variants][")
+      ) {
+        params.delete(key);
 
-          for (const [k, v] of legacyEntries) {
-            params.delete(k);
-
-            const nextKey = k.replace(
-              /^populate\[variants\]/,
-              "populate[product_variants]"
-            );
-
-            params.append(nextKey, v);
-          }
-
-          ensureProductVariantSizesPopulate(params);
-        }
+        params.append(
+          key.replace(
+            /^populate\[variants\]/,
+            "populate[product_variants]"
+          ),
+          value
+        );
       }
     }
   }
 
+  if (hasPopulateForRel(params, "product_variants")) {
+    ensureProductVariantSizesPopulate(params);
+  }
+
   if (isList) {
-    const pageSizeKey = "pagination[pageSize]";
-    const existing = params.get(pageSizeKey);
+    ensureProductsPagination(params);
 
-    if (!existing) {
-      params.set(
-        pageSizeKey,
-        String(DEFAULT_PRODUCTS_PAGESIZE)
-      );
-    } else {
-      const x = Number(existing);
-
-      if (!Number.isFinite(x) || x <= 0) {
-        params.set(
-          pageSizeKey,
-          String(DEFAULT_PRODUCTS_PAGESIZE)
-        );
-      }
-    }
-
-    if (!params.get("pagination[page]")) {
-      params.set("pagination[page]", "1");
+    if (!hasAnySort(params)) {
+      params.set("sort", "id:asc");
     }
   }
 
   const qs = params.toString();
 
-  return qs
-    ? `${pathname}?${qs}`
-    : pathname;
+  return qs ? `${pathname}?${qs}` : pathname;
 }
 
 function shouldForcePublicProductsList(path) {
@@ -1138,9 +1127,7 @@ function shouldForcePublicProductsList(path) {
     return false;
   }
 
-  if (hasFiltersInPath(path)) {
-    return true;
-  }
+  if (isProductDetailPath(path)) return false;
 
   const params = new URLSearchParams(search || "");
 
@@ -1189,16 +1176,7 @@ function forcePublicProductsListPath(p) {
     applyProductsCardLitePopulate(params);
   }
 
-  if (!params.get("pagination[pageSize]")) {
-    params.set(
-      "pagination[pageSize]",
-      String(DEFAULT_PRODUCTS_PAGESIZE)
-    );
-  }
-
-  if (!params.get("pagination[page]")) {
-    params.set("pagination[page]", "1");
-  }
+  ensureProductsPagination(params);
 
   const qs = params.toString();
 
@@ -1246,16 +1224,7 @@ function buildProductsCompatibilityPath(p) {
   params.set("populate", "*");
 
   if (pathname === "/products") {
-    if (!params.get("pagination[pageSize]")) {
-      params.set(
-        "pagination[pageSize]",
-        String(DEFAULT_PRODUCTS_PAGESIZE)
-      );
-    }
-
-    if (!params.get("pagination[page]")) {
-      params.set("pagination[page]", "1");
-    }
+    ensureProductsPagination(params);
   }
 
   const qs = params.toString();
@@ -2236,6 +2205,8 @@ async function fetchUpstreamResilient(
 
       // Preserve the existing public-read fallback for an invalid token.
       if (res.status === 401) {
+        await res.body?.cancel().catch(() => {});
+
         res = await fetchWithTimeout(
           target,
           {
@@ -2278,6 +2249,7 @@ async function fetchUpstreamResilient(
         shouldRetryStatus(res.status) &&
         i < delays.length - 1
       ) {
+        await res.body?.cancel().catch(() => {});
         continue;
       }
 
@@ -2335,7 +2307,25 @@ function isSuspectEmptyProductsResponse(data) {
 
   return (
     Number.isFinite(total) &&
-    total > 0
+    total > 0 &&
+    (() => {
+      const pg = data?.meta?.pagination;
+
+      const start =
+        pg?.start != null
+          ? Number(pg.start)
+          : (
+              Number(pg?.page || 1) - 1
+            ) * Number(
+              pg?.pageSize || DEFAULT_PRODUCTS_PAGESIZE
+            );
+
+      return (
+        Number.isFinite(start) &&
+        start >= 0 &&
+        start < total
+      );
+    })()
   );
 }
 
@@ -2574,7 +2564,10 @@ export async function fetchStrapiProxy(req) {
         );
 
         guarded = true;
-      } else if (isProductsList) {
+      } else if (
+        isProductsList &&
+        !isProductDetailPath(effectivePath)
+      ) {
         effectivePath = canonicalizePath(
           sanitizeProductsListPathForPublic(
             effectivePath
@@ -2782,45 +2775,8 @@ export async function fetchStrapiProxy(req) {
 
           let usedSchemaCompat = false;
 
-          // A rejected population tree gets one compatibility
-          // request while preserving filters, sorting and pagination.
-          if (
-            !res.ok &&
-            res.status === 400 &&
-            isProductEndpoint
-          ) {
-            const compatPath =
-              buildProductsCompatibilityPath(
-                effectivePath
-              );
-
-            if (compatPath !== effectivePath) {
-              const compatTarget =
-                buildTargetUrl(compatPath);
-
-              try {
-                const compatRes =
-                  await fetchUpstreamResilient(
-                    compatTarget,
-                    baseHeaders,
-                    {
-                      deadlineAt,
-                      delays,
-                    }
-                  );
-
-                res = compatRes;
-
-                if (compatRes.ok) {
-                  usedSchemaCompat = true;
-                }
-              } catch {
-                // Keep the original response if the compatibility
-                // request cannot be completed.
-              }
-            }
-          }
-
+          // HTTP 400 is a rejected query. Preserve its error body;
+          // do not send a broader population query that masks the cause.
           if (!res.ok) {
             const text = await res
               .text()
@@ -2844,6 +2800,23 @@ export async function fetchStrapiProxy(req) {
               status: 502,
               statusText: "Bad Gateway",
               errorText: "Invalid JSON",
+            };
+          }
+
+          if (
+            isProductEndpoint &&
+            (
+              !data ||
+              data.error ||
+              !Object.prototype.hasOwnProperty.call(data, "data") ||
+              (isProductsList && !Array.isArray(data.data))
+            )
+          ) {
+            return {
+              ok: false,
+              status: 502,
+              statusText: "Bad Gateway",
+              errorText: "Invalid Strapi product response",
             };
           }
 
@@ -2897,38 +2870,6 @@ export async function fetchStrapiProxy(req) {
               await patchProductsWithPrismaStock(
                 data
               );
-          }
-
-          // Preserve exact-request recovery for unfiltered
-          // catalogue responses. Never substitute another page.
-          if (
-            !hasClientSecret &&
-            isProductsList
-          ) {
-            const countNow =
-              productCountFromStrapiPayload(data);
-
-            const hasFilters =
-              hasFiltersInPath(effectivePath);
-
-            if (
-              countNow === 0 &&
-              !hasFilters
-            ) {
-              const lgExact =
-                lastGoodGet(lastGoodKey);
-
-              if (lgExact?.payloadStr) {
-                return {
-                  ok: true,
-                  status: 200,
-                  payloadStr: lgExact.payloadStr,
-                  degraded: true,
-                  reason: "EMPTY->EXACT_LAST_GOOD",
-                  schemaCompat: usedSchemaCompat,
-                };
-              }
-            }
           }
 
           const payloadObj = {
@@ -3188,8 +3129,17 @@ export async function fetchStrapiProxy(req) {
       !isProductEndpoint ||
       (
         Number.isFinite(productCount) &&
-        productCount > 0
+        productCount >= 0
       );
+
+    // An explicit refresh must invalidate the older exact memory entry.
+    if (noCache && !hasClientSecret) {
+      const map = isProductEndpoint ? MEM_PROD : MEM_META;
+
+      map.delete(
+        `pub|${isProductEndpoint ? "prod" : "meta"}|${effectivePath}`
+      );
+    }
 
     if (CACHE_OK) {
       if (
