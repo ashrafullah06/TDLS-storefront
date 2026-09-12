@@ -1,5 +1,5 @@
 // FILE: src/lib/product-query.js
-// Retains the existing product population fields.
+// Keep list queries aligned with the public proxy while preserving detail fields.
 
 const TAXONOMY = [
   "categories",
@@ -11,6 +11,15 @@ const TAXONOMY = [
   "brand_tiers",
   "events_products_collections",
   "tags",
+];
+
+const LIST_TAXONOMY = [
+  "audience_categories",
+  "categories",
+  "sub_categories",
+  "age_groups",
+  "gender_groups",
+  "events_products_collections",
 ];
 
 export function normalizeProductPath(path) {
@@ -43,21 +52,6 @@ export function normalizeProductPath(path) {
     }
   }
 
-  for (const relation of [
-    "images",
-    "gallery",
-    ...TAXONOMY,
-  ]) {
-    p.set(`populate[${relation}]`, "*");
-  }
-
-  // Populate the immediate children of each variant,
-  // including its size rows.
-  p.set(
-    "populate[product_variants][populate]",
-    "*"
-  );
-
   const detail =
     pathname !== "/products" ||
     [...p.keys()].some((key) =>
@@ -65,6 +59,20 @@ export function normalizeProductPath(path) {
     );
 
   if (detail) {
+    // Preserve the full product-detail fields and variant children.
+    for (const relation of [
+      "images",
+      "gallery",
+      ...TAXONOMY,
+    ]) {
+      p.set(`populate[${relation}]`, "*");
+    }
+
+    p.set(
+      "populate[product_variants][populate]",
+      "*"
+    );
+
     for (const component of [
       "seo",
       "alt_names_entries",
@@ -73,6 +81,26 @@ export function normalizeProductPath(path) {
     ]) {
       p.set(
         `populate[${component}][populate]`,
+        "*"
+      );
+    }
+  } else {
+    // Match the proxy's cardlite list profile. Filtered lists use
+    // its filtersafe profile, which also includes variant sizes.
+    for (const relation of LIST_TAXONOMY) {
+      p.set(`populate[${relation}][fields][0]`, "slug");
+      p.set(`populate[${relation}][fields][1]`, "name");
+    }
+
+    p.set("populate[images]", "*");
+
+    if (
+      [...p.keys()].some(
+        (key) => key === "filters" || key.startsWith("filters[")
+      )
+    ) {
+      p.set(
+        "populate[product_variants][populate][sizes]",
         "*"
       );
     }

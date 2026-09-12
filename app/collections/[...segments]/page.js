@@ -276,6 +276,8 @@ function buildProductsStrapiPath({
     "true"
   );
 
+  p.set("sort", "id:asc");
+
   if (audience) {
     p.set(
       "filters[audience_categories][slug][$eq]",

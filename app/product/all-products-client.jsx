@@ -59,27 +59,32 @@ function buildProductsClientPath(page, withCount = false) {
 }
 
 async function fetchFromStrapi(path, noCache = false) {
+  const query = new URLSearchParams();
+  query.set("path", path);
+
+  if (noCache) query.set("noCache", "1");
+
+  let res;
   try {
-    const query = new URLSearchParams();
-    query.set("path", path);
-
-    if (noCache) query.set("noCache", "1");
-
-    const res = await timedFetch(`/api/strapi?${query.toString()}`, {
+    res = await timedFetch(`/api/strapi?${query.toString()}`, {
       method: "GET",
       headers: { Accept: "application/json" },
       cache: "no-store",
     });
-
-    if (!res.ok) return null;
-
-    const json = await res.json().catch(() => null);
-    if (!json || json?.ok === false) return null;
-
-    return json;
-  } catch {
-    return null;
+  } catch (error) {
+    throw new Error(`Product request failed: ${error?.message || "network error"}`);
   }
+
+  const json = await res.json().catch(() => null);
+  if (!res.ok || json?.ok === false) {
+    const detail = json?.error?.message || json?.message || `HTTP ${res.status}`;
+    throw new Error(`Product request failed (HTTP ${res.status}): ${detail}`);
+  }
+  if (!json) {
+    throw new Error(`Product request returned invalid JSON (HTTP ${res.status}).`);
+  }
+
+  return json;
 }
 
 const normalizeFetchedProduct = (n) =>
@@ -144,13 +149,18 @@ function readClientPageCount(payload) {
 
 async function fetchProductsClientPage(page, withCount = false) {
   const path = buildProductsClientPath(page, withCount);
-  let json = await fetchFromStrapi(path, false);
-
-  if (!json) {
-    json = await fetchFromStrapi(path, true);
+  let json;
+  try {
+    json = await fetchFromStrapi(path, false);
+  } catch (error) {
+    try {
+      json = await fetchFromStrapi(path, true);
+    } catch (retryError) {
+      throw new Error(
+        `Product page ${page} failed after retry: ${retryError.message} (first attempt: ${error.message})`
+      );
+    }
   }
-
-  if (!json) return null;
 
   const payload = json?.ok ? json.data : json;
 
@@ -162,7 +172,7 @@ async function fetchProductsClientPage(page, withCount = false) {
       };
     }
 
-    return null;
+    throw new Error(`Product page ${page} returned an invalid catalogue response.`);
   }
 
   return {
@@ -182,7 +192,7 @@ async function fetchProductsClient(
       ? { products: seed, pageCount: pageCountHint }
       : await fetchProductsClientPage(1, true);
 
-  if (!first) return null;
+  if (!first) throw new Error("Product catalogue returned no first page.");
 
   const allProducts = mergeUniqueClientProducts([], first.products);
 

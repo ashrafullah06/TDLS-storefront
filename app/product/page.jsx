@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 import AllProductsClient from "./all-products-client";
 import Navbar from "@/components/common/navbar";
 import { headers } from "next/headers";
-import { fetchStrapi } from "@/lib/strapifetch";
+import { fetchStrapiProxy } from "@/lib/strapi-proxy";
 
 /* ───────── Environment helpers ───────── */
 
@@ -28,8 +28,6 @@ const STRAPI_ORIGIN = String(RAW_STRAPI_ORIGIN || "")
   .trim()
   .replace(/\/+$/, "")
   .replace(/\/api$/, "");
-
-const PRODUCT_INDEX_FETCH_TIMEOUT_MS = 25000;
 
 /* ───────── SEO ───────── */
 
@@ -129,19 +127,15 @@ function pickStrapiProductName(node) {
 const PRODUCTS_PAGE_SIZE = 24;
 const MAX_PRODUCT_PAGES = 1000;
 
-function buildProductsStrapiPath(page, populate = true) {
+function buildProductsStrapiPath(page) {
   const params = new URLSearchParams();
 
+  params.set("sort", "id:asc");
   params.set("pagination[page]", String(page));
   params.set("pagination[pageSize]", String(PRODUCTS_PAGE_SIZE));
   params.set("pagination[withCount]", "true");
 
-  // fetchStrapi replaces this with the shared schema-based population.
-  if (populate) {
-    params.set("populate", "*");
-  }
-
-  return `/api/products?${params.toString()}`;
+  return `/products?${params.toString()}`;
 }
 
 function readPagination(payload) {
@@ -194,22 +188,29 @@ async function fetchProductsPageFromStrapi(
   page,
   noCache = false
 ) {
-  const strapiPayload = await fetchStrapi(
-    buildProductsStrapiPath(page),
-    {
-      timeoutMs: PRODUCT_INDEX_FETCH_TIMEOUT_MS,
-      ...(noCache
-        ? {
-            cache: "no-store",
-          }
-        : {
-            next: {
-              revalidate,
-              tags: ["tdls-products", "tdls-products-index"],
-            },
-          }),
-    }
+  // Execute the same public proxy used by collection pages directly
+  // on the server, without an HTTP request back to this application.
+  const proxyUrl = new URL("/api/strapi", "http://tdls.internal");
+  proxyUrl.searchParams.set("path", buildProductsStrapiPath(page));
+
+  if (noCache) {
+    proxyUrl.searchParams.set("noCache", "1");
+  }
+
+  const response = await fetchStrapiProxy(
+    new Request(proxyUrl, {
+      headers: { Accept: "application/json" },
+    })
   );
+
+  if (!response.ok) {
+    throw new Error(
+      `Product catalogue request failed (HTTP ${response.status}).`
+    );
+  }
+
+  const payload = await response.json().catch(() => null);
+  const strapiPayload = payload?.ok === true ? payload.data : null;
 
   if (!Array.isArray(strapiPayload?.data)) {
     throw new Error("Invalid product catalogue response.");

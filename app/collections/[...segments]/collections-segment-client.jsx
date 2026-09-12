@@ -9,7 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { timedFetch } from "@/lib/timed-fetch";
 import { FaShoppingCart, FaRegHeart } from "react-icons/fa";
@@ -670,10 +670,25 @@ const deriveTags = (p) => {
 export default function CollectionsSegmentClient({
   initialStrapi = null,
   initialOk = false,
+  initialSearch = null,
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const searchParams = useMemo(() => {
+    const params = new URLSearchParams();
+
+    for (const [key, value] of Object.entries(initialSearch || {})) {
+      if (Array.isArray(value)) {
+        value.forEach((item) => {
+          if (item != null) params.append(key, String(item));
+        });
+      } else if (value != null) {
+        params.set(key, String(value));
+      }
+    }
+
+    return params;
+  }, [initialSearch]);
 
   const stickyRef = useRef(null);
   const [showTopBtn, setShowTopBtn] = useState(false);
@@ -920,14 +935,30 @@ export default function CollectionsSegmentClient({
     selectedAge,
   ]);
 
-  const [rawProducts, setRawProducts] = useState([]);
-  const [loadingInitial, setLoadingInitial] = useState(true);
+  const initialSeed = useMemo(() => {
+    const seed = initialStrapi?.ok === true ? initialStrapi.data : initialStrapi;
+    const pagination = seed?.meta?.pagination;
+    const seedMatches =
+      (!pagination?.page || Number(pagination.page) === 1) &&
+      (!pagination?.pageSize || Number(pagination.pageSize) === PAGE_SIZE);
+
+    return initialOk && seedMatches && !seed?.error && Array.isArray(seed?.data)
+      ? unwrapAndFlatten(seed)
+      : null;
+  }, [initialStrapi, initialOk]);
+
+  const [rawProducts, setRawProducts] = useState(() => initialSeed?.items || []);
+  const [loadingInitial, setLoadingInitial] = useState(() => !initialSeed);
   const [loadingMore, setLoadingMore] = useState(false);
   const [fetchError, setFetchError] = useState("");
 
-  const [remotePage, setRemotePage] = useState(0);
-  const [remotePageCount, setRemotePageCount] = useState(1);
-  const [remoteTotal, setRemoteTotal] = useState(0);
+  const [remotePage, setRemotePage] = useState(() => initialSeed ? 1 : 0);
+  const [remotePageCount, setRemotePageCount] = useState(
+    () => initialSeed?.pagination.pageCount || 1
+  );
+  const [remoteTotal, setRemoteTotal] = useState(
+    () => initialSeed?.pagination.total || 0
+  );
   const [fetchMode, setFetchMode] = useState("serverFiltered");
 
   const [displayTarget, setDisplayTarget] = useState(DISPLAY_STEP);
@@ -1103,13 +1134,9 @@ export default function CollectionsSegmentClient({
       writeRouteCache(routeKey, items, pagination);
     };
 
-    const seed = initialStrapi?.ok === true ? initialStrapi.data : initialStrapi;
-    const seedPagination = seed?.meta?.pagination;
-    const seedMatches = (!seedPagination?.page || Number(seedPagination.page) === 1) &&
-      (!seedPagination?.pageSize || Number(seedPagination.pageSize) === PAGE_SIZE);
-    if (initialOk && seedMatches && !seed?.error && Array.isArray(seed?.data)) {
+    if (initialSeed) {
       // An empty successful collection is complete; never scan the whole catalogue.
-      applyInitial(unwrapAndFlatten(seed));
+      applyInitial(initialSeed);
       return cleanup;
     }
 
@@ -1139,7 +1166,7 @@ export default function CollectionsSegmentClient({
       }
     })();
     return cleanup;
-  }, [routeKey, initialStrapi, initialOk, fetchStrapiPage]);
+  }, [routeKey, initialSeed, fetchStrapiPage]);
 
   const matchesCollection = useCallback(
     (p) => {

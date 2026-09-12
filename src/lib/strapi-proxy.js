@@ -54,6 +54,27 @@ const UPSTREAM_TIMEOUT_MS = (() => {
   );
 })();
 
+const STOCK_LOOKUP_TIMEOUT_MS = (() => {
+  const n = Number(
+    process.env.TDLS_STRAPI_STOCK_LOOKUP_MS ?? 1200
+  );
+
+  return Number.isFinite(n) && n > 0
+    ? Math.min(4000, Math.max(250, Math.round(n)))
+    : 1200;
+})();
+
+const MAX_PRODUCT_RESPONSE_BYTES = (() => {
+  const n = Number(
+    process.env.TDLS_STRAPI_MAX_PRODUCT_RESPONSE_BYTES ??
+      16 * 1024 * 1024
+  );
+
+  return Number.isFinite(n) && n > 0
+    ? Math.min(40 * 1024 * 1024, Math.max(1024 * 1024, Math.round(n)))
+    : 16 * 1024 * 1024;
+})();
+
 const DEFAULT_PRODUCTS_LIST_PROFILE = String(
   process.env.TDLS_STRAPI_DEFAULT_PRODUCTS_POPULATE ||
     "cardlite"
@@ -201,6 +222,73 @@ function safeJsonParse(s) {
   } catch {
     return null;
   }
+}
+
+function isBoundedProductResponse(payloadStr) {
+  return (
+    typeof payloadStr === "string" &&
+    Buffer.byteLength(payloadStr, "utf8") <=
+      MAX_PRODUCT_RESPONSE_BYTES
+  );
+}
+
+async function readBoundedProductText(res, deadlineAt) {
+  const length = Number(res.headers.get("content-length"));
+
+  if (Number.isFinite(length) && length > MAX_PRODUCT_RESPONSE_BYTES) {
+    throw new Error("Product response exceeds the size limit");
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("Product response has no body");
+  }
+
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const remaining = deadlineAt - Date.now();
+
+      if (remaining <= 0) {
+        const error = new Error("Product response deadline exceeded");
+        error.name = "AbortError";
+        throw error;
+      }
+
+      let timer;
+      const next = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error("Product response deadline exceeded");
+            error.name = "AbortError";
+            reject(error);
+          }, remaining);
+        }),
+      ]).finally(() => clearTimeout(timer));
+
+      if (next.done) break;
+
+      totalBytes += next.value.byteLength;
+      if (totalBytes > MAX_PRODUCT_RESPONSE_BYTES) {
+        throw new Error("Product response exceeds the size limit");
+      }
+
+      chunks.push(decoder.decode(next.value, { stream: true }));
+    }
+
+    chunks.push(decoder.decode());
+    return chunks.join("");
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+async function readBoundedProductJson(res, deadlineAt) {
+  return JSON.parse(await readBoundedProductText(res, deadlineAt));
 }
 
 /* ---------------- Origin helpers ---------------- */
@@ -1929,7 +2017,7 @@ async function getStockMapForSizeIds(sizeIds) {
           stockAvailable: true,
         },
       }),
-      4000
+      STOCK_LOOKUP_TIMEOUT_MS
     );
 
     const bySizeId = new Map();
@@ -2428,7 +2516,12 @@ async function fetchBroaderProductsFallback(
   let data;
 
   try {
-    data = await res.json();
+    data = await readBoundedProductJson(
+      res,
+      Number.isFinite(deadlineAt)
+        ? deadlineAt
+        : Date.now() + UPSTREAM_TIMEOUT_MS
+    );
   } catch {
     return null;
   }
@@ -2443,6 +2536,9 @@ async function fetchBroaderProductsFallback(
   };
 
   const payloadStr = JSON.stringify(payloadObj);
+  if (!isBoundedProductResponse(payloadStr)) {
+    return null;
+  }
   const parsed = safeJsonParse(payloadStr);
 
   const count = productCountFromStrapiPayload(
@@ -2698,7 +2794,10 @@ export async function fetchStrapiProxy(req) {
 
       const hit = memGet(map, cacheKey);
 
-      if (hit?.payloadStr) {
+      if (
+        hit?.payloadStr &&
+        (!isProductEndpoint || isBoundedProductResponse(hit.payloadStr))
+      ) {
         const ms = Date.now() - t0;
 
         const parsed =
@@ -2723,6 +2822,8 @@ export async function fetchStrapiProxy(req) {
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-cache": "1",
             "x-tdls-mem": "1",
+            "x-tdls-upstream-ms": "0",
+            "x-tdls-stock-ms": "0",
             "x-tdls-guard": guarded ? "1" : "0",
             "x-tdls-schema-compat": "0",
 
@@ -2762,6 +2863,10 @@ export async function fetchStrapiProxy(req) {
     const result = await runDedupe(
       dedupeKey,
       async () => {
+        const upstreamStartedAt = Date.now();
+        let upstreamMs = 0;
+        let stockMs = 0;
+
         try {
           const delays =
             isProductEndpoint
@@ -2822,28 +2927,48 @@ export async function fetchStrapiProxy(req) {
           }
 
           if (!res.ok) {
-            const text = await res
-              .text()
-              .catch(() => "");
+            const text = isProductEndpoint
+              ? await readBoundedProductText(res, deadlineAt).catch(() => "")
+              : await res.text().catch(() => "");
+
+            upstreamMs = Date.now() - upstreamStartedAt;
 
             return {
               ok: false,
               status: res.status,
               statusText: res.statusText,
-              errorText: text || null,
+              errorText: text ? text.slice(0, 2000) : null,
+              upstreamMs,
+              stockMs,
             };
           }
 
           let data;
 
           try {
-            data = await res.json();
-          } catch {
+            data = isProductEndpoint
+              ? await readBoundedProductJson(res, deadlineAt)
+              : await res.json();
+          } catch (e) {
+            const timedOut = e?.name === "AbortError";
+            return {
+              ok: false,
+              status: timedOut ? 504 : 502,
+              statusText: timedOut ? "Gateway Timeout" : "Bad Gateway",
+              errorText: "Invalid, oversized, or timed-out upstream JSON",
+              upstreamMs: Date.now() - upstreamStartedAt,
+              stockMs,
+            };
+          }
+
+          if (isProductsList && !Array.isArray(data?.data)) {
             return {
               ok: false,
               status: 502,
               statusText: "Bad Gateway",
-              errorText: "Invalid JSON",
+              errorText: "Invalid product catalogue response",
+              upstreamMs: Date.now() - upstreamStartedAt,
+              stockMs,
             };
           }
 
@@ -2878,7 +3003,7 @@ export async function fetchStrapiProxy(req) {
 
               if (res2.ok) {
                 try {
-                  const data2 = await res2.json();
+                  const data2 = await readBoundedProductJson(res2, deadlineAt);
 
                   if (
                     !isSuspectEmptyProductsResponse(
@@ -2892,11 +3017,15 @@ export async function fetchStrapiProxy(req) {
             } catch {}
           }
 
+          upstreamMs = Date.now() - upstreamStartedAt;
+
           if (isProductEndpoint) {
+            const stockStartedAt = Date.now();
             data =
               await patchProductsWithPrismaStock(
                 data
               );
+            stockMs = Date.now() - stockStartedAt;
           }
 
           // Preserve exact-request recovery for unfiltered
@@ -2918,7 +3047,10 @@ export async function fetchStrapiProxy(req) {
               const lgExact =
                 lastGoodGet(lastGoodKey);
 
-              if (lgExact?.payloadStr) {
+              if (
+                lgExact?.payloadStr &&
+                isBoundedProductResponse(lgExact.payloadStr)
+              ) {
                 return {
                   ok: true,
                   status: 200,
@@ -2935,16 +3067,34 @@ export async function fetchStrapiProxy(req) {
             ok: true,
             data,
             ms: Date.now() - t0,
+            upstreamMs,
+            stockMs,
           };
 
           const payloadStr =
             JSON.stringify(payloadObj);
+
+          if (
+            isProductEndpoint &&
+            !isBoundedProductResponse(payloadStr)
+          ) {
+            return {
+              ok: false,
+              status: 502,
+              statusText: "Bad Gateway",
+              errorText: "Product response exceeds the size limit",
+              upstreamMs,
+              stockMs,
+            };
+          }
 
           return {
             ok: true,
             status: 200,
             payloadStr,
             schemaCompat: usedSchemaCompat,
+            upstreamMs,
+            stockMs,
           };
         } catch (e) {
           const name = String(e?.name || "");
@@ -2966,12 +3116,19 @@ export async function fetchStrapiProxy(req) {
             errorText: String(
               e?.message || "fetch failed"
             ),
+            upstreamMs: upstreamMs || Date.now() - upstreamStartedAt,
+            stockMs,
           };
         }
       }
     );
 
     const ms = Date.now() - t0;
+
+    const timingHeaders = {
+      "x-tdls-upstream-ms": String(result?.upstreamMs ?? 0),
+      "x-tdls-stock-ms": String(result?.stockMs ?? 0),
+    };
 
     /* ---------- Upstream failure handling ---------- */
 
@@ -2999,6 +3156,7 @@ export async function fetchStrapiProxy(req) {
             ),
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-cache": "0",
+            ...timingHeaders,
             "x-tdls-guard": guarded ? "1" : "0",
             "x-tdls-schema-compat": "0",
           }
@@ -3008,7 +3166,10 @@ export async function fetchStrapiProxy(req) {
       // The fallback key includes the entire canonical query.
       const lg = lastGoodGet(lastGoodKey);
 
-      if (lg?.payloadStr) {
+      if (
+        lg?.payloadStr &&
+        (!isProductEndpoint || isBoundedProductResponse(lg.payloadStr))
+      ) {
         const parsed =
           isProductEndpoint
             ? safeJsonParse(lg.payloadStr)
@@ -3030,6 +3191,7 @@ export async function fetchStrapiProxy(req) {
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": "last-good",
+            ...timingHeaders,
             "x-tdls-upstream-status": String(
               result?.status || 0
             ),
@@ -3076,6 +3238,7 @@ export async function fetchStrapiProxy(req) {
               "x-tdls-proxy-ms": String(ms),
               "x-tdls-stale": "1",
               "x-tdls-fallback": "any-meta",
+              ...timingHeaders,
               "x-tdls-upstream-status": String(
                 result?.status || 0
               ),
@@ -3122,6 +3285,7 @@ export async function fetchStrapiProxy(req) {
             "x-tdls-proxy-ms": String(ms),
             "x-tdls-stale": "1",
             "x-tdls-fallback": "none",
+            ...timingHeaders,
             "x-tdls-upstream-status": String(
               result?.status || 0
             ),
@@ -3154,6 +3318,7 @@ export async function fetchStrapiProxy(req) {
           "x-tdls-proxy-ms": String(ms),
           "x-tdls-stale": "1",
           "x-tdls-fallback": "degraded-empty",
+          ...timingHeaders,
           "x-tdls-upstream-status": String(
             result?.status || 0
           ),
@@ -3268,6 +3433,7 @@ export async function fetchStrapiProxy(req) {
 
         "x-tdls-proxy-ms": String(ms),
         "x-tdls-cache": CACHE_OK ? "1" : "0",
+        ...timingHeaders,
         "x-tdls-mem": "0",
         "x-tdls-stale": result?.reason ? "1" : "0",
         "x-tdls-fallback":
