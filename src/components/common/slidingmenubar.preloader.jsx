@@ -7,16 +7,14 @@ import { useEffect } from "react";
  * TDLS SlidingMenuBar boot preloader
  * -----------------------------------------------------------------------------
  * Purpose:
- * - Start loading menu taxonomy as soon as THIS SMALL MODULE is evaluated.
- * - Do not wait for the customer to click the menu.
- * - Do not wait for requestIdleCallback.
+ * - Use valid cached menu taxonomy immediately.
+ * - Delay uncached network loading until after the page has loaded.
  * - Do not require the large SlidingMenuBar chunk before the API request starts.
  * - Share the fetched payload through globalThis + localStorage so the menu can
  *   build instantly when its chunk is eventually mounted.
  */
 
 const GLOBAL_KEY = "__TDLS_SMB_PRELOAD_STATE__";
-
 const RAW_LS_KEY = "tdls:slidingmenubar:raw-products:v1";
 const RAW_LS_TS = "tdls:slidingmenubar:raw-products-ts:v1";
 const RAW_LS_TTL_MS = 6 * 60 * 60 * 1000;
@@ -226,7 +224,11 @@ async function fetchRawProducts() {
  * is available, the menu module is imported and asked to convert/cache it. That
  * means a later menu click normally performs zero waiting network work.
  */
-async function startPreload({ forceNetwork = false } = {}) {
+async function startPreload({
+  forceNetwork = false,
+  allowMenuFallback = false,
+  cacheOnly = false,
+} = {}) {
   if (typeof window === "undefined") return null;
 
   const state = getGlobalState();
@@ -240,7 +242,7 @@ async function startPreload({ forceNetwork = false } = {}) {
     let module = null;
     let cachedRaw = hydrateGlobalFromRawCache();
 
-    // Start downloading the menu chunk immediately, in parallel with the API.
+    // Start downloading the menu chunk in parallel with the permitted API request.
     const modulePromise = import("@/components/common/slidingmenubar")
       .then((m) => m)
       .catch(() => null);
@@ -250,7 +252,10 @@ async function startPreload({ forceNetwork = false } = {}) {
       module = await modulePromise;
       if (module?.warmSlidingMenuBar) {
         try {
-          const cachedData = await module.warmSlidingMenuBar({ forceRefresh: false, fromPreloader: true });
+          const cachedData = await module.warmSlidingMenuBar({
+            forceRefresh: false,
+            fromPreloader: true,
+          });
           if (hasUsableMenuData(cachedData)) {
             state.ok = true;
             state.menuData = cachedData;
@@ -259,8 +264,12 @@ async function startPreload({ forceNetwork = false } = {}) {
       }
     }
 
-    // Always make one network warm attempt per page load unless another call is
-    // already doing it. This keeps live data current while cached data remains instant.
+    // Reusing cached data must not start a 500-product request on page load.
+    if (cacheOnly || (state.ok && !forceNetwork)) {
+      return state.menuData || null;
+    }
+
+    // Fetch only when the delayed preload or a user interaction needs it.
     try {
       const freshRaw = await fetchRawProducts();
       cachedRaw = freshRaw || cachedRaw;
@@ -272,7 +281,10 @@ async function startPreload({ forceNetwork = false } = {}) {
 
       // forceRefresh:false is intentional: the fresh raw payload is already in
       // the shared cache, so the menu should CONVERT it, not start a second API request.
-      const data = await module.warmSlidingMenuBar({ forceRefresh: false, fromPreloader: true });
+      const data = await module.warmSlidingMenuBar({
+        forceRefresh: false,
+        fromPreloader: true,
+      });
 
       if (!hasUsableMenuData(data)) {
         throw new Error("Sliding menu preload returned no usable menu data");
@@ -290,9 +302,12 @@ async function startPreload({ forceNetwork = false } = {}) {
 
       module = module || (await modulePromise);
 
-      // Final fallback: let SlidingMenuBar perform its own resilient fetch path.
-      if (module?.warmSlidingMenuBar) {
-        const data = await module.warmSlidingMenuBar({ forceRefresh: true, fromPreloader: true });
+      // Only an explicit interaction may trigger a second menu fetch.
+      if (allowMenuFallback && module?.warmSlidingMenuBar) {
+        const data = await module.warmSlidingMenuBar({
+          forceRefresh: true,
+          fromPreloader: true,
+        });
         if (hasUsableMenuData(data)) {
           state.ok = true;
           state.menuData = data;
@@ -317,15 +332,10 @@ async function startPreload({ forceNetwork = false } = {}) {
   return state.promise;
 }
 
-/**
- * CRITICAL PRELOAD:
- * Begin immediately when the preloader JS chunk is evaluated — before React's
- * effect phase and without waiting for user interaction or browser idle time.
- */
+/** Make cached raw data available immediately without starting a network request. */
 if (typeof window !== "undefined") {
   try {
     hydrateGlobalFromRawCache();
-    void startPreload().catch(() => {});
   } catch {}
 }
 
@@ -333,6 +343,8 @@ export default function SlidingMenuBarPreloader() {
   useEffect(() => {
     let mounted = true;
     let retryTimer = null;
+    let startupTimer = null;
+    let startupReady = false;
 
     const state = getGlobalState();
     const removeRef = { done: false };
@@ -349,20 +361,23 @@ export default function SlidingMenuBarPreloader() {
     }
 
     function scheduleRetry() {
-      if (!mounted || state.ok || state.retryCount >= 4 || retryTimer !== null) return;
+      if (!mounted || state.ok || state.retryCount >= 1 || retryTimer !== null) return;
 
-      const retryDelays = [800, 2500, 7000, 15000];
-      const delay = retryDelays[state.retryCount] || retryDelays[retryDelays.length - 1];
       state.retryCount += 1;
-
       retryTimer = window.setTimeout(() => {
         retryTimer = null;
-        void warm(false);
-      }, delay);
+        void warm(false, false, true);
+      }, 10000);
     }
 
-    async function warm(forceNetwork = false) {
+    async function warm(
+      forceNetwork = false,
+      allowMenuFallback = false,
+      fromRetry = false
+    ) {
       if (!mounted) return;
+      if (!startupReady && !forceNetwork && !allowMenuFallback && !fromRetry) return;
+      if (state.retryCount >= 1 && !forceNetwork && !fromRetry) return;
 
       if (state.ok && !forceNetwork) {
         removeListeners();
@@ -370,11 +385,10 @@ export default function SlidingMenuBarPreloader() {
       }
 
       if (state.inFlight || state.promise) return;
-
       if (state.lastFailAt && Date.now() - state.lastFailAt < 500) return;
 
       try {
-        await startPreload({ forceNetwork });
+        await startPreload({ forceNetwork, allowMenuFallback });
         if (state.ok) removeListeners();
       } catch {
         scheduleRetry();
@@ -382,7 +396,7 @@ export default function SlidingMenuBarPreloader() {
     }
 
     function warmOnInteraction() {
-      void warm(false);
+      void warm(false, true);
     }
 
     function warmOnVisibility() {
@@ -395,29 +409,51 @@ export default function SlidingMenuBarPreloader() {
 
     function warmOnOnline() {
       state.lastFailAt = 0;
+      state.retryCount = 0;
       void warm(true);
     }
 
-    // Effect-level call is a second guarantee. Module evaluation already started it.
-    void warm(false);
+    // Reuse a valid cache immediately; defer uncached network work until load.
+    if (hydrateGlobalFromRawCache()) {
+      void startPreload({ cacheOnly: true })
+        .then(() => {
+          if (state.ok) removeListeners();
+        })
+        .catch(() => {});
+    }
+
+    function scheduleStartupWarm() {
+      if (!mounted || state.ok) return;
+
+      const isCatalogue =
+        /^\/(?:product|collections)(?:\/|$)/.test(window.location.pathname);
+
+      startupTimer = window.setTimeout(() => {
+        startupTimer = null;
+        startupReady = true;
+        void warm(false);
+      }, isCatalogue ? 30000 : 4000);
+    }
+
+    if (document.readyState === "complete") {
+      scheduleStartupWarm();
+    } else {
+      window.addEventListener("load", scheduleStartupWarm, { once: true });
+    }
 
     window.addEventListener("pointerdown", warmOnInteraction, {
       passive: true,
       capture: true,
     });
-
     window.addEventListener("keydown", warmOnInteraction, {
       capture: true,
     });
-
     document.addEventListener("visibilitychange", warmOnVisibility, {
       passive: true,
     });
-
     window.addEventListener("focus", warmOnFocus, {
       passive: true,
     });
-
     window.addEventListener("online", warmOnOnline, {
       passive: true,
     });
@@ -429,6 +465,11 @@ export default function SlidingMenuBarPreloader() {
         window.clearTimeout(retryTimer);
         retryTimer = null;
       }
+      if (startupTimer !== null) {
+        window.clearTimeout(startupTimer);
+        startupTimer = null;
+      }
+      window.removeEventListener("load", scheduleStartupWarm);
 
       removeListeners();
     };

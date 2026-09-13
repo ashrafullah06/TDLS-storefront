@@ -3108,7 +3108,9 @@ export default function AllProductsClient({
             ↑ Top
           </button>
         )}
+
       </main>
+      
     </>
   );
 }

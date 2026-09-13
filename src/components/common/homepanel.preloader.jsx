@@ -4,18 +4,14 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
-// ✅ ALSO preload All Products (audience/category/options) at site load
-import { HomePanelAllProductsPreloader } from "@/components/common/homepanel_all_products";
-
 /**
  * HomePanelPreloader (no UI)
  * -----------------------------------------------------------------------------
  * Goal:
- * - Preload HomePanel highlights at site load so HomePanel opens with data instantly.
+ * - Preload HomePanel highlights after the initial page load.
  * - Store payload in localStorage with TTL.
  * - Dispatch an event so HomePanel can hydrate immediately if it opens too fast.
  * - Warm critical routes via router.prefetch (best-effort).
- * - Preload HomePanel All Products dataset (audiences/options) at site load.
  *
  * Shared cache keys (MUST match homepanel.jsx):
  * - tdls:homepanel:highlights:v1
@@ -36,6 +32,7 @@ const LOCK_TTL_MS = 25 * 1000; // 25s
 // Fetch timeout: allow cold-start but never hang
 const FETCH_TIMEOUT_IMMEDIATE_MS = 12000; // first-load attempt
 const FETCH_TIMEOUT_BG_MS = 15000; // idle/visibility refresh attempt
+const START_DELAY_MS = 30000;
 
 function now() {
   return Date.now();
@@ -51,6 +48,7 @@ function safeParseJSON(raw) {
 
 function readCache() {
   if (typeof window === "undefined") return null;
+
   try {
     const raw = window.localStorage.getItem(HP_HL_KEY);
     if (!raw) return null;
@@ -61,6 +59,7 @@ function readCache() {
     const trendingProducts = Array.isArray(parsed.trendingProducts)
       ? parsed.trendingProducts
       : [];
+
     const bestSellerProducts = Array.isArray(parsed.bestSellerProducts)
       ? parsed.bestSellerProducts
       : [];
@@ -80,6 +79,7 @@ function readCache() {
 
 function writeCache(payload) {
   if (typeof window === "undefined") return;
+
   try {
     const safePayload = {
       trendingProducts: Array.isArray(payload?.trendingProducts)
@@ -89,6 +89,7 @@ function writeCache(payload) {
         ? payload.bestSellerProducts
         : [],
     };
+
     window.localStorage.setItem(HP_HL_KEY, JSON.stringify(safePayload));
     window.localStorage.setItem(HP_HL_TS, String(now()));
   } catch {}
@@ -96,22 +97,27 @@ function writeCache(payload) {
 
 function isFresh(cache) {
   const ts = Number(cache?.ts || 0);
+
   if (!Number.isFinite(ts) || ts <= 0) return false;
+
   return now() - ts < HP_HL_TTL_MS;
 }
 
 function hasData(cache) {
-  const t = Array.isArray(cache?.trendingProducts)
+  const trending = Array.isArray(cache?.trendingProducts)
     ? cache.trendingProducts
     : [];
-  const b = Array.isArray(cache?.bestSellerProducts)
+
+  const bestSellers = Array.isArray(cache?.bestSellerProducts)
     ? cache.bestSellerProducts
     : [];
-  return (t.length || 0) + (b.length || 0) > 0;
+
+  return trending.length + bestSellers.length > 0;
 }
 
 function dispatchReady() {
   if (typeof window === "undefined") return;
+
   try {
     window.dispatchEvent(new Event(HP_HL_READY_EVENT));
   } catch {}
@@ -119,82 +125,107 @@ function dispatchReady() {
 
 function acquireLock() {
   if (typeof window === "undefined") return true;
+
   try {
     const raw = window.localStorage.getItem(HP_HL_LOCK);
-    const t = raw ? Number(raw) : 0;
+    const timestamp = raw ? Number(raw) : 0;
 
-    if (Number.isFinite(t) && t > 0 && now() - t < LOCK_TTL_MS) return false;
+    if (
+      Number.isFinite(timestamp) &&
+      timestamp > 0 &&
+      now() - timestamp < LOCK_TTL_MS
+    ) {
+      return false;
+    }
 
     window.localStorage.setItem(HP_HL_LOCK, String(now()));
     return true;
   } catch {
-    // If storage is blocked, just proceed (best-effort)
+    // If storage is blocked, proceed as a best-effort fallback.
     return true;
   }
 }
 
 function releaseLock() {
   if (typeof window === "undefined") return;
+
   try {
     window.localStorage.removeItem(HP_HL_LOCK);
   } catch {}
 }
 
 async function fetchHighlights({ signal }) {
-  // Primary endpoint: app-level highlights API (curated)
-  const res = await fetch("/api/home/highlights", {
+  const response = await fetch("/api/home/highlights", {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers: {
+      Accept: "application/json",
+    },
     cache: "no-store",
     signal,
   });
 
-  if (!res.ok) return null;
+  if (!response.ok) return null;
 
-  const json = await res.json().catch(() => null);
+  const json = await response.json().catch(() => null);
   if (!json || !json.ok) return null;
 
   const trendingProducts = Array.isArray(json.trendingProducts)
     ? json.trendingProducts
     : [];
+
   const bestSellerProducts = Array.isArray(json.bestSellerProducts)
     ? json.bestSellerProducts
     : [];
 
-  return { trendingProducts, bestSellerProducts };
+  return {
+    trendingProducts,
+    bestSellerProducts,
+  };
 }
 
-function safeIdle(cb, timeoutMs = 900) {
+function safeIdle(callback, timeoutMs = 900) {
   if (typeof window === "undefined") return () => {};
+
   let cancelled = false;
 
   const run = () => {
     if (cancelled) return;
+
     try {
-      cb();
+      callback();
     } catch {}
   };
 
-  const ric = window.requestIdleCallback;
-  if (typeof ric === "function") {
+  const requestIdle = window.requestIdleCallback;
+
+  if (typeof requestIdle === "function") {
     let id;
+
     try {
-      id = ric(run, { timeout: timeoutMs });
+      id = requestIdle(run, {
+        timeout: timeoutMs,
+      });
+
       return () => {
         cancelled = true;
+
         try {
           window.cancelIdleCallback?.(id);
         } catch {}
       };
     } catch {
-      // fall through to setTimeout
+      // Fall through to setTimeout.
     }
   }
 
-  const tid = window.setTimeout(run, Math.min(450, timeoutMs));
+  const timeoutId = window.setTimeout(
+    run,
+    Math.min(450, timeoutMs)
+  );
+
   return () => {
     cancelled = true;
-    window.clearTimeout(tid);
+    window.clearTimeout(timeoutId);
   };
 }
 
@@ -204,98 +235,159 @@ export default function HomePanelPreloader() {
 
   useEffect(() => {
     if (startedRef.current) return;
+
     startedRef.current = true;
 
     if (typeof window === "undefined") return;
 
-    // 1) If cache exists, immediately notify consumers (instant open)
+    // Immediately announce existing cached data without starting a request.
     const existing = readCache();
+
     if (existing && hasData(existing)) {
       dispatchReady();
     }
 
-    // 2) Warm critical routes (best effort, no failures allowed)
-    try {
-      router.prefetch("/product");
-      router.prefetch("/collections");
-      router.prefetch("/cart");
-      router.prefetch("/login");
-      router.prefetch("/login/otp");
-      router.prefetch("/customer/dashboard");
-      router.prefetch("/admin/login");
-    } catch {}
-
-    // 3) Fetch on mount if cache missing or stale
-    const shouldFetchNow = !existing || !isFresh(existing);
+    const shouldFetch = !existing || !isFresh(existing);
 
     let cancelled = false;
     let cancelIdle = () => {};
+    let startTimer = null;
+    let deferredWorkStarted = false;
 
     const runFetch = async (reason = "immediate") => {
       if (cancelled) return;
 
-      // Prevent stampede across tabs/mounts
+      // Prevent duplicate requests across tabs or component remounts.
       if (!acquireLock()) return;
 
-      const ac = new AbortController();
-      const timeoutMs =
-        reason === "immediate" ? FETCH_TIMEOUT_IMMEDIATE_MS : FETCH_TIMEOUT_BG_MS;
+      const controller = new AbortController();
 
-      const t = window.setTimeout(() => {
+      const timeoutMs =
+        reason === "immediate"
+          ? FETCH_TIMEOUT_IMMEDIATE_MS
+          : FETCH_TIMEOUT_BG_MS;
+
+      const timeoutId = window.setTimeout(() => {
         try {
-          ac.abort();
+          controller.abort();
         } catch {}
       }, timeoutMs);
 
       try {
-        const data = await fetchHighlights({ signal: ac.signal });
-        if (cancelled) return;
-        if (!data) return;
+        const data = await fetchHighlights({
+          signal: controller.signal,
+        });
+
+        if (cancelled || !data) return;
 
         writeCache(data);
         dispatchReady();
       } catch {
-        // Silent by design (HomePanel will fallback if needed)
+        // Silent by design. HomePanel retains its existing fallback.
       } finally {
-        window.clearTimeout(t);
+        window.clearTimeout(timeoutId);
         releaseLock();
+
         try {
-          ac.abort();
+          controller.abort();
         } catch {}
       }
     };
 
-    if (shouldFetchNow) {
-      // Run immediately so HomePanel opens with data on first interaction
-      runFetch("immediate");
+    const startDeferredWork = () => {
+      if (cancelled || startTimer !== null) return;
+
+      startTimer = window.setTimeout(async () => {
+        startTimer = null;
+
+        if (cancelled) return;
+
+        deferredWorkStarted = true;
+
+        // Complete the highlights request before warming routes so these
+        // background operations do not compete with one another.
+        if (shouldFetch) {
+          await runFetch("immediate");
+        }
+
+        if (cancelled) return;
+
+        try {
+          router.prefetch("/product");
+          router.prefetch("/collections");
+          router.prefetch("/cart");
+          router.prefetch("/login");
+          router.prefetch("/login/otp");
+          router.prefetch("/customer/dashboard");
+          router.prefetch("/admin/login");
+        } catch {}
+      }, START_DELAY_MS);
+    };
+
+    if (document.readyState === "complete") {
+      startDeferredWork();
     } else {
-      // Cache is fresh: do a silent refresh later (keeps it current without any UI cost)
-      cancelIdle = safeIdle(() => runFetch("idle"), 1200);
+      window.addEventListener("load", startDeferredWork, {
+        once: true,
+      });
     }
 
-    // 4) Refresh on visibility return if cache is stale
     const onVisibility = () => {
       if (document.visibilityState !== "visible") return;
 
-      const c = readCache();
-      if (!c || !isFresh(c)) {
-        cancelIdle?.();
-        cancelIdle = safeIdle(() => runFetch("visible"), 700);
-      } else if (hasData(c)) {
+      const cached = readCache();
+
+      // A visibility event must not bypass the initial defer period.
+      if (!deferredWorkStarted) {
+        if (cached && hasData(cached)) {
+          dispatchReady();
+        }
+
+        return;
+      }
+
+      if (!cached || !isFresh(cached)) {
+        cancelIdle();
+        cancelIdle = safeIdle(
+          () => runFetch("visible"),
+          700
+        );
+      } else if (hasData(cached)) {
         dispatchReady();
       }
     };
 
-    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener(
+      "visibilitychange",
+      onVisibility
+    );
 
     return () => {
       cancelled = true;
-      cancelIdle?.();
-      document.removeEventListener("visibilitychange", onVisibility);
-      // Lock is TTL-based; no forced release here to avoid cross-tab races.
+      cancelIdle();
+
+      if (startTimer !== null) {
+        window.clearTimeout(startTimer);
+        startTimer = null;
+      }
+
+      window.removeEventListener(
+        "load",
+        startDeferredWork
+      );
+
+      document.removeEventListener(
+        "visibilitychange",
+        onVisibility
+      );
+
+      // Allow React development effect verification to initialize again
+      // after its setup-cleanup cycle.
+      startedRef.current = false;
+
+      // The request lock remains TTL-based to avoid cross-tab races.
     };
   }, [router]);
 
-  // ✅ Critical: All-products preloader mounts here so desktop production never misses it
-  return <HomePanelAllProductsPreloader />;
+  return null;
 }
