@@ -661,6 +661,179 @@ function MobileSelectRow({ active, title, subLeft, badge, onSelect, href, onNavi
   );
 }
 
+function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, kind = "collection" }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: href ? "minmax(0, 1fr) auto" : "1fr",
+        alignItems: "stretch",
+        minHeight: 64,
+        borderRadius: 16,
+        border: active ? "1px solid rgba(15,33,71,0.34)" : "1px solid rgba(15,33,71,0.10)",
+        background: active
+          ? "linear-gradient(135deg, rgba(15,33,71,0.09), rgba(191,167,80,0.14))"
+          : "rgba(255,255,255,0.92)",
+        boxShadow: active ? "0 12px 24px rgba(15,33,71,0.10)" : "0 8px 18px rgba(15,33,71,0.05)",
+        overflow: "hidden",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={active}
+        style={{
+          minWidth: 0,
+          padding: "12px 14px",
+          border: 0,
+          background: "transparent",
+          color: "#0F2147",
+          textAlign: "left",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
+        <span style={{ minWidth: 0 }}>
+          <span
+            style={{
+              display: "block",
+              fontSize: 14,
+              lineHeight: 1.25,
+              fontWeight: 900,
+              letterSpacing: ".035em",
+              textTransform: "uppercase",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {title}
+          </span>
+          <span
+            style={{
+              display: "block",
+              marginTop: 4,
+              fontSize: 11,
+              lineHeight: 1.2,
+              fontWeight: 800,
+              color: "rgba(15,33,71,0.58)",
+            }}
+          >
+            {count} product{count === 1 ? "" : "s"}
+          </span>
+        </span>
+
+        <span
+          aria-hidden="true"
+          style={{
+            flexShrink: 0,
+            width: 32,
+            height: 32,
+            borderRadius: 999,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: active ? "#0F2147" : "rgba(15,33,71,0.07)",
+            color: active ? "#fff" : "#0F2147",
+            fontSize: 18,
+            fontWeight: 800,
+          }}
+        >
+          ›
+        </span>
+      </button>
+
+      {href ? (
+        <Link
+          href={href}
+          prefetch
+          onClick={(e) => {
+            e.stopPropagation();
+            onNavigate?.();
+          }}
+          onTouchStart={(e) => e.stopPropagation()}
+          aria-label={`View all ${title} ${kind}`}
+          style={{
+            width: 72,
+            borderLeft: "1px solid rgba(15,33,71,0.10)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0 10px",
+            textAlign: "center",
+            textDecoration: "none",
+            color: "#0F2147",
+            background: "rgba(255,255,255,0.58)",
+            fontSize: 9,
+            lineHeight: 1.25,
+            fontWeight: 900,
+            letterSpacing: ".11em",
+            textTransform: "uppercase",
+          }}
+        >
+          View all
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+function MobileStepBar({ section, audienceName, categoryName, onStep }) {
+  const steps = [
+    { value: "audiences", label: "Shop" },
+    { value: "categories", label: audienceName || "Category" },
+    { value: "products", label: categoryName || "Products" },
+  ];
+  const activeIndex = Math.max(0, steps.findIndex((step) => step.value === section));
+
+  return (
+    <nav aria-label="Menu progress" style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+      {steps.map((step, index) => {
+        const reachable = index <= activeIndex;
+        const active = index === activeIndex;
+        return (
+          <React.Fragment key={step.value}>
+            {index ? (
+              <span aria-hidden="true" style={{ margin: "0 5px", color: "rgba(15,33,71,0.35)", fontSize: 16 }}>
+                ›
+              </span>
+            ) : null}
+            <button
+              type="button"
+              disabled={!reachable}
+              onClick={() => reachable && onStep(step.value)}
+              aria-current={active ? "step" : undefined}
+              style={{
+                minWidth: 0,
+                maxWidth: active ? "44%" : "28%",
+                height: 30,
+                padding: "0 9px",
+                borderRadius: 999,
+                border: active ? "1px solid rgba(15,33,71,0.18)" : "1px solid transparent",
+                background: active ? "rgba(15,33,71,0.08)" : "transparent",
+                color: reachable ? "#0F2147" : "rgba(15,33,71,0.35)",
+                fontSize: 10,
+                fontWeight: 900,
+                letterSpacing: ".07em",
+                textTransform: "uppercase",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                cursor: reachable ? "pointer" : "default",
+              }}
+            >
+              {step.label}
+            </button>
+          </React.Fragment>
+        );
+      })}
+    </nav>
+  );
+}
+
 function SuggestionsDropdown({ suggestions, activeIndex, onPick, width = 420 }) {
   return (
     <div
@@ -1885,6 +2058,7 @@ export default function Slidingmenubar({ open, onClose }) {
   const searchWrapRef = useRef(null);
 
   const [mobileSection, setMobileSection] = useState("audiences"); // audiences | categories | products
+  const [mobileRefineOpen, setMobileRefineOpen] = useState(false);
   const panelRef = useRef(null);
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
@@ -2133,6 +2307,7 @@ export default function Slidingmenubar({ open, onClose }) {
     setSelectedGenderGroup("");
     setSelectedAgeGroup("");
     setMobileSection("audiences");
+    setMobileRefineOpen(false);
     onClose?.();
   }, [onClose]);
 
@@ -2219,6 +2394,7 @@ export default function Slidingmenubar({ open, onClose }) {
     setSelectedGenderGroup("");
     setSelectedAgeGroup("");
     setMobileSection("audiences");
+    setMobileRefineOpen(false);
   }, []);
 
   // ✅ Audience list for tier (STRICT)
@@ -2453,7 +2629,7 @@ export default function Slidingmenubar({ open, onClose }) {
   const headerIsMobile = !isDesktop;
 
   const panelMaxHeightStyle = headerIsMobile
-    ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${panelTop + panelBottom}px)` }
+    ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${8 + panelBottom}px)` }
     : null;
 
   const goViewAllHref = flyAudienceSlug
@@ -2505,7 +2681,7 @@ export default function Slidingmenubar({ open, onClose }) {
         ref={panelRef}
         style={{
           position: "fixed",
-          top: panelTop,
+          top: headerIsMobile ? 8 : panelTop,
           left: headerIsMobile ? 8 : "auto",
           right: 8,
           bottom: panelBottom,
@@ -2517,7 +2693,7 @@ export default function Slidingmenubar({ open, onClose }) {
           background: "linear-gradient(135deg, #fffdf8 55%, #fbf6ea 100%)",
           border: "1px solid rgba(255,255,255,0.26)",
           boxShadow: "0 32px 90px rgba(0,0,0,0.32)",
-          borderRadius: 28,
+          borderRadius: headerIsMobile ? 22 : 28,
           overflow: "hidden",
           pointerEvents: "auto",
           isolation: "isolate",
@@ -2543,51 +2719,38 @@ export default function Slidingmenubar({ open, onClose }) {
           }}
         >
           {headerIsMobile ? (
-            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, minWidth: 0 }}>
+            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <Pill tone="gold" size="sm">
-                      {tierName}
-                    </Pill>
-                    <Pill tone="ink" size="sm">
-                      {filteredProducts.length}
-                    </Pill>
-                    {flyAudienceSlug ? <Pill size="sm">{titleizeSlug(flyAudienceSlug)}</Pill> : null}
-                    {flyCategorySlug ? <Pill size="sm">{titleizeSlug(flyCategorySlug)}</Pill> : null}
-                    {showLoadingHint ? (
-                      <Pill tone="neutral" size="sm">
-                        Loading…
-                      </Pill>
-                    ) : null}
+                  <div style={{ color: "#0F2147", fontSize: 18, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".04em" }}>
+                    Shop TDLS
+                  </div>
+                  <div style={{ marginTop: 3, color: "rgba(15,33,71,0.60)", fontSize: 11, fontWeight: 800 }}>
+                    {showLoadingHint ? "Loading collections…" : `${tierName} · ${filteredProducts.length} products`}
                   </div>
                 </div>
-
                 <button
                   type="button"
                   onClick={handleClose}
                   style={{
-                    borderRadius: 999,
-                    height: 34,
-                    minWidth: 82,
-                    padding: "0 12px",
-                    border: "1px solid rgba(0,0,0,0.10)",
-                    background: "rgba(255,255,255,0.92)",
-                    boxShadow: "0 10px 18px rgba(0,0,0,0.06)",
-                    color: "#0c2340",
-                    fontWeight: 900,
-                    letterSpacing: ".12em",
-                    textTransform: "uppercase",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                    fontSize: "clamp(9px, 2.6vw, 10px)",
-                    lineHeight: "34px",
+                    width: 42,
+                    height: 42,
                     flexShrink: 0,
-                    alignSelf: "flex-start",
+                    borderRadius: 999,
+                    border: "1px solid rgba(15,33,71,0.12)",
+                    background: "rgba(15,33,71,0.06)",
+                    color: "#0F2147",
+                    fontWeight: 500,
+                    fontSize: 25,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                   aria-label="Close menu"
                 >
-                  Close
+                  ×
                 </button>
               </div>
 
@@ -2595,14 +2758,14 @@ export default function Slidingmenubar({ open, onClose }) {
                 <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile />
               </div>
 
-              <Segmented
-                value={mobileSection}
-                onChange={setMobileSection}
-                items={[
-                  { value: "audiences", label: "Audiences" },
-                  { value: "categories", label: "Categories" },
-                  { value: "products", label: "Products" },
-                ]}
+              <MobileStepBar
+                section={mobileSection}
+                audienceName={flyAudience?.name}
+                categoryName={filteredCategories.find((item) => item.slug === flyCategorySlug)?.name}
+                onStep={(next) => {
+                  setShowSuggest(false);
+                  setMobileSection(next);
+                }}
               />
             </div>
           ) : (
@@ -3043,8 +3206,8 @@ export default function Slidingmenubar({ open, onClose }) {
               </div>
             </div>
           ) : (
-            /* Mobile sectioned UI — unchanged */
-            <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            /* Mobile guided shopping UI */
+            <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}>
               <div ref={searchWrapRef} style={{ position: "relative" }}>
                 <input
                   value={q}
@@ -3081,23 +3244,38 @@ export default function Slidingmenubar({ open, onClose }) {
                       setShowSuggest(false);
                     }
                   }}
-                  placeholder="Search…"
+                  placeholder="Search products and categories"
+                  aria-label="Search products and categories"
                   style={{
                     width: "100%",
-                    height: 38,
-                    borderRadius: 14,
-                    padding: "0 12px",
-                    border: "1px solid rgba(0,0,0,0.10)",
+                    height: 48,
+                    borderRadius: 16,
+                    padding: "0 44px 0 16px",
+                    border: "1px solid rgba(15,33,71,0.12)",
                     outline: "none",
                     background: "#ffffff",
-                    boxShadow: "0 10px 20px rgba(0,0,0,0.05)",
-                    fontWeight: 900,
-                    letterSpacing: ".04em",
-                    color: "#0c2340",
-                    fontSize: "clamp(10px, 2.9vw, 12px)",
-                    textTransform: "uppercase",
+                    boxShadow: "0 10px 22px rgba(15,33,71,0.07)",
+                    fontWeight: 800,
+                    letterSpacing: ".01em",
+                    color: "#0F2147",
+                    fontSize: 14,
                   }}
                 />
+
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    right: 15,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "rgba(15,33,71,0.55)",
+                    fontSize: 19,
+                    pointerEvents: "none",
+                  }}
+                >
+                  ⌕
+                </span>
 
                 {showSuggest && q.trim() && suggestions.length ? (
                   <SuggestionsDropdown
@@ -3119,17 +3297,16 @@ export default function Slidingmenubar({ open, onClose }) {
               <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", gap: 10 }}>
                 {mobileSection === "audiences" ? (
                   <Shell
-                    title={`Audiences · ${filteredAudiences.length}`}
-                    right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)}</Pill>}
+                    title="Who are you shopping for?"
+                    right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)} items</Pill>}
                   >
                     <ScrollBody>
                       {filteredAudiences.length ? (
                         filteredAudiences.map((a) => (
-                          <MobileSelectRow
+                          <MobileChoiceCard
                             key={a.slug}
                             title={a.name}
-                            subLeft={`${a.count} product${a.count === 1 ? "" : "s"}`}
-                            badge={a.count}
+                            count={a.count}
                             active={a.slug === flyAudienceSlug}
                             onSelect={() => {
                               setHoverAudienceSlug(a.slug);
@@ -3146,6 +3323,7 @@ export default function Slidingmenubar({ open, onClose }) {
                               ageGroup: selectedAgeGroup,
                             })}
                             onNavigate={handleClose}
+                            kind="audience"
                           />
                         ))
                       ) : (
@@ -3164,9 +3342,7 @@ export default function Slidingmenubar({ open, onClose }) {
 
                 {mobileSection === "categories" ? (
                   <Shell
-                    title={
-                      flyAudience?.name ? `Categories · ${flyAudience.name} · ${filteredCategories.length}` : `Categories · ${filteredCategories.length}`
-                    }
+                    title={flyAudience?.name ? `Choose ${flyAudience.name} category` : "Choose a category"}
                     right={
                       <button
                         type="button"
@@ -3193,11 +3369,10 @@ export default function Slidingmenubar({ open, onClose }) {
                     <ScrollBody>
                       {filteredCategories.length ? (
                         filteredCategories.map((c) => (
-                          <MobileSelectRow
+                          <MobileChoiceCard
                             key={c.slug}
                             title={c.name}
-                            subLeft={`${c.count} product${c.count === 1 ? "" : "s"}`}
-                            badge={c.count}
+                            count={c.count}
                             active={c.slug === flyCategorySlug}
                             onSelect={() => {
                               setHoverCategorySlug(c.slug);
@@ -3215,6 +3390,7 @@ export default function Slidingmenubar({ open, onClose }) {
                               ageGroup: selectedAgeGroup,
                             })}
                             onNavigate={handleClose}
+                            kind="category"
                           />
                         ))
                       ) : (
@@ -3246,38 +3422,41 @@ export default function Slidingmenubar({ open, onClose }) {
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", fontSize: 12, color: "#0c2340" }}>
-                            Products
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 950, fontSize: 15, lineHeight: 1.2, color: "#0F2147", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {filteredCategories.find((item) => item.slug === flyCategorySlug)?.name || "Products"}
                           </div>
-                          <Pill tone="ink" size="sm">
-                            {filteredProducts.length}
-                          </Pill>
+                          <div style={{ marginTop: 3, fontWeight: 800, fontSize: 11, color: "rgba(15,33,71,0.58)" }}>
+                            {filteredProducts.length} product{filteredProducts.length === 1 ? "" : "s"} found
+                          </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setMobileSection("categories")}
-                          style={{
-                            height: 32,
-                            padding: "0 12px",
-                            borderRadius: 999,
-                            border: "1px solid rgba(0,0,0,0.10)",
-                            background: "rgba(255,255,255,0.92)",
-                            boxShadow: "0 10px 18px rgba(0,0,0,0.05)",
-                            fontWeight: 900,
-                            letterSpacing: ".12em",
-                            textTransform: "uppercase",
-                            fontSize: 10,
-                            cursor: "pointer",
-                            color: "#0c2340",
-                          }}
-                        >
-                          Back
-                        </button>
+                        {showRefine ? (
+                          <button
+                            type="button"
+                            onClick={() => setMobileRefineOpen((value) => !value)}
+                            aria-expanded={mobileRefineOpen}
+                            style={{
+                              height: 38,
+                              padding: "0 13px",
+                              borderRadius: 999,
+                              border: "1px solid rgba(15,33,71,0.14)",
+                              background: mobileRefineOpen ? "#0F2147" : "rgba(255,255,255,0.94)",
+                              color: mobileRefineOpen ? "#fff" : "#0F2147",
+                              fontWeight: 900,
+                              letterSpacing: ".08em",
+                              textTransform: "uppercase",
+                              fontSize: 10,
+                              cursor: "pointer",
+                              flexShrink: 0,
+                            }}
+                          >
+                            Filter {selectedSubCategory || selectedGenderGroup || selectedAgeGroup ? "•" : ""}
+                          </button>
+                        ) : null}
                       </div>
 
-                      {showRefine ? (
+                      {showRefine && mobileRefineOpen ? (
                         <div style={{ display: "grid", gap: 8 }}>
                           {facetOptions.subCategories.length ? (
                             <Select
@@ -3318,7 +3497,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 setSelectedAgeGroup("");
                               }}
                               style={{
-                                height: 34,
+                                height: 40,
                                 padding: "0 10px",
                                 borderRadius: 12,
                                 border: "1px solid rgba(0,0,0,0.10)",
@@ -3332,7 +3511,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 color: "#0c2340",
                               }}
                             >
-                              Clear Refine
+                            Clear filters
                             </button>
                           ) : null}
                         </div>
@@ -3344,7 +3523,7 @@ export default function Slidingmenubar({ open, onClose }) {
                           onClick={handleClose}
                           style={{
                             textDecoration: "none",
-                            height: 34,
+                            height: 44,
                             padding: "0 12px",
                             borderRadius: 999,
                             border: "1px solid rgba(12,35,64,0.22)",
@@ -3357,11 +3536,11 @@ export default function Slidingmenubar({ open, onClose }) {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            fontSize: 11,
+                            fontSize: 12,
                             whiteSpace: "nowrap",
                           }}
                         >
-                          View All →
+                          View the full collection →
                         </Link>
                       ) : null}
                     </div>
@@ -3400,17 +3579,17 @@ export default function Slidingmenubar({ open, onClose }) {
                                 title={p.name}
                                 style={{
                                   textDecoration: "none",
-                                  borderRadius: 14,
-                                  padding: "10px 10px",
-                                  border: "1px solid rgba(0,0,0,0.06)",
-                                  background: "rgba(255,255,255,0.82)",
-                                  boxShadow: "0 8px 14px rgba(0,0,0,0.04)",
-                                  color: "#0c2340",
+                                  borderRadius: 16,
+                                  padding: "13px 14px",
+                                  border: "1px solid rgba(15,33,71,0.09)",
+                                  background: "rgba(255,255,255,0.94)",
+                                  boxShadow: "0 8px 18px rgba(15,33,71,0.05)",
+                                  color: "#0F2147",
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "space-between",
-                                  gap: 10,
-                                  minHeight: 50,
+                                  gap: 12,
+                                  minHeight: 62,
                                   minWidth: 0,
                                 }}
                               >
@@ -3418,20 +3597,19 @@ export default function Slidingmenubar({ open, onClose }) {
                                   <div
                                     style={{
                                       fontWeight: 900,
-                                      letterSpacing: ".06em",
-                                      textTransform: "uppercase",
+                                      letterSpacing: ".025em",
                                       whiteSpace: "nowrap",
                                       overflow: "hidden",
                                       textOverflow: "ellipsis",
-                                      fontSize: 12,
-                                      lineHeight: 1.15,
+                                      fontSize: 14,
+                                      lineHeight: 1.2,
                                     }}
                                   >
                                     {p.name}
                                   </div>
                                   <div
                                     style={{
-                                      fontSize: 10,
+                                      fontSize: 11,
                                       fontWeight: 800,
                                       color: "rgba(12,35,64,0.60)",
                                       whiteSpace: "nowrap",
@@ -3446,18 +3624,19 @@ export default function Slidingmenubar({ open, onClose }) {
                                 <span
                                   style={{
                                     flexShrink: 0,
-                                    padding: "5px 8px",
-                                    borderRadius: 999,
-                                    border: "1px solid rgba(12,35,64,0.14)",
-                                    background: "rgba(12,35,64,0.06)",
-                                    fontWeight: 900,
-                                    fontSize: 10,
-                                    letterSpacing: ".10em",
-                                    textTransform: "uppercase",
-                                  }}
-                                >
-                                  Open
-                                </span>
+                                  width: 34,
+                                  height: 34,
+                                  borderRadius: 999,
+                                  background: "rgba(15,33,71,0.07)",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontWeight: 700,
+                                  fontSize: 20,
+                                }}
+                              >
+                                  ›
+                              </span>
                               </Link>
                             ))}
                           </div>
