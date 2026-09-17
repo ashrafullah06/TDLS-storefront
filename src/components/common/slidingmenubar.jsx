@@ -1732,11 +1732,11 @@ async function fetchProductsFallback() {
   const preloaded = readPreloadedRawProducts();
   if (preloaded.length) return preloaded;
 
-  // Keep the primary request shallow and production-safe. These are the only
-  // product/taxonomy fields required to build Tier → Audience → Category → Products.
-  const strict =
-    "/products?pagination[pageSize]=500" +
-    "&fields[0]=slug&fields[1]=name&fields[2]=status&fields[3]=disable_frontend&fields[4]=is_archived" +
+  // Production-safe menu query. Never ask the single-connection Strapi/Neon
+  // stack to populate hundreds of products in one request. Each page matches
+  // the storefront's canonical 24-product boundary.
+  const strictQuery =
+    "fields[0]=slug&fields[1]=name&fields[2]=status&fields[3]=disable_frontend&fields[4]=is_archived" +
     "&populate[audience_categories][fields][0]=slug&populate[audience_categories][fields][1]=name" +
     "&populate[categories][fields][0]=slug&populate[categories][fields][1]=name" +
     "&populate[sub_categories][fields][0]=slug&populate[sub_categories][fields][1]=name" +
@@ -1748,13 +1748,90 @@ async function fetchProductsFallback() {
     "&populate[events_products_collections][fields][0]=slug&populate[events_products_collections][fields][1]=name" +
     "&populate[product_collections][fields][0]=slug&populate[product_collections][fields][1]=name";
 
-  let payload = await fetchFromStrapi(strict);
-  let rows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  const readPagination = (payload) => {
+    const p =
+      payload?.meta?.pagination ||
+      payload?.pagination ||
+      payload?.data?.meta?.pagination ||
+      payload?.data?.pagination ||
+      null;
+    const pageCount = Math.max(1, Math.floor(Number(p?.pageCount) || 1));
+    const total = Math.max(0, Math.floor(Number(p?.total) || 0));
+    return { pageCount, total };
+  };
+
+  const publishProgress = (rows) => {
+    if (!rows.length) return;
+    const partial = buildIndexFallbackFromProducts(rows);
+    const built = publishBuiltMenu(partial, { fromCache: false });
+    if (!built || typeof window === "undefined") return;
+    try {
+      window.dispatchEvent(new CustomEvent("tdls:slidingmenubar:data-ready", { detail: built }));
+    } catch {}
+  };
+
+  const fetchPaged = async (query) => {
+    const PAGE_SIZE = 24;
+    const MAX_PAGES = 50;
+    const all = [];
+    const seen = new Set();
+
+    const merge = (pageRows) => {
+      for (const row of pageRows) {
+        const item = normalizeEntity(row);
+        if (!item) continue;
+        const key = entityStableId(item, item?.slug) || `slug:${normSlug(item?.slug || "")}`;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        all.push(item);
+      }
+    };
+
+    const firstPayload = await fetchFromStrapi(
+      `/products?pagination[page]=1&pagination[pageSize]=${PAGE_SIZE}&${query}`
+    );
+    const firstRows = unwrapStrapiList(firstPayload).map(normalizeEntity).filter(Boolean);
+    if (!firstRows.length) return [];
+
+    merge(firstRows);
+    publishProgress(all);
+
+    const pagination = readPagination(firstPayload);
+    const inferredPages =
+      pagination.total > 0
+        ? Math.ceil(pagination.total / PAGE_SIZE)
+        : pagination.pageCount > 1
+        ? pagination.pageCount
+        : firstRows.length >= PAGE_SIZE
+        ? MAX_PAGES
+        : 1;
+    const pageCount = Math.min(MAX_PAGES, Math.max(1, inferredPages));
+
+    for (let page = 2; page <= pageCount; page += 1) {
+      const payload = await fetchFromStrapi(
+        `/products?pagination[page]=${page}&pagination[pageSize]=${PAGE_SIZE}&${query}`
+      );
+      const pageRows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+      if (!pageRows.length) break;
+      merge(pageRows);
+
+      // Keep an already-open mobile menu filling progressively without
+      // writing localStorage after every single page.
+      if (page === pageCount || page % 3 === 0) publishProgress(all);
+      if (pageRows.length < PAGE_SIZE && pagination.total <= 0) break;
+    }
+
+    return all;
+  };
+
+  // `populate=*` is schema-tolerant and, at only 24 products per request,
+  // remains bounded. It also works with the proxy's flattened card response.
+  let rows = await fetchPaged("populate=*");
   if (rows.length) return rows;
 
-  const safe = "/products?pagination[pageSize]=500&populate=*";
-  payload = await fetchFromStrapi(safe);
-  rows = unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
+  // Field-scoped recovery for installations where the proxy does not accept
+  // the generic populate form.
+  rows = await fetchPaged(strictQuery);
   return rows;
 }
 
@@ -1925,7 +2002,7 @@ async function fetchAndBuildFresh() {
  * Preload contract:
  * - use raw payload from the standalone preloader first
  * - then use processed localStorage cache
- * - if another standalone preload is in-flight, wait for that same promise
+ * - briefly reuse another standalone preload when it is already in-flight
  * - only perform our own fetch when no usable preload/cache exists, or when a
  *   caller explicitly asks for a fresh background refresh
  */
@@ -1951,13 +2028,17 @@ async function preloadMenuDataOnce({ backgroundRefresh = true, fromPreloader = f
     }
   }
 
-  // A normal menu consumer should never start a duplicate request while the
-  // standalone preloader is already fetching/building the same data.
+  // Briefly reuse the standalone preloader. Never let its old large request
+  // hold the menu in a permanent loading state; after this small grace period
+  // the bounded 24-item recovery below is allowed to proceed.
   if (!fromPreloader) {
     const state = getSharedPreloadState();
     if (!__menuData && state?.inFlight && state?.promise) {
       try {
-        const sharedData = await state.promise;
+        const sharedData = await Promise.race([
+          state.promise,
+          new Promise((resolve) => window.setTimeout(() => resolve(null), 900)),
+        ]);
         if (hasUsableBuiltMenu(sharedData)) {
           __menuData = sharedData;
           __menuLastGood = __menuLastGood || sharedData;
@@ -2020,8 +2101,7 @@ function needsMenuWarmRetry() {
 }
 
 function runMenuWarmAttempt() {
-  const shared = getSharedPreloadState();
-  if (shared?.inFlight || shared?.promise || __menuPromise) return;
+  if (__menuPromise) return;
   void warmSlidingMenuBar({ forceRefresh: true }).catch(() => {});
 }
 
@@ -2052,8 +2132,8 @@ export function SlidingMenuBarPreloader() {
 }
 
 // Auto-warm fallback for deployments that import this menu module directly.
-// When the standalone small preloader owns an in-flight request, do not create
-// a duplicate request from this larger module.
+// The shared preloader gets a short head start; the bounded recovery path then
+// takes over if that older request has not produced usable data.
 if (typeof window !== "undefined") {
   try {
     if (!window.__tdlsSlidingMenuBarAutoWarm) {
@@ -2191,6 +2271,33 @@ export default function Slidingmenubar({ open, onClose }) {
     };
   }, []);
 
+  // Receive the first usable 24-product menu page immediately, then refresh
+  // the open mobile view as the remaining pages finish in the background.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onMenuDataReady = (event) => {
+      const data = event?.detail;
+      if (!hasUsableBuiltMenu(data)) return;
+
+      setAudienceRows(data.audienceRows || []);
+      setProductIndex(data.productIndex || new Map());
+      setNameMaps(
+        data.nameMaps || {
+          categories: new Map(),
+          subCategories: new Map(),
+          genderGroups: new Map(),
+          ageGroups: new Map(),
+        }
+      );
+      setHydrated(true);
+      setLoading(false);
+    };
+
+    window.addEventListener("tdls:slidingmenubar:data-ready", onMenuDataReady);
+    return () => window.removeEventListener("tdls:slidingmenubar:data-ready", onMenuDataReady);
+  }, []);
+
   // ✅ Hydrate immediately from singleton/LS, then await fresh build (FIXED)
   useEffect(() => {
     let alive = true;
@@ -2262,12 +2369,16 @@ export default function Slidingmenubar({ open, onClose }) {
   useEffect(() => {
     function handleResize() {
       const w = window.innerWidth;
-      setIsDesktop(w >= 980);
+      const coarseTouch =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(pointer: coarse)").matches;
+      const useMobileLayout = w < 980 || (coarseTouch && w <= 1280);
+      setIsDesktop(!useMobileLayout);
 
       const target =
-        w >= 1600
+        !useMobileLayout && w >= 1600
           ? Math.min(MENU_MAX_WIDTH, w - 16)
-          : w >= 980
+          : !useMobileLayout
           ? Math.min(MENU_WIDTH_DESKTOP, w - 16)
           : Math.max(MENU_MIN_WIDTH, w - 16);
 
@@ -3415,13 +3526,45 @@ export default function Slidingmenubar({ open, onClose }) {
                           />
                         ))
                       ) : (
-                        <div style={{ padding: 10 }}>
-                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
-                            {showLoadingHint ? "Loading options…" : "No audiences in this tier yet."}
+                        <div
+                          style={{
+                            gridColumn: "1 / -1",
+                            padding: 18,
+                            borderRadius: 20,
+                            background: "#FFFFFF",
+                            border: "1px solid rgba(15,33,71,0.10)",
+                            boxShadow: "0 10px 24px rgba(15,33,71,0.06)",
+                          }}
+                        >
+                          <div style={{ fontWeight: 950, fontSize: 16, color: "#0F2147" }}>
+                            {showLoadingHint ? "Preparing choices…" : "Browse this collection"}
                           </div>
-                          <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
-                            {showLoadingHint ? "Fetching from Strapi…" : "Check tier/audience/product relations in Strapi."}
+                          <div style={{ marginTop: 6, fontWeight: 750, fontSize: 12, lineHeight: 1.5, color: "rgba(15,33,71,0.64)" }}>
+                            {showLoadingHint
+                              ? "The menu is filling in the background. You can start shopping now."
+                              : "Audience shortcuts are unavailable, but the collection remains accessible."}
                           </div>
+                          <Link
+                            href={buildCollectionsHref({ tier: tierSlug })}
+                            onClick={handleClose}
+                            style={{
+                              marginTop: 14,
+                              minHeight: 46,
+                              borderRadius: 14,
+                              background: "#0F2147",
+                              color: "#FFFFFF",
+                              textDecoration: "none",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontWeight: 900,
+                              fontSize: 11,
+                              letterSpacing: ".12em",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Shop {tierName} →
+                          </Link>
                         </div>
                       )}
                     </ScrollBody>
@@ -3483,13 +3626,36 @@ export default function Slidingmenubar({ open, onClose }) {
                           />
                         ))
                       ) : (
-                        <div style={{ padding: 10 }}>
-                          <div style={{ fontWeight: 900, letterSpacing: ".12em", textTransform: "uppercase", color: "#0c2340" }}>
+                        <div style={{ gridColumn: "1 / -1", padding: 18, borderRadius: 20, background: "#FFFFFF" }}>
+                          <div style={{ fontWeight: 950, fontSize: 15, color: "#0F2147" }}>
                             {flyAudienceSlug ? "No categories in this audience/tier." : "Pick an audience."}
                           </div>
-                          <div style={{ marginTop: 8, fontWeight: 800, color: "rgba(12,35,64,0.70)" }}>
+                          <div style={{ marginTop: 6, fontWeight: 750, fontSize: 12, color: "rgba(15,33,71,0.64)" }}>
                             Try a different audience or tier.
                           </div>
+                          {flyAudienceSlug ? (
+                            <Link
+                              href={buildCollectionsHref({ tier: tierSlug, audience: flyAudienceSlug })}
+                              onClick={handleClose}
+                              style={{
+                                marginTop: 14,
+                                minHeight: 46,
+                                borderRadius: 14,
+                                background: "#0F2147",
+                                color: "#FFFFFF",
+                                textDecoration: "none",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontWeight: 900,
+                                fontSize: 11,
+                                letterSpacing: ".11em",
+                                textTransform: "uppercase",
+                              }}
+                            >
+                              Shop {flyAudience?.name || "collection"} →
+                            </Link>
+                          ) : null}
                         </div>
                       )}
                     </ScrollBody>
