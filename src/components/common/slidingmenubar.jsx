@@ -202,11 +202,11 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
         display: "flex",
         alignItems: "center",
         gap: isMobile ? 8 : 10,
-        overflowX: "auto",
-        overflowY: "hidden",
+        overflowX: isMobile ? "visible" : "auto",
+        overflowY: isMobile ? "visible" : "hidden",
         WebkitOverflowScrolling: "touch",
         overscrollBehaviorX: "contain",
-        touchAction: "pan-x",
+        touchAction: isMobile ? "manipulation" : "pan-x",
         paddingBottom: 2,
         maxWidth: "100%",
       }}
@@ -220,17 +220,34 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
             onClick={() => onPick(t.slug)}
             style={{
               flex: "0 0 auto",
-              borderRadius: 999,
-              padding: isMobile ? "7px 10px" : "9px 12px",
-              border: active ? "1px solid rgba(12,35,64,0.55)" : "1px solid rgba(0,0,0,0.10)",
-              background: active
+              width: isMobile ? "100%" : "auto",
+              borderRadius: isMobile ? 14 : 999,
+              padding: isMobile ? "10px 12px" : "9px 12px",
+              border: isMobile
+                ? active
+                  ? "1px solid #D7BE71"
+                  : "1px solid rgba(255,255,255,0.18)"
+                : active
+                ? "1px solid rgba(12,35,64,0.55)"
+                : "1px solid rgba(0,0,0,0.10)",
+              background: isMobile
+                ? active
+                  ? "linear-gradient(135deg, #D7BE71, #BFA750)"
+                  : "rgba(255,255,255,0.07)"
+                : active
                 ? "linear-gradient(135deg, #0c2340 10%, #163060 100%)"
                 : "linear-gradient(135deg, #ffffff 55%, #fbf7ec 100%)",
-              color: active ? "#fffdf8" : "#0c2340",
+              color: isMobile ? (active ? "#0F2147" : "#FFFFFF") : active ? "#fffdf8" : "#0c2340",
               fontWeight: 900,
               letterSpacing: ".14em",
               textTransform: "uppercase",
-              boxShadow: active ? "0 14px 26px rgba(12,35,64,0.18)" : "0 10px 18px rgba(0,0,0,0.05)",
+              boxShadow: isMobile
+                ? active
+                  ? "0 10px 22px rgba(0,0,0,0.22)"
+                  : "none"
+                : active
+                ? "0 14px 26px rgba(12,35,64,0.18)"
+                : "0 10px 18px rgba(0,0,0,0.05)",
               cursor: "pointer",
               whiteSpace: "nowrap",
               fontSize: fs,
@@ -245,14 +262,14 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
   );
 }
 
-function Shell({ title, right, children }) {
+function Shell({ title, right, children, mobile = false }) {
   return (
     <div
       style={{
-        borderRadius: 18,
-        border: "1px solid rgba(0,0,0,0.08)",
-        background: "rgba(255,255,255,0.70)",
-        boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
+        borderRadius: mobile ? 0 : 18,
+        border: mobile ? "none" : "1px solid rgba(0,0,0,0.08)",
+        background: mobile ? "transparent" : "rgba(255,255,255,0.70)",
+        boxShadow: mobile ? "none" : "0 16px 34px rgba(0,0,0,0.07)",
         overflow: "hidden",
         minHeight: 0,
         display: "flex",
@@ -261,13 +278,15 @@ function Shell({ title, right, children }) {
     >
       <div
         style={{
-          padding: "10px 10px",
-          borderBottom: "1px solid rgba(0,0,0,0.08)",
+          padding: mobile ? "2px 2px 12px" : "10px 10px",
+          borderBottom: mobile ? "none" : "1px solid rgba(0,0,0,0.08)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 10,
-          background: "linear-gradient(135deg, rgba(255,255,255,0.92) 55%, rgba(247,243,231,0.92) 100%)",
+          background: mobile
+            ? "transparent"
+            : "linear-gradient(135deg, rgba(255,255,255,0.92) 55%, rgba(247,243,231,0.92) 100%)",
         }}
       >
         <div
@@ -275,7 +294,7 @@ function Shell({ title, right, children }) {
             fontWeight: 900,
             letterSpacing: ".12em",
             textTransform: "uppercase",
-            fontSize: 12,
+            fontSize: mobile ? 15 : 12,
             color: "#0c2340",
           }}
         >
@@ -288,7 +307,7 @@ function Shell({ title, right, children }) {
   );
 }
 
-function ScrollBody({ children, compact = false }) {
+function ScrollBody({ children, compact = false, columns = 1 }) {
   return (
     <div
       style={{
@@ -300,7 +319,15 @@ function ScrollBody({ children, compact = false }) {
         touchAction: "pan-y",
       }}
     >
-      <div style={{ display: "grid", gap: compact ? 7 : 8 }}>{children}</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: columns > 1 ? `repeat(${columns}, minmax(0, 1fr))` : "1fr",
+          gap: compact ? 7 : 10,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -665,16 +692,17 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: href ? "minmax(0, 1fr) auto" : "1fr",
-        alignItems: "stretch",
-        minHeight: 64,
-        borderRadius: 16,
-        border: active ? "1px solid rgba(15,33,71,0.34)" : "1px solid rgba(15,33,71,0.10)",
+        display: isMobile ? "grid" : "flex",
+        gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : undefined,
+        flexDirection: "column",
+        minWidth: 0,
+        minHeight: 146,
+        borderRadius: 20,
+        border: active ? "2px solid #BFA750" : "1px solid rgba(15,33,71,0.10)",
         background: active
-          ? "linear-gradient(135deg, rgba(15,33,71,0.09), rgba(191,167,80,0.14))"
-          : "rgba(255,255,255,0.92)",
-        boxShadow: active ? "0 12px 24px rgba(15,33,71,0.10)" : "0 8px 18px rgba(15,33,71,0.05)",
+          ? "linear-gradient(150deg, #FFF9E8 0%, #FFFFFF 72%)"
+          : "#FFFFFF",
+        boxShadow: active ? "0 14px 28px rgba(15,33,71,0.13)" : "0 8px 20px rgba(15,33,71,0.06)",
         overflow: "hidden",
       }}
     >
@@ -684,30 +712,53 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         aria-pressed={active}
         style={{
           minWidth: 0,
-          padding: "12px 14px",
+          flex: 1,
+          padding: "15px 13px 12px",
           border: 0,
           background: "transparent",
           color: "#0F2147",
           textAlign: "left",
           cursor: "pointer",
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-start",
           justifyContent: "space-between",
-          gap: 12,
+          flexDirection: "column",
+          gap: 10,
         }}
       >
-        <span style={{ minWidth: 0 }}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 14,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: active ? "#0F2147" : "rgba(15,33,71,0.07)",
+            color: active ? "#D7BE71" : "#0F2147",
+            fontFamily: "Georgia, serif",
+            fontWeight: 900,
+            fontSize: 20,
+          }}
+        >
+          {(title || "?").trim().charAt(0).toUpperCase()}
+        </span>
+
+        <span style={{ minWidth: 0, width: "100%" }}>
           <span
             style={{
               display: "block",
-              fontSize: 14,
+              fontSize: 13,
               lineHeight: 1.25,
               fontWeight: 900,
-              letterSpacing: ".035em",
+              letterSpacing: ".025em",
               textTransform: "uppercase",
               overflow: "hidden",
               textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
             }}
           >
             {title}
@@ -726,24 +777,6 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
           </span>
         </span>
 
-        <span
-          aria-hidden="true"
-          style={{
-            flexShrink: 0,
-            width: 32,
-            height: 32,
-            borderRadius: 999,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: active ? "#0F2147" : "rgba(15,33,71,0.07)",
-            color: active ? "#fff" : "#0F2147",
-            fontSize: 18,
-            fontWeight: 800,
-          }}
-        >
-          ›
-        </span>
       </button>
 
       {href ? (
@@ -757,16 +790,16 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
           onTouchStart={(e) => e.stopPropagation()}
           aria-label={`View all ${title} ${kind}`}
           style={{
-            width: 72,
-            borderLeft: "1px solid rgba(15,33,71,0.10)",
+            minHeight: 36,
+            borderTop: "1px solid rgba(15,33,71,0.08)",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            padding: "0 10px",
+            padding: "8px 10px",
             textAlign: "center",
             textDecoration: "none",
             color: "#0F2147",
-            background: "rgba(255,255,255,0.58)",
+            background: "rgba(15,33,71,0.025)",
             fontSize: 9,
             lineHeight: 1.25,
             fontWeight: 900,
@@ -774,7 +807,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
             textTransform: "uppercase",
           }}
         >
-          View all
+          Open {kind}
         </Link>
       ) : null}
     </div>
@@ -790,17 +823,20 @@ function MobileStepBar({ section, audienceName, categoryName, onStep }) {
   const activeIndex = Math.max(0, steps.findIndex((step) => step.value === section));
 
   return (
-    <nav aria-label="Menu progress" style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+    <nav
+      aria-label="Menu progress"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+        gap: 7,
+        minWidth: 0,
+      }}
+    >
       {steps.map((step, index) => {
         const reachable = index <= activeIndex;
         const active = index === activeIndex;
         return (
           <React.Fragment key={step.value}>
-            {index ? (
-              <span aria-hidden="true" style={{ margin: "0 5px", color: "rgba(15,33,71,0.35)", fontSize: 16 }}>
-                ›
-              </span>
-            ) : null}
             <button
               type="button"
               disabled={!reachable}
@@ -808,14 +844,14 @@ function MobileStepBar({ section, audienceName, categoryName, onStep }) {
               aria-current={active ? "step" : undefined}
               style={{
                 minWidth: 0,
-                maxWidth: active ? "44%" : "28%",
-                height: 30,
-                padding: "0 9px",
-                borderRadius: 999,
-                border: active ? "1px solid rgba(15,33,71,0.18)" : "1px solid transparent",
-                background: active ? "rgba(15,33,71,0.08)" : "transparent",
-                color: reachable ? "#0F2147" : "rgba(15,33,71,0.35)",
-                fontSize: 10,
+                width: "100%",
+                height: 34,
+                padding: "0 8px",
+                borderRadius: 11,
+                border: active ? "1px solid #D7BE71" : "1px solid rgba(255,255,255,0.12)",
+                background: active ? "rgba(215,190,113,0.17)" : "rgba(255,255,255,0.04)",
+                color: active ? "#F4D982" : reachable ? "#FFFFFF" : "rgba(255,255,255,0.36)",
+                fontSize: 9,
                 fontWeight: 900,
                 letterSpacing: ".07em",
                 textTransform: "uppercase",
@@ -1529,12 +1565,13 @@ function makeSearchKey(name, slug) {
 
 /* ------------------------------ preload + cache (CLEAN) ------------------------------ */
 
-function loadFromLocalStorage() {
+function loadFromLocalStorage({ allowExpired = false } = {}) {
   if (!canUseLS()) return null;
   const tsRaw = window.localStorage.getItem(LS_TS);
   const ts = tsRaw ? parseInt(tsRaw, 10) : 0;
   if (!Number.isFinite(ts) || ts <= 0) return null;
-  if (Date.now() - ts > LS_TTL_MS) return null;
+  const expired = Date.now() - ts > LS_TTL_MS;
+  if (expired && !allowExpired) return null;
 
   const raw = window.localStorage.getItem(LS_KEY);
   if (!raw) return null;
@@ -1566,7 +1603,13 @@ function loadFromLocalStorage() {
     .filter((a) => (a.productIds || []).length > 0);
 
   if (!cleanedAudienceRows.length || !prodIndex.size) return null;
-  return { audienceRows: cleanedAudienceRows, productIndex: prodIndex, nameMaps, _fromCache: true };
+  return {
+    audienceRows: cleanedAudienceRows,
+    productIndex: prodIndex,
+    nameMaps,
+    _fromCache: true,
+    _stale: expired,
+  };
 }
 
 function saveToLocalStorage({ audienceRows, productIndex, nameMaps }) {
@@ -1617,7 +1660,7 @@ function rawRowsFromPayload(raw) {
   return unwrapStrapiList(payload).map(normalizeEntity).filter(Boolean);
 }
 
-function readPreloadedRawProducts() {
+function readPreloadedRawProducts({ allowExpired = false } = {}) {
   if (typeof window === "undefined") return [];
 
   const state = getSharedPreloadState();
@@ -1631,7 +1674,7 @@ function readPreloadedRawProducts() {
   try {
     const ts = Number(window.localStorage.getItem(RAW_LS_TS) || 0);
     if (!Number.isFinite(ts) || ts <= 0) return [];
-    if (Date.now() - ts > RAW_LS_TTL_MS) return [];
+    if (Date.now() - ts > RAW_LS_TTL_MS && !allowExpired) return [];
 
     const text = window.localStorage.getItem(RAW_LS_KEY);
     if (!text) return [];
@@ -1829,7 +1872,7 @@ function publishBuiltMenu(data, { fromCache = false } = {}) {
 }
 
 function buildMenuFromPreloadedRawProducts() {
-  const rows = readPreloadedRawProducts();
+  const rows = readPreloadedRawProducts({ allowExpired: true });
   if (!rows.length) return null;
 
   const built = buildIndexFallbackFromProducts(rows);
@@ -1863,7 +1906,7 @@ async function fetchAndBuildFresh() {
     return publishBuiltMenu(built, { fromCache: false });
   }
 
-  const fallback = __menuLastGood || __menuData || loadFromLocalStorage();
+  const fallback = __menuLastGood || __menuData || loadFromLocalStorage({ allowExpired: true });
   if (fallback?.audienceRows?.length && (fallback?.productIndex?.size || 0) > 0) return fallback;
 
   return {
@@ -1898,7 +1941,7 @@ async function preloadMenuDataOnce({ backgroundRefresh = true, fromPreloader = f
 
   // Processed cache is the second instant source.
   if (!__menuData) {
-    const cached = loadFromLocalStorage();
+    const cached = loadFromLocalStorage({ allowExpired: true });
     if (cached) {
       __menuData = cached;
       __menuLastGood = __menuLastGood || cached;
@@ -1943,7 +1986,7 @@ async function preloadMenuDataOnce({ backgroundRefresh = true, fromPreloader = f
     })
     .catch(() => {
       const preloaded = buildMenuFromPreloadedRawProducts();
-      const fallback = preloaded || __menuLastGood || __menuData || loadFromLocalStorage();
+      const fallback = preloaded || __menuLastGood || __menuData || loadFromLocalStorage({ allowExpired: true });
       __menuData =
         fallback ||
         ({
@@ -1972,6 +2015,28 @@ export function warmSlidingMenuBar({ forceRefresh = true, fromPreloader = false 
   });
 }
 
+function needsMenuWarmRetry() {
+  return !hasUsableBuiltMenu(__menuData) || __menuData?._stale === true;
+}
+
+function runMenuWarmAttempt() {
+  const shared = getSharedPreloadState();
+  if (shared?.inFlight || shared?.promise || __menuPromise) return;
+  void warmSlidingMenuBar({ forceRefresh: true }).catch(() => {});
+}
+
+function scheduleMenuWarmCycle() {
+  runMenuWarmAttempt();
+
+  // Bounded retries cover a cold Strapi/Railway start without producing an
+  // unbounded request loop. Successful fresh data cancels later work logically.
+  [2400, 7200].forEach((delay) => {
+    window.setTimeout(() => {
+      if (needsMenuWarmRetry()) runMenuWarmAttempt();
+    }, delay);
+  });
+}
+
 export function SlidingMenuBarPreloader() {
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1979,7 +2044,7 @@ export function SlidingMenuBarPreloader() {
     // Do not defer to requestIdleCallback. If this compatibility preloader is
     // mounted directly, begin warming immediately.
     try {
-      void warmSlidingMenuBar({ forceRefresh: true });
+      scheduleMenuWarmCycle();
     } catch {}
   }, []);
 
@@ -1994,20 +2059,22 @@ if (typeof window !== "undefined") {
     if (!window.__tdlsSlidingMenuBarAutoWarm) {
       window.__tdlsSlidingMenuBarAutoWarm = true;
 
-      const shared = getSharedPreloadState();
-      if (!shared?.inFlight && !shared?.promise) {
-        void warmSlidingMenuBar({ forceRefresh: true }).catch(() => {});
-      }
+      scheduleMenuWarmCycle();
+
+      window.addEventListener(
+        "online",
+        () => {
+          if (needsMenuWarmRetry()) runMenuWarmAttempt();
+        },
+        { passive: true }
+      );
 
       document.addEventListener(
         "visibilitychange",
         () => {
           try {
             if (document.visibilityState !== "visible") return;
-            const state = getSharedPreloadState();
-            if (!state?.inFlight && !state?.promise) {
-              void warmSlidingMenuBar({ forceRefresh: true }).catch(() => {});
-            }
+            if (needsMenuWarmRetry()) runMenuWarmAttempt();
           } catch {}
         },
         { passive: true }
@@ -2138,7 +2205,7 @@ export default function Slidingmenubar({ open, onClose }) {
     }
 
     if (!__menuData) {
-      const cached = loadFromLocalStorage();
+      const cached = loadFromLocalStorage({ allowExpired: true });
       if (cached) {
         __menuData = cached;
         __menuLastGood = __menuLastGood || cached;
@@ -2629,7 +2696,7 @@ export default function Slidingmenubar({ open, onClose }) {
   const headerIsMobile = !isDesktop;
 
   const panelMaxHeightStyle = headerIsMobile
-    ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${8 + panelBottom}px)` }
+    ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${panelBottom}px)` }
     : null;
 
   const goViewAllHref = flyAudienceSlug
@@ -2681,19 +2748,19 @@ export default function Slidingmenubar({ open, onClose }) {
         ref={panelRef}
         style={{
           position: "fixed",
-          top: headerIsMobile ? 8 : panelTop,
-          left: headerIsMobile ? 8 : "auto",
-          right: 8,
+          top: headerIsMobile ? 0 : panelTop,
+          left: headerIsMobile ? 0 : "auto",
+          right: headerIsMobile ? 0 : 8,
           bottom: panelBottom,
           width: headerIsMobile ? "auto" : menuWidth,
-          maxWidth: "calc(100vw - 16px)",
+          maxWidth: headerIsMobile ? "100vw" : "calc(100vw - 16px)",
           zIndex: Z_PANEL,
           display: "flex",
           flexDirection: "column",
-          background: "linear-gradient(135deg, #fffdf8 55%, #fbf6ea 100%)",
-          border: "1px solid rgba(255,255,255,0.26)",
+          background: headerIsMobile ? "#F5F2E9" : "linear-gradient(135deg, #fffdf8 55%, #fbf6ea 100%)",
+          border: headerIsMobile ? "none" : "1px solid rgba(255,255,255,0.26)",
           boxShadow: "0 32px 90px rgba(0,0,0,0.32)",
-          borderRadius: headerIsMobile ? 22 : 28,
+          borderRadius: headerIsMobile ? 0 : 28,
           overflow: "hidden",
           pointerEvents: "auto",
           isolation: "isolate",
@@ -2707,9 +2774,11 @@ export default function Slidingmenubar({ open, onClose }) {
         {/* Header */}
         <div
           style={{
-            padding: headerIsMobile ? "8px 10px" : "10px 12px",
-            borderBottom: "1px solid rgba(0,0,0,0.08)",
-            background: "linear-gradient(135deg, #ffffff 55%, #f7f3e7 100%)",
+            padding: headerIsMobile ? "max(14px, env(safe-area-inset-top)) 14px 13px" : "10px 12px",
+            borderBottom: headerIsMobile ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.08)",
+            background: headerIsMobile
+              ? "linear-gradient(145deg, #071630 0%, #0F2147 60%, #1B3568 100%)"
+              : "linear-gradient(135deg, #ffffff 55%, #f7f3e7 100%)",
             display: "flex",
             flexDirection: headerIsMobile ? "column" : "row",
             gap: headerIsMobile ? 8 : 10,
@@ -2722,11 +2791,14 @@ export default function Slidingmenubar({ open, onClose }) {
             <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ color: "#0F2147", fontSize: 18, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".04em" }}>
-                    Shop TDLS
+                  <div style={{ color: "#D7BE71", fontSize: 10, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".20em", textTransform: "uppercase" }}>
+                    The DNA Lab Store
                   </div>
-                  <div style={{ marginTop: 3, color: "rgba(15,33,71,0.60)", fontSize: 11, fontWeight: 800 }}>
-                    {showLoadingHint ? "Loading collections…" : `${tierName} · ${filteredProducts.length} products`}
+                  <div style={{ marginTop: 5, color: "#FFFFFF", fontSize: 21, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".01em" }}>
+                    Find your style
+                  </div>
+                  <div style={{ marginTop: 4, color: "rgba(255,255,255,0.62)", fontSize: 11, fontWeight: 750 }}>
+                    {showLoadingHint ? "Preparing your collections…" : `${tierName} · ${tierAllProducts.length} available`}
                   </div>
                 </div>
                 <button
@@ -2737,9 +2809,9 @@ export default function Slidingmenubar({ open, onClose }) {
                     height: 42,
                     flexShrink: 0,
                     borderRadius: 999,
-                    border: "1px solid rgba(15,33,71,0.12)",
-                    background: "rgba(15,33,71,0.06)",
-                    color: "#0F2147",
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    background: "rgba(255,255,255,0.08)",
+                    color: "#FFFFFF",
                     fontWeight: 500,
                     fontSize: 25,
                     lineHeight: 1,
@@ -2754,7 +2826,14 @@ export default function Slidingmenubar({ open, onClose }) {
                 </button>
               </div>
 
-              <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  minWidth: 0,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 7,
+                }}
+              >
                 <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile />
               </div>
 
@@ -2884,7 +2963,15 @@ export default function Slidingmenubar({ open, onClose }) {
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, minHeight: 0, padding: 10, overflow: "hidden" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            padding: headerIsMobile ? "12px 12px 10px" : 10,
+            overflow: "hidden",
+            background: headerIsMobile ? "#F5F2E9" : "transparent",
+          }}
+        >
           {isDesktop ? (
             <div
               style={{
@@ -3299,8 +3386,9 @@ export default function Slidingmenubar({ open, onClose }) {
                   <Shell
                     title="Who are you shopping for?"
                     right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)} items</Pill>}
+                    mobile
                   >
-                    <ScrollBody>
+                    <ScrollBody columns={2}>
                       {filteredAudiences.length ? (
                         filteredAudiences.map((a) => (
                           <MobileChoiceCard
@@ -3343,6 +3431,7 @@ export default function Slidingmenubar({ open, onClose }) {
                 {mobileSection === "categories" ? (
                   <Shell
                     title={flyAudience?.name ? `Choose ${flyAudience.name} category` : "Choose a category"}
+                    mobile
                     right={
                       <button
                         type="button"
@@ -3366,7 +3455,7 @@ export default function Slidingmenubar({ open, onClose }) {
                       </button>
                     }
                   >
-                    <ScrollBody>
+                    <ScrollBody columns={2}>
                       {filteredCategories.length ? (
                         filteredCategories.map((c) => (
                           <MobileChoiceCard

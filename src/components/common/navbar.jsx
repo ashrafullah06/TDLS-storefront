@@ -337,14 +337,6 @@ function NavbarInner({
     setMenuOpen(false);
   };
 
-  const goHomepage = () => {
-    if (typeof window === "undefined") return;
-
-    if (window.location.pathname !== "/") {
-      router.push("/");
-    }
-  };
-
   /* ---------------------------------------------------------------------- */
   /* BRAND NORMALIZER + LEGACY SPLASH DISMISS                               */
   /* ---------------------------------------------------------------------- */
@@ -1068,19 +1060,6 @@ function NavbarInner({
             }}
           >
             <div
-              onClick={goHomepage}
-              onKeyDown={(e) => {
-                if (
-                  e.key === "Enter" ||
-                  e.key === " "
-                ) {
-                  goHomepage();
-                }
-              }}
-              tabIndex={0}
-              role="link"
-              aria-label="Go to homepage"
-              title="Go to Homepage"
               className="tdls-brand"
               style={{
                 display: "inline-flex",
@@ -1089,8 +1068,6 @@ function NavbarInner({
 
                 gap: 10,
 
-                pointerEvents: "auto",
-
                 padding: "8px 10px",
 
                 borderRadius: 12,
@@ -1098,8 +1075,6 @@ function NavbarInner({
                 transition: "transform .12s",
 
                 userSelect: "none",
-
-                cursor: "pointer",
 
                 minWidth: 0,
               }}

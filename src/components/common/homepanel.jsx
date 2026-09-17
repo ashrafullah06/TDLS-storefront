@@ -1763,6 +1763,20 @@ export default function HomePanel({ open, onClose }) {
           text-overflow: ellipsis;
         }
 
+        .tdls-homepanel-home-link{
+          margin: 0;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: inherit;
+          font: inherit;
+          font-weight: inherit;
+          letter-spacing: inherit;
+          text-transform: inherit;
+          text-align: left;
+          cursor: pointer;
+        }
+
         .tdls-homepanel-title p{
           margin: 0;
           font-family: ${SYS_FONT};
@@ -2139,7 +2153,16 @@ export default function HomePanel({ open, onClose }) {
           >
             <div className="tdls-homepanel-head">
               <div className="tdls-homepanel-title">
-                <h3>Home</h3>
+                <h3>
+                  <button
+                    type="button"
+                    className="tdls-homepanel-home-link"
+                    onClick={() => handleNavigate("/")}
+                    aria-label="Go to homepage"
+                  >
+                    Home
+                  </button>
+                </h3>
                 <p title={displayName}>{isAuthed ? displayName : "Guest mode"}</p>
               </div>
 
