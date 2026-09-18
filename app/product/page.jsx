@@ -2,6 +2,7 @@
 
 export const revalidate = 60;
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 import AllProductsClient from "./all-products-client";
 import Navbar from "@/components/common/navbar";
@@ -223,7 +224,29 @@ async function fetchProductsPageFromStrapi(
 }
 
 async function fetchProductsPageWithRetry(appBaseUrl, page) {
-  return fetchProductsPageFromStrapi(appBaseUrl, page);
+  try {
+    return await fetchProductsPageFromStrapi(
+      appBaseUrl,
+      page
+    );
+  } catch (firstError) {
+    try {
+      return await fetchProductsPageFromStrapi(
+        appBaseUrl,
+        page,
+        true
+      );
+    } catch (retryError) {
+      if (
+        retryError instanceof Error &&
+        retryError.cause == null
+      ) {
+        retryError.cause = firstError;
+      }
+
+      throw retryError;
+    }
+  }
 }
 
 async function fetchProductsFromStrapi(appBaseUrl) {
