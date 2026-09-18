@@ -195,19 +195,21 @@ function Pill({ children, tone = "neutral", size = "md" }) {
 }
 
 function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
-  const fs = isMobile ? "clamp(10px, 2.7vw, 11px)" : 12;
+  const fs = isMobile ? "clamp(8.5px, 2.45vw, 10px)" : 12;
   return (
     <div
       style={{
-        display: "flex",
+        display: isMobile ? "grid" : "flex",
+        gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : undefined,
         alignItems: "center",
         gap: isMobile ? 8 : 10,
-        overflowX: isMobile ? "visible" : "auto",
-        overflowY: isMobile ? "visible" : "hidden",
+        overflowX: isMobile ? "hidden" : "auto",
+        overflowY: "hidden",
         WebkitOverflowScrolling: "touch",
         overscrollBehaviorX: "contain",
         touchAction: isMobile ? "manipulation" : "pan-x",
         paddingBottom: 2,
+        width: isMobile ? "100%" : undefined,
         maxWidth: "100%",
       }}
     >
@@ -219,10 +221,10 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
             type="button"
             onClick={() => onPick(t.slug)}
             style={{
-              flex: "0 0 auto",
+              flex: isMobile ? undefined : "0 0 auto",
               width: isMobile ? "100%" : "auto",
-              borderRadius: isMobile ? 14 : 999,
-              padding: isMobile ? "10px 12px" : "9px 12px",
+              borderRadius: isMobile ? 11 : 999,
+              padding: isMobile ? "7px 8px" : "9px 12px",
               border: isMobile
                 ? active
                   ? "1px solid #D7BE71"
@@ -239,7 +241,7 @@ function TierTabs({ tiers, activeSlug, onPick, isMobile }) {
                 : "linear-gradient(135deg, #ffffff 55%, #fbf7ec 100%)",
               color: isMobile ? (active ? "#0F2147" : "#FFFFFF") : active ? "#fffdf8" : "#0c2340",
               fontWeight: 900,
-              letterSpacing: ".14em",
+              letterSpacing: isMobile ? ".09em" : ".14em",
               textTransform: "uppercase",
               boxShadow: isMobile
                 ? active
@@ -279,7 +281,7 @@ function Shell({ title, right, children, mobile = false }) {
     >
       <div
         style={{
-          padding: mobile ? "2px 2px 12px" : "10px 10px",
+          padding: mobile ? "2px 2px 8px" : "10px 10px",
           borderBottom: mobile ? "none" : "1px solid rgba(0,0,0,0.08)",
           display: "flex",
           alignItems: "center",
@@ -295,7 +297,7 @@ function Shell({ title, right, children, mobile = false }) {
             fontWeight: 900,
             letterSpacing: ".12em",
             textTransform: "uppercase",
-            fontSize: mobile ? 15 : 12,
+            fontSize: mobile ? 13 : 12,
             color: "#0c2340",
           }}
         >
@@ -696,7 +698,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         display: "flex",
         flexDirection: "column",
         minWidth: 0,
-        minHeight: 112,
+        minHeight: 92,
         borderRadius: 20,
         border: active ? "2px solid #BFA750" : "1px solid rgba(15,33,71,0.10)",
         background: active
@@ -713,7 +715,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         style={{
           minWidth: 0,
           flex: 1,
-          padding: "12px 11px 10px",
+          padding: "9px 10px 8px",
           border: 0,
           background: "transparent",
           color: "#0F2147",
@@ -723,15 +725,15 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
           alignItems: "flex-start",
           justifyContent: "space-between",
           flexDirection: "column",
-          gap: 10,
+          gap: 7,
         }}
       >
         <span
           aria-hidden="true"
           style={{
-            width: 34,
-            height: 34,
-            borderRadius: 11,
+            width: 30,
+            height: 30,
+            borderRadius: 10,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -739,7 +741,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
             color: active ? "#D7BE71" : "#0F2147",
             fontFamily: "Georgia, serif",
             fontWeight: 900,
-            fontSize: 17,
+            fontSize: 15,
           }}
         >
           {(title || "?").trim().charAt(0).toUpperCase()}
@@ -749,7 +751,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
           <span
             style={{
               display: "block",
-              fontSize: 13,
+              fontSize: 11,
               lineHeight: 1.25,
               fontWeight: 900,
               letterSpacing: ".025em",
@@ -767,7 +769,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
             style={{
               display: "block",
               marginTop: 4,
-              fontSize: 11,
+              fontSize: 10,
               lineHeight: 1.2,
               fontWeight: 800,
               color: "rgba(15,33,71,0.58)",
@@ -790,17 +792,17 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
           onTouchStart={(e) => e.stopPropagation()}
           aria-label={`View all ${title} ${kind}`}
           style={{
-            minHeight: 36,
+            minHeight: 30,
             borderTop: "1px solid rgba(15,33,71,0.08)",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            padding: "8px 10px",
+            padding: "6px 8px",
             textAlign: "center",
             textDecoration: "none",
             color: "#0F2147",
             background: "rgba(15,33,71,0.025)",
-            fontSize: 9,
+            fontSize: 8,
             lineHeight: 1.25,
             fontWeight: 900,
             letterSpacing: ".11em",
@@ -2197,6 +2199,7 @@ export default function Slidingmenubar({ open, onClose }) {
   const [loading, setLoading] = useState(true);
 
   const [bottomBarHeight, setBottomBarHeight] = useState(DEFAULT_BOTTOM_FLOATING_BAR_HEIGHT);
+  const [mobilePanelTop, setMobilePanelTop] = useState(NAVBAR_HEIGHT + TOP_SAFE_GAP);
 
   const disabledNodesRef = useRef([]);
 
@@ -2398,6 +2401,94 @@ export default function Slidingmenubar({ open, onClose }) {
     );
     setBottomBarHeight(n);
   }, [open]);
+
+  // Mobile only: keep the complete menu below the actual visible top navbar.
+  // The fallback is deliberately conservative so the panel never slips under
+  // the navbar while layout/fonts are still settling.
+  useEffect(() => {
+    if (!open || isDesktop || typeof window === "undefined") return;
+
+    const selectors = [
+      "header",
+      "#navbar",
+      ".navbar",
+      ".topbar",
+      ".site-header",
+      ".header",
+      ".sticky-header",
+      ".fixed-header",
+      "[data-navbar]",
+      "[data-header]",
+      "body > nav",
+      "body > header",
+    ];
+
+    let frame = 0;
+    let observer = null;
+
+    const measureNavbarBottom = () => {
+      let visibleNavbarBottom = 0;
+      const panel = panelRef.current;
+      const nodes = [];
+
+      for (const selector of selectors) {
+        document.querySelectorAll(selector).forEach((node) => {
+          if (node) nodes.push(node);
+        });
+      }
+
+      for (const node of Array.from(new Set(nodes))) {
+        try {
+          if (panel && (node === panel || panel.contains(node))) continue;
+
+          const rect = node.getBoundingClientRect();
+          const styles = window.getComputedStyle(node);
+          if (styles.display === "none" || styles.visibility === "hidden") continue;
+          if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0) continue;
+
+          // Only top-of-screen navigation belongs to this calculation. This
+          // excludes the floating bottom bar and navigation inside page content.
+          if (rect.top > Math.min(180, window.innerHeight * 0.3)) continue;
+          if (rect.bottom > window.innerHeight * 0.45) continue;
+
+          visibleNavbarBottom = Math.max(visibleNavbarBottom, rect.bottom);
+        } catch {}
+      }
+
+      const measuredTop = Math.ceil(visibleNavbarBottom) + 8;
+      const safeTop = Math.max(NAVBAR_HEIGHT + TOP_SAFE_GAP, measuredTop);
+      setMobilePanelTop((current) => (current === safeTop ? current : safeTop));
+    };
+
+    const scheduleMeasure = () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(measureNavbarBottom);
+    };
+
+    scheduleMeasure();
+    const settleTimer = window.setTimeout(measureNavbarBottom, 180);
+    window.addEventListener("resize", scheduleMeasure, { passive: true });
+    window.addEventListener("orientationchange", scheduleMeasure, { passive: true });
+
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(scheduleMeasure);
+      for (const selector of selectors) {
+        document.querySelectorAll(selector).forEach((node) => {
+          try {
+            if (node && node !== panelRef.current && !panelRef.current?.contains(node)) observer.observe(node);
+          } catch {}
+        });
+      }
+    }
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener("resize", scheduleMeasure);
+      window.removeEventListener("orientationchange", scheduleMeasure);
+      observer?.disconnect?.();
+    };
+  }, [open, isDesktop]);
 
   useEffect(() => {
     if (!open) return;
@@ -2807,7 +2898,7 @@ export default function Slidingmenubar({ open, onClose }) {
   const headerIsMobile = !isDesktop;
 
   const panelMaxHeightStyle = headerIsMobile
-    ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${panelBottom}px)` }
+    ? { maxHeight: `calc((var(--tdls-vh, 1vh) * 100) - ${panelBottom}px - ${mobilePanelTop}px)` }
     : null;
 
   const goViewAllHref = flyAudienceSlug
@@ -2859,23 +2950,23 @@ export default function Slidingmenubar({ open, onClose }) {
         ref={panelRef}
         style={{
           position: "fixed",
-          top: headerIsMobile ? 0 : panelTop,
-          left: headerIsMobile ? 0 : "auto",
-          right: headerIsMobile ? 0 : 8,
+          top: headerIsMobile ? mobilePanelTop : panelTop,
+          left: headerIsMobile ? 8 : "auto",
+          right: 8,
           bottom: panelBottom,
           width: headerIsMobile ? "auto" : menuWidth,
-          maxWidth: headerIsMobile ? "100vw" : "calc(100vw - 16px)",
+          maxWidth: "calc(100vw - 16px)",
           zIndex: Z_PANEL,
           display: "flex",
           flexDirection: "column",
           background: headerIsMobile ? "#F5F2E9" : "linear-gradient(135deg, #fffdf8 55%, #fbf6ea 100%)",
-          border: headerIsMobile ? "none" : "1px solid rgba(255,255,255,0.26)",
+          border: headerIsMobile ? "1px solid rgba(255,255,255,0.18)" : "1px solid rgba(255,255,255,0.26)",
           boxShadow: "0 32px 90px rgba(0,0,0,0.32)",
-          borderRadius: headerIsMobile ? 0 : 28,
+          borderRadius: headerIsMobile ? 22 : 28,
           overflow: "hidden",
           pointerEvents: "auto",
           isolation: "isolate",
-          touchAction: "pan-x pan-y",
+          touchAction: headerIsMobile ? "pan-y" : "pan-x pan-y",
           ...(panelMaxHeightStyle || {}),
         }}
         role="dialog"
@@ -2885,30 +2976,30 @@ export default function Slidingmenubar({ open, onClose }) {
         {/* Header */}
         <div
           style={{
-            padding: headerIsMobile ? "max(14px, env(safe-area-inset-top)) 14px 13px" : "10px 12px",
+            padding: headerIsMobile ? "10px 11px 9px" : "10px 12px",
             borderBottom: headerIsMobile ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(0,0,0,0.08)",
             background: headerIsMobile
               ? "linear-gradient(145deg, #071630 0%, #0F2147 60%, #1B3568 100%)"
               : "linear-gradient(135deg, #ffffff 55%, #f7f3e7 100%)",
             display: "flex",
             flexDirection: headerIsMobile ? "column" : "row",
-            gap: headerIsMobile ? 8 : 10,
+            gap: headerIsMobile ? 6 : 10,
             alignItems: headerIsMobile ? "stretch" : "center",
             justifyContent: "space-between",
             minWidth: 0,
           }}
         >
           {headerIsMobile ? (
-            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 7 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ color: "#D7BE71", fontSize: 10, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".20em", textTransform: "uppercase" }}>
+                  <div style={{ color: "#D7BE71", fontSize: 8, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".18em", textTransform: "uppercase" }}>
                     The DNA Lab Store
                   </div>
-                  <div style={{ marginTop: 5, color: "#FFFFFF", fontSize: 21, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".01em" }}>
+                  <div style={{ marginTop: 3, color: "#FFFFFF", fontSize: 17, lineHeight: 1.1, fontWeight: 950, letterSpacing: ".01em" }}>
                     Find your style
                   </div>
-                  <div style={{ marginTop: 4, color: "rgba(255,255,255,0.62)", fontSize: 11, fontWeight: 750 }}>
+                  <div style={{ marginTop: 2, color: "rgba(255,255,255,0.62)", fontSize: 9, fontWeight: 750 }}>
                     {showLoadingHint ? "Preparing your collections…" : `${tierName} · ${tierAllProducts.length} available`}
                   </div>
                 </div>
@@ -2916,15 +3007,15 @@ export default function Slidingmenubar({ open, onClose }) {
                   type="button"
                   onClick={handleClose}
                   style={{
-                    width: 42,
-                    height: 42,
+                    width: 34,
+                    height: 34,
                     flexShrink: 0,
                     borderRadius: 999,
                     border: "1px solid rgba(255,255,255,0.18)",
                     background: "rgba(255,255,255,0.08)",
                     color: "#FFFFFF",
                     fontWeight: 500,
-                    fontSize: 25,
+                    fontSize: 21,
                     lineHeight: 1,
                     cursor: "pointer",
                     display: "inline-flex",
@@ -2940,77 +3031,28 @@ export default function Slidingmenubar({ open, onClose }) {
               <div
                 style={{
                   minWidth: 0,
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: 7,
+                  padding: "7px",
+                  borderRadius: 14,
+                  border: "1px solid rgba(255,255,255,0.11)",
+                  background: "rgba(255,255,255,0.045)",
                 }}
               >
+                <div
+                  style={{
+                    marginBottom: 6,
+                    color: "rgba(255,255,255,0.62)",
+                    fontSize: 8,
+                    lineHeight: 1,
+                    fontWeight: 900,
+                    letterSpacing: ".17em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Shop collections
+                </div>
                 <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile />
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  minWidth: 0,
-                  overflowX: "auto",
-                  WebkitOverflowScrolling: "touch",
-                  scrollbarWidth: "none",
-                }}
-              >
-                <span
-                  style={{
-                    flex: "0 0 auto",
-                    padding: "7px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(215,190,113,0.34)",
-                    background: "rgba(215,190,113,0.12)",
-                    color: "#F4D982",
-                    fontSize: 9,
-                    fontWeight: 900,
-                    letterSpacing: ".08em",
-                    textTransform: "uppercase",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {flyAudience?.name || "Audience"}
-                </span>
-                <span
-                  style={{
-                    flex: "0 0 auto",
-                    padding: "7px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(255,255,255,0.05)",
-                    color: "#FFFFFF",
-                    fontSize: 9,
-                    fontWeight: 900,
-                    letterSpacing: ".08em",
-                    textTransform: "uppercase",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {filteredCategories.find((item) => item.slug === flyCategorySlug)?.name || "Category"}
-                </span>
-                <span
-                  style={{
-                    flex: "0 0 auto",
-                    padding: "7px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(255,255,255,0.05)",
-                    color: "rgba(255,255,255,0.76)",
-                    fontSize: 9,
-                    fontWeight: 900,
-                    letterSpacing: ".08em",
-                    textTransform: "uppercase",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {filteredProducts.length} products
-                </span>
-              </div>
             </div>
           ) : (
             <>
@@ -3132,7 +3174,7 @@ export default function Slidingmenubar({ open, onClose }) {
           style={{
             flex: 1,
             minHeight: 0,
-            padding: headerIsMobile ? "12px 12px 10px" : 10,
+            padding: headerIsMobile ? "10px 10px 8px" : 10,
             overflow: "hidden",
             background: headerIsMobile ? "#F5F2E9" : "transparent",
           }}
@@ -3459,8 +3501,22 @@ export default function Slidingmenubar({ open, onClose }) {
             </div>
           ) : (
             /* Mobile uses the same Tier → Audience → Category → Products filtering as desktop. */
-            <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-              <div ref={searchWrapRef} style={{ position: "relative" }}>
+            <div
+              style={{
+                height: "100%",
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                overflowY: "auto",
+                overflowX: "hidden",
+                paddingRight: 2,
+                WebkitOverflowScrolling: "touch",
+                overscrollBehavior: "contain",
+                touchAction: "pan-y",
+              }}
+            >
+              <div ref={searchWrapRef} style={{ position: "relative", flexShrink: 0 }}>
                 <input
                   value={q}
                   onChange={(e) => {
@@ -3500,9 +3556,9 @@ export default function Slidingmenubar({ open, onClose }) {
                   aria-label="Search products and categories"
                   style={{
                     width: "100%",
-                    height: 48,
-                    borderRadius: 16,
-                    padding: "0 44px 0 16px",
+                    height: 42,
+                    borderRadius: 14,
+                    padding: "0 40px 0 14px",
                     border: "1px solid rgba(15,33,71,0.12)",
                     outline: "none",
                     background: "#ffffff",
@@ -3510,7 +3566,7 @@ export default function Slidingmenubar({ open, onClose }) {
                     fontWeight: 800,
                     letterSpacing: ".01em",
                     color: "#0F2147",
-                    fontSize: 14,
+                    fontSize: 13,
                   }}
                 />
 
@@ -3548,17 +3604,13 @@ export default function Slidingmenubar({ open, onClose }) {
 
               <div
                 style={{
-                  flex: 1,
+                  flex: "0 0 auto",
                   minHeight: 0,
-                  overflowY: "auto",
-                  overflowX: "hidden",
+                  overflow: "visible",
                   display: "flex",
                   flexDirection: "column",
-                  gap: 14,
+                  gap: 10,
                   paddingBottom: 4,
-                  WebkitOverflowScrolling: "touch",
-                  overscrollBehavior: "contain",
-                  touchAction: "pan-y",
                 }}
               >
                   <Shell
@@ -3568,16 +3620,12 @@ export default function Slidingmenubar({ open, onClose }) {
                   >
                     <div
                       style={{
-                        display: "flex",
-                        gap: 9,
+                        display: "grid",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                        gap: 7,
                         minWidth: 0,
-                        overflowX: "auto",
-                        overflowY: "hidden",
+                        overflow: "visible",
                         padding: "2px 2px 10px",
-                        WebkitOverflowScrolling: "touch",
-                        overscrollBehaviorX: "contain",
-                        touchAction: "pan-x",
-                        scrollSnapType: "x proximity",
                       }}
                     >
                       {filteredAudiences.length ? (
@@ -3585,9 +3633,7 @@ export default function Slidingmenubar({ open, onClose }) {
                           <div
                             key={a.slug}
                             style={{
-                              flex: "0 0 min(42vw, 164px)",
-                              minWidth: 132,
-                              scrollSnapAlign: "start",
+                              minWidth: 0,
                             }}
                           >
                             <MobileChoiceCard
@@ -3615,7 +3661,7 @@ export default function Slidingmenubar({ open, onClose }) {
                       ) : (
                         <div
                           style={{
-                            flex: "1 0 100%",
+                            gridColumn: "1 / -1",
                             padding: 18,
                             borderRadius: 20,
                             background: "#FFFFFF",
@@ -3664,16 +3710,12 @@ export default function Slidingmenubar({ open, onClose }) {
                   >
                     <div
                       style={{
-                        display: "flex",
-                        gap: 9,
+                        display: "grid",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                        gap: 7,
                         minWidth: 0,
-                        overflowX: "auto",
-                        overflowY: "hidden",
+                        overflow: "visible",
                         padding: "2px 2px 10px",
-                        WebkitOverflowScrolling: "touch",
-                        overscrollBehaviorX: "contain",
-                        touchAction: "pan-x",
-                        scrollSnapType: "x proximity",
                       }}
                     >
                       {filteredCategories.length ? (
@@ -3681,9 +3723,7 @@ export default function Slidingmenubar({ open, onClose }) {
                           <div
                             key={c.slug}
                             style={{
-                              flex: "0 0 min(42vw, 164px)",
-                              minWidth: 132,
-                              scrollSnapAlign: "start",
+                              minWidth: 0,
                             }}
                           >
                             <MobileChoiceCard
@@ -3710,7 +3750,7 @@ export default function Slidingmenubar({ open, onClose }) {
                           </div>
                         ))
                       ) : (
-                        <div style={{ flex: "1 0 100%", padding: 18, borderRadius: 20, background: "#FFFFFF" }}>
+                        <div style={{ gridColumn: "1 / -1", padding: 18, borderRadius: 20, background: "#FFFFFF" }}>
                           <div style={{ fontWeight: 950, fontSize: 15, color: "#0F2147" }}>
                             {flyAudienceSlug ? "No categories in this audience/tier." : "Pick an audience."}
                           </div>
@@ -3916,8 +3956,8 @@ export default function Slidingmenubar({ open, onClose }) {
                                 title={p.name}
                                 style={{
                                   textDecoration: "none",
-                                  borderRadius: 16,
-                                  padding: "13px 14px",
+                                  borderRadius: 14,
+                                  padding: "10px 11px",
                                   border: "1px solid rgba(15,33,71,0.09)",
                                   background: "rgba(255,255,255,0.94)",
                                   boxShadow: "0 8px 18px rgba(15,33,71,0.05)",
@@ -3926,7 +3966,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                   alignItems: "center",
                                   justifyContent: "space-between",
                                   gap: 12,
-                                  minHeight: 62,
+                                  minHeight: 52,
                                   minWidth: 0,
                                 }}
                               >
@@ -3938,7 +3978,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                       whiteSpace: "nowrap",
                                       overflow: "hidden",
                                       textOverflow: "ellipsis",
-                                      fontSize: 14,
+                                      fontSize: 13,
                                       lineHeight: 1.2,
                                     }}
                                   >
@@ -3961,15 +4001,15 @@ export default function Slidingmenubar({ open, onClose }) {
                                 <span
                                   style={{
                                     flexShrink: 0,
-                                  width: 34,
-                                  height: 34,
+                                  width: 30,
+                                  height: 30,
                                   borderRadius: 999,
                                   background: "rgba(15,33,71,0.07)",
                                   display: "inline-flex",
                                   alignItems: "center",
                                   justifyContent: "center",
                                   fontWeight: 700,
-                                  fontSize: 20,
+                                  fontSize: 18,
                                 }}
                               >
                                   ›
