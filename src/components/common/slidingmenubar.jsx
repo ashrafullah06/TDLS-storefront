@@ -692,8 +692,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
   return (
     <div
       style={{
-        display: isMobile ? "grid" : "flex",
-        gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : undefined,
+        display: "flex",
         flexDirection: "column",
         minWidth: 0,
         minHeight: 146,
