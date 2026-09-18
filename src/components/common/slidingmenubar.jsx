@@ -1046,6 +1046,11 @@ const RAW_LS_TTL_MS = 6 * 60 * 60 * 1000;
 let __menuPromise = null;
 let __menuData = null;
 let __menuLastGood = null;
+let __mobileCompleteMenuPromise = null;
+let __mobileCompleteMenuData = null;
+let __mobileCompleteMenuTs = 0;
+
+const MOBILE_COMPLETE_MENU_TTL_MS = 15 * 60 * 1000;
 
 function unwrapStrapiList(payload) {
   if (!payload) return [];
@@ -1728,10 +1733,10 @@ async function fetchAudienceSeedFromStrapi() {
   return audRows;
 }
 
-async function fetchProductsFallback() {
+async function fetchProductsFallback({ ignorePreloaded = false, onProgress = null } = {}) {
   // First consume the payload already fetched by the boot preloader.
   // This is the critical hand-off that prevents a second request on menu click.
-  const preloaded = readPreloadedRawProducts();
+  const preloaded = ignorePreloaded ? [] : readPreloadedRawProducts();
   if (preloaded.length) return preloaded;
 
   // Production-safe menu query. Never ask the single-connection Strapi/Neon
@@ -1765,6 +1770,14 @@ async function fetchProductsFallback() {
   const publishProgress = (rows) => {
     if (!rows.length) return;
     const partial = buildIndexFallbackFromProducts(rows);
+
+    if (typeof onProgress === "function") {
+      try {
+        onProgress(partial);
+      } catch {}
+      return;
+    }
+
     const built = publishBuiltMenu(partial, { fromCache: false });
     if (!built || typeof window === "undefined") return;
     try {
@@ -2193,6 +2206,7 @@ export default function Slidingmenubar({ open, onClose }) {
     genderGroups: new Map(),
     ageGroups: new Map(),
   }));
+  const [mobileCompleteMenuData, setMobileCompleteMenuData] = useState(() => __mobileCompleteMenuData);
   const [hydrated, setHydrated] = useState(false);
 
   // ✅ new: keeps “Loading…” accurate even if an empty snapshot existed before
@@ -2392,6 +2406,64 @@ export default function Slidingmenubar({ open, onClose }) {
     window.addEventListener("resize", handleResize, { passive: true });
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  // Mobile-only completion pass. The fast preloader intentionally exposes its
+  // first bounded product page immediately; this pass continues through every
+  // remaining page so all audiences backed by visible products can appear.
+  // Desktop continues using the existing shared menu snapshot unchanged.
+  useEffect(() => {
+    if (!open || isDesktop || typeof window === "undefined") return;
+
+    let alive = true;
+
+    const applyMobileData = (data, { allowShrink = false } = {}) => {
+      if (!hasUsableBuiltMenu(data)) return;
+
+      const currentSize = __mobileCompleteMenuData?.productIndex?.size || 0;
+      const nextSize = data?.productIndex?.size || 0;
+      if (!allowShrink && currentSize > nextSize) return;
+
+      __mobileCompleteMenuData = data;
+      if (alive) setMobileCompleteMenuData(data);
+    };
+
+    if (hasUsableBuiltMenu(__mobileCompleteMenuData)) {
+      setMobileCompleteMenuData(__mobileCompleteMenuData);
+    }
+
+    const freshEnough =
+      hasUsableBuiltMenu(__mobileCompleteMenuData) &&
+      Date.now() - __mobileCompleteMenuTs < MOBILE_COMPLETE_MENU_TTL_MS;
+
+    if (!freshEnough && !__mobileCompleteMenuPromise) {
+      __mobileCompleteMenuPromise = fetchProductsFallback({
+        ignorePreloaded: true,
+        onProgress: applyMobileData,
+      })
+        .then((rows) => {
+          const complete = buildIndexFallbackFromProducts(rows || []);
+          if (hasUsableBuiltMenu(complete)) {
+            __mobileCompleteMenuData = complete;
+            __mobileCompleteMenuTs = Date.now();
+          }
+          return __mobileCompleteMenuData;
+        })
+        .catch(() => __mobileCompleteMenuData)
+        .finally(() => {
+          __mobileCompleteMenuPromise = null;
+        });
+    }
+
+    if (__mobileCompleteMenuPromise) {
+      __mobileCompleteMenuPromise.then((data) => {
+        if (alive) applyMobileData(data, { allowShrink: true });
+      });
+    }
+
+    return () => {
+      alive = false;
+    };
+  }, [open, isDesktop]);
 
   useEffect(() => {
     if (!open) return;
@@ -2666,12 +2738,23 @@ export default function Slidingmenubar({ open, onClose }) {
     setMobileRefineOpen(false);
   }, []);
 
+  const mobileCompleteReady = !isDesktop && hasUsableBuiltMenu(mobileCompleteMenuData);
+  const activeAudienceRows = mobileCompleteReady
+    ? mobileCompleteMenuData.audienceRows
+    : audienceRows;
+  const activeProductIndex = mobileCompleteReady
+    ? mobileCompleteMenuData.productIndex
+    : productIndex;
+  const activeNameMaps = mobileCompleteReady
+    ? mobileCompleteMenuData.nameMaps
+    : nameMaps;
+
   // ✅ Audience list for tier (STRICT)
   const audiencesForTier = useMemo(() => {
     const tier = normSlug(tierSlug);
     const out = [];
 
-    for (const a of audienceRows || []) {
+    for (const a of activeAudienceRows || []) {
       const slug = normSlug(a?.slug);
       if (!slug) continue;
       const name = (a?.name || "").toString().trim() || titleizeSlug(slug);
@@ -2679,7 +2762,7 @@ export default function Slidingmenubar({ open, onClose }) {
       const verdict = audienceTierVerdict({
         audienceRow: a,
         tierSlug: tier,
-        productIndex,
+        productIndex: activeProductIndex,
       });
 
       if (!verdict.ok) continue;
@@ -2687,7 +2770,7 @@ export default function Slidingmenubar({ open, onClose }) {
     }
 
     return out.sort((x, y) => (y.count !== x.count ? y.count - x.count : x.name.localeCompare(y.name)));
-  }, [audienceRows, tierSlug, productIndex]);
+  }, [activeAudienceRows, tierSlug, activeProductIndex]);
 
   const filteredAudiences = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -2713,10 +2796,10 @@ export default function Slidingmenubar({ open, onClose }) {
     return deriveCategories({
       tierSlug,
       audienceRow: flyAudience.raw,
-      productIndex,
-      nameMaps,
+      productIndex: activeProductIndex,
+      nameMaps: activeNameMaps,
     });
-  }, [flyAudience, tierSlug, productIndex, nameMaps]);
+  }, [flyAudience, tierSlug, activeProductIndex, activeNameMaps]);
 
   const filteredCategories = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -2743,14 +2826,14 @@ export default function Slidingmenubar({ open, onClose }) {
       tierSlug,
       audienceRow: flyAudience.raw,
       categorySlug: flyCategorySlug,
-      productIndex,
+      productIndex: activeProductIndex,
       filters: { subCategory: "", genderGroup: "", ageGroup: "" },
     });
-  }, [flyAudience, tierSlug, flyCategorySlug, productIndex]);
+  }, [flyAudience, tierSlug, flyCategorySlug, activeProductIndex]);
 
   const facetOptions = useMemo(
-    () => buildFacetOptions({ baseProducts: baseProductsForFacets, productIndex, nameMaps }),
-    [baseProductsForFacets, productIndex, nameMaps]
+    () => buildFacetOptions({ baseProducts: baseProductsForFacets, productIndex: activeProductIndex, nameMaps: activeNameMaps }),
+    [baseProductsForFacets, activeProductIndex, activeNameMaps]
   );
 
   // Never keep a refinement that no longer belongs to the active
@@ -2778,10 +2861,10 @@ export default function Slidingmenubar({ open, onClose }) {
       tierSlug,
       audienceRow: flyAudience.raw,
       categorySlug: flyCategorySlug,
-      productIndex,
+      productIndex: activeProductIndex,
       filters,
     });
-  }, [flyAudience, tierSlug, flyCategorySlug, productIndex, filters]);
+  }, [flyAudience, tierSlug, flyCategorySlug, activeProductIndex, filters]);
 
   const filteredProducts = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -2798,26 +2881,31 @@ export default function Slidingmenubar({ open, onClose }) {
         tierSlug,
         audienceRow: a.raw,
         categorySlug: "",
-        productIndex,
+        productIndex: activeProductIndex,
         filters: { subCategory: "", genderGroup: "", ageGroup: "" },
       });
       for (const p of list || []) if (p?.slug && !map.has(p.slug)) map.set(p.slug, p);
     }
     return Array.from(map.values()).sort((x, y) => (x.name || "").localeCompare(y.name || ""));
-  }, [audiencesForTier, tierSlug, productIndex]);
+  }, [audiencesForTier, tierSlug, activeProductIndex]);
 
   const tierAllCategories = useMemo(() => {
     const m = new Map();
     for (const a of audiencesForTier || []) {
       if (!a?.raw) continue;
-      const cats = deriveCategories({ tierSlug, audienceRow: a.raw, productIndex, nameMaps });
+      const cats = deriveCategories({
+        tierSlug,
+        audienceRow: a.raw,
+        productIndex: activeProductIndex,
+        nameMaps: activeNameMaps,
+      });
       for (const c of cats || []) {
         if (!c?.slug) continue;
         const prev = m.get(c.slug);
         if (!prev) {
           m.set(c.slug, {
             slug: c.slug,
-            name: c.name || resolveNameFromMap(nameMaps?.categories, c.slug),
+            name: c.name || resolveNameFromMap(activeNameMaps?.categories, c.slug),
             count: c.count || 0,
             bestAudienceSlug: a.slug,
             bestAudienceCount: c.count || 0,
@@ -2834,7 +2922,7 @@ export default function Slidingmenubar({ open, onClose }) {
     return Array.from(m.values()).sort((x, y) =>
       y.count !== x.count ? y.count - x.count : (x.name || "").localeCompare(y.name || "")
     );
-  }, [audiencesForTier, tierSlug, productIndex, nameMaps]);
+  }, [audiencesForTier, tierSlug, activeProductIndex, activeNameMaps]);
 
   const suggestions = useMemo(() => {
     const qq = q.trim();
@@ -2861,7 +2949,7 @@ export default function Slidingmenubar({ open, onClose }) {
         return {
           type: "CATEGORY",
           slug: c.slug,
-          name: c.name || resolveNameFromMap(nameMaps?.categories, c.slug),
+          name: c.name || resolveNameFromMap(activeNameMaps?.categories, c.slug),
           href: buildCollectionsHref({ tier: tierSlug, audience: audSlug, category: c.slug }),
           score: Math.max(scoreMatch({ q: ql, text: makeSearchKey(c.name, c.slug) }), 0) + (c.count || 0) * 0.25,
           meta: `${c.count || 0} products`,
@@ -2885,7 +2973,7 @@ export default function Slidingmenubar({ open, onClose }) {
       .slice(0, 10);
 
     return [...aud, ...cat, ...prod].slice(0, 14);
-  }, [q, audiencesForTier, tierAllCategories, tierAllProducts, tierSlug, nameMaps]);
+  }, [q, audiencesForTier, tierAllCategories, tierAllProducts, tierSlug, activeNameMaps]);
 
   const showRefine =
     (facetOptions.subCategories?.length || 0) > 0 ||
