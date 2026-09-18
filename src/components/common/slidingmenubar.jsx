@@ -712,6 +712,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         type="button"
         onClick={onSelect}
         aria-pressed={active}
+        aria-label={`Select ${title} ${kind}`}
         style={{
           minWidth: 0,
           flex: 1,
@@ -775,7 +776,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
               color: "rgba(15,33,71,0.58)",
             }}
           >
-            {count} product{count === 1 ? "" : "s"}
+            {count} product{count === 1 ? "" : "s"}{active ? " · Selected" : ""}
           </span>
         </span>
 
@@ -809,7 +810,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
             textTransform: "uppercase",
           }}
         >
-          Open {kind}
+          Shop {kind} →
         </Link>
       ) : null}
     </div>
@@ -1939,6 +1940,84 @@ function buildIndexFallbackFromProducts(products) {
   return { audienceRows, productIndex, nameMaps };
 }
 
+function mergeBuiltMenus(...sources) {
+  const productIndex = new Map();
+  const audienceMap = new Map();
+  const nameMaps = {
+    categories: new Map(),
+    subCategories: new Map(),
+    genderGroups: new Map(),
+    ageGroups: new Map(),
+  };
+
+  const mergeSlugs = (...lists) =>
+    Array.from(new Set(lists.flatMap((list) => (Array.isArray(list) ? list : [])).filter(Boolean)));
+
+  for (const source of sources) {
+    if (!source) continue;
+
+    for (const [id, product] of source.productIndex || []) {
+      if (!id || !product) continue;
+      const previous = productIndex.get(id);
+      if (!previous) {
+        productIndex.set(id, product);
+        continue;
+      }
+
+      productIndex.set(id, {
+        ...previous,
+        ...product,
+        tierSlugs: mergeSlugs(previous.tierSlugs, product.tierSlugs),
+        categorySlugs: mergeSlugs(previous.categorySlugs, product.categorySlugs),
+        subCategorySlugs: mergeSlugs(previous.subCategorySlugs, product.subCategorySlugs),
+        genderGroupSlugs: mergeSlugs(previous.genderGroupSlugs, product.genderGroupSlugs),
+        ageGroupSlugs: mergeSlugs(previous.ageGroupSlugs, product.ageGroupSlugs),
+      });
+    }
+
+    for (const audience of source.audienceRows || []) {
+      const slug = normSlug(audience?.slug);
+      if (!slug) continue;
+      const previous = audienceMap.get(slug);
+
+      if (!previous) {
+        audienceMap.set(slug, {
+          ...audience,
+          slug,
+          productIds: mergeSlugs(audience.productIds),
+          tierSlugs: mergeSlugs(audience.tierSlugs),
+        });
+        continue;
+      }
+
+      audienceMap.set(slug, {
+        ...previous,
+        ...audience,
+        slug,
+        name: previous.name || audience.name || titleizeSlug(slug),
+        productIds: mergeSlugs(previous.productIds, audience.productIds),
+        tierSlugs: mergeSlugs(previous.tierSlugs, audience.tierSlugs),
+      });
+    }
+
+    for (const key of Object.keys(nameMaps)) {
+      for (const [slug, name] of source.nameMaps?.[key] || []) {
+        if (slug && name && !nameMaps[key].has(slug)) nameMaps[key].set(slug, name);
+      }
+    }
+  }
+
+  const validProductIds = new Set(productIndex.keys());
+  const audienceRows = Array.from(audienceMap.values())
+    .map((audience) => ({
+      ...audience,
+      productIds: (audience.productIds || []).filter((id) => validProductIds.has(id)),
+    }))
+    .filter((audience) => audience.productIds.length > 0);
+
+  return { audienceRows, productIndex, nameMaps };
+}
+
 function hasUsableBuiltMenu(data) {
   return (
     (data?.audienceRows?.length || 0) > 0 &&
@@ -2224,11 +2303,22 @@ export default function Slidingmenubar({ open, onClose }) {
   const [mobileSection, setMobileSection] = useState("audiences"); // audiences | categories | products
   const [mobileRefineOpen, setMobileRefineOpen] = useState(false);
   const panelRef = useRef(null);
+  const mobileCategoriesRef = useRef(null);
+  const mobileProductsRef = useRef(null);
 
   const panelTop = NAVBAR_HEIGHT + TOP_SAFE_GAP;
   const clickShieldHeight = panelTop + TOP_CLICK_SHIELD_EXTRA;
 
   const hoverTimersRef = useRef({ aud: null, cat: null });
+  const scrollToMobileSection = useCallback((targetRef) => {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      try {
+        targetRef?.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      } catch {}
+    });
+  }, []);
+
   const scheduleHoverSelect = useCallback((kind, slug) => {
     if (typeof window === "undefined") return;
     const ms = 110;
@@ -2440,8 +2530,19 @@ export default function Slidingmenubar({ open, onClose }) {
         ignorePreloaded: true,
         onProgress: applyMobileData,
       })
-        .then((rows) => {
-          const complete = buildIndexFallbackFromProducts(rows || []);
+        .then(async (rows) => {
+          const productsBuilt = buildIndexFallbackFromProducts(rows || []);
+
+          // The optimized product response can omit or flatten some audience
+          // relations. Merge the dedicated audience endpoint so no qualifying
+          // audience depends on its product appearing in a particular page.
+          let audienceBuilt = null;
+          try {
+            const audienceSeed = await fetchAudienceSeedFromStrapi();
+            if (audienceSeed.length) audienceBuilt = buildIndexFromAudienceSeed(audienceSeed);
+          } catch {}
+
+          const complete = mergeBuiltMenus(productsBuilt, audienceBuilt);
           if (hasUsableBuiltMenu(complete)) {
             __mobileCompleteMenuData = complete;
             __mobileCompleteMenuTs = Date.now();
@@ -3734,6 +3835,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 setSelectedSubCategory("");
                                 setSelectedGenderGroup("");
                                 setSelectedAgeGroup("");
+                                scrollToMobileSection(mobileCategoriesRef);
                               }}
                               href={buildCollectionsHref({
                                 tier: tierSlug,
@@ -3791,11 +3893,12 @@ export default function Slidingmenubar({ open, onClose }) {
                     </div>
                   </Shell>
 
-                  <Shell
-                    title={flyAudience?.name ? `Categories · ${flyAudience.name}` : "Categories"}
-                    mobile
-                    right={<Pill tone="ink">{filteredCategories.length}</Pill>}
-                  >
+                  <div ref={mobileCategoriesRef} style={{ scrollMarginTop: 10 }}>
+                    <Shell
+                      title={flyAudience?.name ? `Categories · ${flyAudience.name}` : "Categories"}
+                      mobile
+                      right={<Pill tone="ink">{filteredCategories.length}</Pill>}
+                    >
                     <div
                       style={{
                         display: "grid",
@@ -3823,6 +3926,7 @@ export default function Slidingmenubar({ open, onClose }) {
                                 setSelectedSubCategory("");
                                 setSelectedGenderGroup("");
                                 setSelectedAgeGroup("");
+                                scrollToMobileSection(mobileProductsRef);
                               }}
                               href={buildCollectionsHref({
                                 tier: tierSlug,
@@ -3871,9 +3975,18 @@ export default function Slidingmenubar({ open, onClose }) {
                         </div>
                       )}
                     </div>
-                  </Shell>
+                    </Shell>
+                  </div>
 
-                  <>
+                  <div
+                    ref={mobileProductsRef}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                      scrollMarginTop: 10,
+                    }}
+                  >
                     <div
                       style={{
                         borderRadius: 18,
@@ -4117,7 +4230,7 @@ export default function Slidingmenubar({ open, onClose }) {
                         )}
                       </div>
                     </div>
-                  </>
+                  </div>
               </div>
             </div>
           )}
