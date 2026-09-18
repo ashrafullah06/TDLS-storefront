@@ -272,6 +272,7 @@ function Shell({ title, right, children, mobile = false }) {
         boxShadow: mobile ? "none" : "0 16px 34px rgba(0,0,0,0.07)",
         overflow: "hidden",
         minHeight: 0,
+        flexShrink: mobile ? 0 : undefined,
         display: "flex",
         flexDirection: "column",
       }}
@@ -695,7 +696,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         display: "flex",
         flexDirection: "column",
         minWidth: 0,
-        minHeight: 146,
+        minHeight: 112,
         borderRadius: 20,
         border: active ? "2px solid #BFA750" : "1px solid rgba(15,33,71,0.10)",
         background: active
@@ -712,7 +713,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         style={{
           minWidth: 0,
           flex: 1,
-          padding: "15px 13px 12px",
+          padding: "12px 11px 10px",
           border: 0,
           background: "transparent",
           color: "#0F2147",
@@ -728,9 +729,9 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
         <span
           aria-hidden="true"
           style={{
-            width: 42,
-            height: 42,
-            borderRadius: 14,
+            width: 34,
+            height: 34,
+            borderRadius: 11,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -738,7 +739,7 @@ function MobileChoiceCard({ title, count, active, onSelect, href, onNavigate, ki
             color: active ? "#D7BE71" : "#0F2147",
             fontFamily: "Georgia, serif",
             fontWeight: 900,
-            fontSize: 20,
+            fontSize: 17,
           }}
         >
           {(title || "?").trim().charAt(0).toUpperCase()}
@@ -2947,15 +2948,69 @@ export default function Slidingmenubar({ open, onClose }) {
                 <TierTabs tiers={TIERS} activeSlug={tierSlug} onPick={switchTier} isMobile />
               </div>
 
-              <MobileStepBar
-                section={mobileSection}
-                audienceName={flyAudience?.name}
-                categoryName={filteredCategories.find((item) => item.slug === flyCategorySlug)?.name}
-                onStep={(next) => {
-                  setShowSuggest(false);
-                  setMobileSection(next);
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  minWidth: 0,
+                  overflowX: "auto",
+                  WebkitOverflowScrolling: "touch",
+                  scrollbarWidth: "none",
                 }}
-              />
+              >
+                <span
+                  style={{
+                    flex: "0 0 auto",
+                    padding: "7px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(215,190,113,0.34)",
+                    background: "rgba(215,190,113,0.12)",
+                    color: "#F4D982",
+                    fontSize: 9,
+                    fontWeight: 900,
+                    letterSpacing: ".08em",
+                    textTransform: "uppercase",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {flyAudience?.name || "Audience"}
+                </span>
+                <span
+                  style={{
+                    flex: "0 0 auto",
+                    padding: "7px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(255,255,255,0.05)",
+                    color: "#FFFFFF",
+                    fontSize: 9,
+                    fontWeight: 900,
+                    letterSpacing: ".08em",
+                    textTransform: "uppercase",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {filteredCategories.find((item) => item.slug === flyCategorySlug)?.name || "Category"}
+                </span>
+                <span
+                  style={{
+                    flex: "0 0 auto",
+                    padding: "7px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    background: "rgba(255,255,255,0.05)",
+                    color: "rgba(255,255,255,0.76)",
+                    fontSize: 9,
+                    fontWeight: 900,
+                    letterSpacing: ".08em",
+                    textTransform: "uppercase",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {filteredProducts.length} products
+                </span>
+              </div>
             </div>
           ) : (
             <>
@@ -3403,7 +3458,7 @@ export default function Slidingmenubar({ open, onClose }) {
               </div>
             </div>
           ) : (
-            /* Mobile guided shopping UI */
+            /* Mobile uses the same Tier → Audience → Category → Products filtering as desktop. */
             <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}>
               <div ref={searchWrapRef} style={{ position: "relative" }}>
                 <input
@@ -3491,43 +3546,76 @@ export default function Slidingmenubar({ open, onClose }) {
                 ) : null}
               </div>
 
-              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", gap: 10 }}>
-                {mobileSection === "audiences" ? (
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 14,
+                  paddingBottom: 4,
+                  WebkitOverflowScrolling: "touch",
+                  overscrollBehavior: "contain",
+                  touchAction: "pan-y",
+                }}
+              >
                   <Shell
-                    title="Who are you shopping for?"
+                    title={`Audiences · ${filteredAudiences.length}`}
                     right={<Pill tone="ink">{filteredAudiences.reduce((acc, a) => acc + (a.count || 0), 0)} items</Pill>}
                     mobile
                   >
-                    <ScrollBody columns={2}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 9,
+                        minWidth: 0,
+                        overflowX: "auto",
+                        overflowY: "hidden",
+                        padding: "2px 2px 10px",
+                        WebkitOverflowScrolling: "touch",
+                        overscrollBehaviorX: "contain",
+                        touchAction: "pan-x",
+                        scrollSnapType: "x proximity",
+                      }}
+                    >
                       {filteredAudiences.length ? (
                         filteredAudiences.map((a) => (
-                          <MobileChoiceCard
+                          <div
                             key={a.slug}
-                            title={a.name}
-                            count={a.count}
-                            active={a.slug === flyAudienceSlug}
-                            onSelect={() => {
-                              setHoverAudienceSlug(a.slug);
-                              setHoverCategorySlug("");
-                              setSelectedSubCategory("");
-                              setSelectedGenderGroup("");
-                              setSelectedAgeGroup("");
-                              setMobileSection("categories");
+                            style={{
+                              flex: "0 0 min(42vw, 164px)",
+                              minWidth: 132,
+                              scrollSnapAlign: "start",
                             }}
-                            href={buildCollectionsHref({
-                              tier: tierSlug,
-                              audience: a.slug,
-                              genderGroup: selectedGenderGroup,
-                              ageGroup: selectedAgeGroup,
-                            })}
-                            onNavigate={handleClose}
-                            kind="audience"
-                          />
+                          >
+                            <MobileChoiceCard
+                              title={a.name}
+                              count={a.count}
+                              active={a.slug === flyAudienceSlug}
+                              onSelect={() => {
+                                setHoverAudienceSlug(a.slug);
+                                setHoverCategorySlug("");
+                                setSelectedSubCategory("");
+                                setSelectedGenderGroup("");
+                                setSelectedAgeGroup("");
+                              }}
+                              href={buildCollectionsHref({
+                                tier: tierSlug,
+                                audience: a.slug,
+                                genderGroup: selectedGenderGroup,
+                                ageGroup: selectedAgeGroup,
+                              })}
+                              onNavigate={handleClose}
+                              kind="audience"
+                            />
+                          </div>
                         ))
                       ) : (
                         <div
                           style={{
-                            gridColumn: "1 / -1",
+                            flex: "1 0 100%",
                             padding: 18,
                             borderRadius: 20,
                             background: "#FFFFFF",
@@ -3566,66 +3654,63 @@ export default function Slidingmenubar({ open, onClose }) {
                           </Link>
                         </div>
                       )}
-                    </ScrollBody>
+                    </div>
                   </Shell>
-                ) : null}
 
-                {mobileSection === "categories" ? (
                   <Shell
-                    title={flyAudience?.name ? `Choose ${flyAudience.name} category` : "Choose a category"}
+                    title={flyAudience?.name ? `Categories · ${flyAudience.name}` : "Categories"}
                     mobile
-                    right={
-                      <button
-                        type="button"
-                        onClick={() => setMobileSection("audiences")}
-                        style={{
-                          height: 28,
-                          padding: "0 10px",
-                          borderRadius: 999,
-                          border: "1px solid rgba(0,0,0,0.10)",
-                          background: "rgba(255,255,255,0.92)",
-                          boxShadow: "0 10px 18px rgba(0,0,0,0.05)",
-                          fontWeight: 900,
-                          letterSpacing: ".12em",
-                          textTransform: "uppercase",
-                          fontSize: 10,
-                          cursor: "pointer",
-                          color: "#0c2340",
-                        }}
-                      >
-                        Back
-                      </button>
-                    }
+                    right={<Pill tone="ink">{filteredCategories.length}</Pill>}
                   >
-                    <ScrollBody columns={2}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 9,
+                        minWidth: 0,
+                        overflowX: "auto",
+                        overflowY: "hidden",
+                        padding: "2px 2px 10px",
+                        WebkitOverflowScrolling: "touch",
+                        overscrollBehaviorX: "contain",
+                        touchAction: "pan-x",
+                        scrollSnapType: "x proximity",
+                      }}
+                    >
                       {filteredCategories.length ? (
                         filteredCategories.map((c) => (
-                          <MobileChoiceCard
+                          <div
                             key={c.slug}
-                            title={c.name}
-                            count={c.count}
-                            active={c.slug === flyCategorySlug}
-                            onSelect={() => {
-                              setHoverCategorySlug(c.slug);
-                              setSelectedSubCategory("");
-                              setSelectedGenderGroup("");
-                              setSelectedAgeGroup("");
-                              setMobileSection("products");
+                            style={{
+                              flex: "0 0 min(42vw, 164px)",
+                              minWidth: 132,
+                              scrollSnapAlign: "start",
                             }}
-                            href={buildCollectionsHref({
-                              tier: tierSlug,
-                              audience: flyAudienceSlug,
-                              category: c.slug,
-                              subCategory: selectedSubCategory,
-                              genderGroup: selectedGenderGroup,
-                              ageGroup: selectedAgeGroup,
-                            })}
-                            onNavigate={handleClose}
-                            kind="category"
-                          />
+                          >
+                            <MobileChoiceCard
+                              title={c.name}
+                              count={c.count}
+                              active={c.slug === flyCategorySlug}
+                              onSelect={() => {
+                                setHoverCategorySlug(c.slug);
+                                setSelectedSubCategory("");
+                                setSelectedGenderGroup("");
+                                setSelectedAgeGroup("");
+                              }}
+                              href={buildCollectionsHref({
+                                tier: tierSlug,
+                                audience: flyAudienceSlug,
+                                category: c.slug,
+                                subCategory: selectedSubCategory,
+                                genderGroup: selectedGenderGroup,
+                                ageGroup: selectedAgeGroup,
+                              })}
+                              onNavigate={handleClose}
+                              kind="category"
+                            />
+                          </div>
                         ))
                       ) : (
-                        <div style={{ gridColumn: "1 / -1", padding: 18, borderRadius: 20, background: "#FFFFFF" }}>
+                        <div style={{ flex: "1 0 100%", padding: 18, borderRadius: 20, background: "#FFFFFF" }}>
                           <div style={{ fontWeight: 950, fontSize: 15, color: "#0F2147" }}>
                             {flyAudienceSlug ? "No categories in this audience/tier." : "Pick an audience."}
                           </div>
@@ -3657,11 +3742,9 @@ export default function Slidingmenubar({ open, onClose }) {
                           ) : null}
                         </div>
                       )}
-                    </ScrollBody>
+                    </div>
                   </Shell>
-                ) : null}
 
-                {mobileSection === "products" ? (
                   <>
                     <div
                       style={{
@@ -3801,22 +3884,22 @@ export default function Slidingmenubar({ open, onClose }) {
 
                     <div
                       style={{
-                        flex: 1,
+                        flex: "0 0 auto",
                         minHeight: 0,
                         borderRadius: 18,
                         border: "1px solid rgba(0,0,0,0.08)",
                         background: "rgba(255,255,255,0.70)",
                         boxShadow: "0 16px 34px rgba(0,0,0,0.07)",
-                        overflow: "hidden",
+                        overflow: "visible",
                         display: "flex",
                         flexDirection: "column",
                       }}
                     >
                       <div
                         style={{
-                          flex: 1,
+                          flex: "0 0 auto",
                           minHeight: 0,
-                          overflow: "auto",
+                          overflow: "visible",
                           padding: 10,
                           WebkitOverflowScrolling: "touch",
                           overscrollBehavior: "contain",
@@ -3907,7 +3990,6 @@ export default function Slidingmenubar({ open, onClose }) {
                       </div>
                     </div>
                   </>
-                ) : null}
               </div>
             </div>
           )}
